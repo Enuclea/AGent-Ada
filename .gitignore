@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Databases
+*.db
+
+# Logs
+*.log
+
+# Environment/Secrets
+.env
+*.env
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+.project
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+src/agent_ada.egg-info/

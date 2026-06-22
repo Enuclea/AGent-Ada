@@ -1,0 +1,884 @@
+/* Custom styles for Ada Task Engine Dashboard */
+:root {
+    --bg-primary: hsl(224, 25%, 6%);
+    --bg-gradient: radial-gradient(circle at 50% 0%, hsl(224, 25%, 12%) 0%, hsl(224, 25%, 6%) 100%);
+    --card-bg: hsla(224, 25%, 10%, 0.65);
+    --card-border: rgba(255, 255, 255, 0.06);
+    --card-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    --input-bg: hsla(224, 25%, 4%, 0.6);
+    
+    /* Neon accents */
+    --accent-orchid: hsl(302, 100%, 68%);
+    --accent-orchid-glow: hsla(302, 100%, 68%, 0.35);
+    --accent-cyan: hsl(186, 100%, 50%);
+    --accent-cyan-glow: hsla(186, 100%, 50%, 0.35);
+    --accent-purple: hsl(268, 100%, 68%);
+    
+    /* Text */
+    --text-primary: hsl(210, 40%, 96%);
+    --text-secondary: hsl(215, 15%, 75%);
+    --text-muted: hsl(215, 15%, 50%);
+    
+    /* Status Colors */
+    --status-running: hsl(45, 100%, 50%);
+    --status-completed: hsl(145, 80%, 45%);
+    --status-failed: hsl(0, 85%, 60%);
+    
+    /* Font sizes & families */
+    --font-heading: 'Outfit', sans-serif;
+    --font-body: 'Inter', sans-serif;
+
+    /* Scrollbars */
+    --scrollbar-thumb: hsla(224, 25%, 25%, 0.6);
+    --scrollbar-track: hsla(224, 25%, 5%, 0.3);
+
+    color-scheme: dark;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--bg-primary);
+    background-image: var(--bg-gradient);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+}
+
+/* Glass background overlay */
+.glass-bg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(circle at 10% 20%, rgba(161, 84, 255, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(0, 242, 254, 0.08) 0%, transparent 40%);
+    z-index: -1;
+    pointer-events: none;
+}
+
+/* Scrollbar support on elements */
+.chat-messages-container, .activity-feed, .skills-list, textarea {
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    scrollbar-width: thin;
+}
+
+@supports not (scrollbar-color: auto) {
+    .chat-messages-container::-webkit-scrollbar, 
+    .activity-feed::-webkit-scrollbar,
+    .skills-list::-webkit-scrollbar,
+    textarea::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    .chat-messages-container::-webkit-scrollbar-thumb,
+    .activity-feed::-webkit-scrollbar-thumb,
+    .skills-list::-webkit-scrollbar-thumb,
+    textarea::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb);
+        border-radius: 3px;
+    }
+    .chat-messages-container::-webkit-scrollbar-track,
+    .activity-feed::-webkit-scrollbar-track,
+    .skills-list::-webkit-scrollbar-track,
+    textarea::-webkit-scrollbar-track {
+        background: var(--scrollbar-track);
+    }
+}
+
+/* App Container */
+.app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 1.5rem;
+}
+
+/* Header */
+.app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--card-border);
+    margin-bottom: 1.5rem;
+}
+
+.header-logo {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.logo-icon {
+    font-size: 2.25rem;
+    filter: drop-shadow(0 0 10px var(--accent-orchid-glow));
+}
+
+.logo-text h1 {
+    font-family: var(--font-heading);
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    background: linear-gradient(135deg, var(--accent-orchid) 0%, var(--accent-cyan) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.logo-subtitle {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    letter-spacing: 0.5px;
+}
+
+.header-status {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.03);
+    padding: 0.35rem 0.75rem;
+    border-radius: 20px;
+    border: 1px solid var(--card-border);
+}
+
+.pulse-dot {
+    width: 8px;
+    height: 8px;
+    background-color: var(--status-completed);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--status-completed);
+    animation: pulse 2s infinite;
+}
+
+.session-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--accent-cyan);
+    background: rgba(0, 242, 254, 0.05);
+    border: 1px solid hsla(186, 100%, 50%, 0.2);
+    padding: 0.35rem 0.75rem;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.session-badge:hover {
+    background: rgba(0, 242, 254, 0.1);
+    box-shadow: 0 0 10px rgba(0, 242, 254, 0.15);
+}
+
+/* Layout */
+.app-layout {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 1.5rem;
+    flex: 1;
+    min-height: 0; /* Important for scrollable containers inside grids */
+}
+
+/* Chat Section */
+.chat-section {
+    display: flex;
+    flex-direction: column;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    overflow: hidden;
+}
+
+.chat-messages-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+/* Message Bubbles */
+.message {
+    display: flex;
+    gap: 1rem;
+    max-width: 85%;
+    animation: fadeIn 0.3s ease;
+}
+
+.message-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    flex-shrink: 0;
+}
+
+.message-content {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    padding: 0.85rem 1.1rem;
+    border-radius: 0 16px 16px 16px;
+    line-height: 1.5;
+    font-size: 0.95rem;
+    word-break: break-word;
+}
+
+.message-content p {
+    margin-bottom: 0.5rem;
+}
+
+.message-content p:last-child {
+    margin-bottom: 0;
+}
+
+.message-content pre {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.75rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 0.75rem 0;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.message-content code {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: var(--accent-cyan);
+}
+
+/* User Message */
+.user-message {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+}
+
+.user-message .message-avatar {
+    background: rgba(161, 84, 255, 0.1);
+    border: 1px solid hsla(268, 100%, 68%, 0.3);
+    color: var(--accent-purple);
+}
+
+.user-message .message-content {
+    background: linear-gradient(135deg, hsla(268, 100%, 68%, 0.08) 0%, hsla(186, 100%, 50%, 0.04) 100%);
+    border: 1px solid hsla(268, 100%, 68%, 0.2);
+    border-radius: 16px 0 16px 16px;
+}
+
+/* Thoughts Bubble */
+.thought-message {
+    align-self: flex-start;
+    max-width: 80%;
+    border-left: 3px solid var(--accent-orchid);
+    padding-left: 0.5rem;
+}
+
+.thought-message .message-avatar {
+    font-size: 0.9rem;
+    opacity: 0.7;
+}
+
+.thought-message .message-content {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.9rem;
+}
+
+/* System Message */
+.system-message .message-avatar {
+    background: rgba(0, 242, 254, 0.05);
+    border: 1px solid hsla(186, 100%, 50%, 0.2);
+}
+
+/* Chat Input Area */
+.chat-input-area {
+    padding: 1.25rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid var(--card-border);
+}
+
+.chat-form {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.input-wrapper {
+    position: relative;
+    flex: 1;
+    display: flex;
+    background: var(--input-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    transition: all 0.3s ease;
+}
+
+.input-wrapper:focus-within {
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 12px var(--accent-cyan-glow);
+}
+
+textarea#prompt-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    padding: 0.85rem 3.5rem 0.85rem 1rem;
+    font-family: var(--font-body);
+    font-size: 0.95rem;
+    resize: none;
+    max-height: 200px;
+    min-height: 44px;
+    line-height: 1.4;
+}
+
+.send-btn {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, var(--accent-orchid) 0%, var(--accent-cyan) 100%);
+    border: none;
+    border-radius: 8px;
+    color: var(--bg-primary);
+    font-size: 0.9rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.send-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 10px var(--accent-cyan-glow);
+}
+
+.chat-input-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.settings-trigger {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: var(--text-secondary);
+    transition: color 0.2s ease;
+}
+
+.settings-trigger:hover {
+    color: var(--accent-cyan);
+}
+
+/* Sidebar & Widgets */
+.dashboard-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    overflow-y: auto;
+}
+
+.glass-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+.widget-card {
+    display: flex;
+    flex-direction: column;
+    padding: 1.25rem;
+}
+
+.widget-card .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.widget-card .card-header h2 {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.widget-card .card-header h2 i {
+    color: var(--accent-orchid);
+}
+
+/* Form Settings */
+.form-group {
+    margin-bottom: 0.85rem;
+}
+
+.form-group label {
+    display: block;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 0.35rem;
+    font-weight: 600;
+}
+
+select {
+    width: 100%;
+    background: var(--input-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    padding: 0.5rem;
+    outline: none;
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+select:focus {
+    border-color: var(--accent-cyan);
+}
+
+.workspace-info {
+    font-size: 0.75rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--card-border);
+    padding: 0.5rem;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.workspace-info .info-label {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.workspace-info .info-val {
+    color: var(--text-secondary);
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Twitter Card Feed */
+.feed-card-container {
+    flex: 1;
+    min-height: 250px;
+    max-height: 450px;
+}
+
+.active-count-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--status-running);
+    padding: 0.15rem 0.5rem;
+    border-radius: 12px;
+}
+
+.activity-feed {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-right: 0.25rem;
+}
+
+/* Twitter style cards */
+.activity-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+    animation: slideIn 0.3s ease;
+    transition: all 0.3s ease;
+}
+
+.activity-card.completed {
+    border-color: rgba(34, 197, 94, 0.2);
+    background: rgba(34, 197, 94, 0.01);
+}
+
+.activity-card.failed {
+    border-color: rgba(239, 68, 68, 0.2);
+    background: rgba(239, 68, 68, 0.01);
+}
+
+.card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.card-title {
+    font-family: var(--font-heading);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.card-title i {
+    font-size: 0.75rem;
+    color: var(--accent-cyan);
+}
+
+.card-status-dot {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.status-indicator-mini {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+}
+
+.activity-card.running .status-indicator-mini {
+    background-color: var(--status-running);
+    box-shadow: 0 0 6px var(--status-running);
+    animation: pulse 1.5s infinite;
+}
+
+.activity-card.completed .status-indicator-mini {
+    background-color: var(--status-completed);
+}
+
+.activity-card.failed .status-indicator-mini {
+    background-color: var(--status-failed);
+}
+
+.activity-card.running .card-status-dot {
+    color: var(--status-running);
+}
+
+.activity-card.completed .card-status-dot {
+    color: var(--status-completed);
+}
+
+.activity-card.failed .card-status-dot {
+    color: var(--status-failed);
+}
+
+.card-details {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    background: rgba(0, 0, 0, 0.25);
+    padding: 0.45rem;
+    border-radius: 6px;
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 80px;
+    overflow-y: auto;
+}
+
+/* Card Progress Logs */
+.card-logs {
+    font-size: 0.72rem;
+    color: var(--accent-cyan);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    border-left: 2px solid rgba(0, 242, 254, 0.2);
+    padding-left: 0.4rem;
+    margin-top: 0.25rem;
+}
+
+.log-item {
+    animation: fadeIn 0.2s ease;
+}
+
+.card-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+.card-loader {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-top-color: var(--accent-cyan);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.feed-empty-state, .skills-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--text-muted);
+    padding: 2rem 1rem;
+    flex: 1;
+}
+
+.feed-empty-state i {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    color: var(--accent-orchid);
+    opacity: 0.7;
+}
+
+.feed-empty-state p, .skills-empty-state p {
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.tip-text {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+/* Skills List */
+.skills-list {
+    max-height: 250px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.skill-item {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--card-border);
+    padding: 0.65rem;
+    border-radius: 8px;
+}
+
+.skill-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent-orchid);
+    margin-bottom: 0.15rem;
+}
+
+.skill-desc {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.3;
+}
+
+/* Schedules Creator inside settings card or separate */
+.schedule-creator-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--card-border);
+}
+
+.schedule-creator-form input {
+    background: var(--input-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    padding: 0.4rem;
+    font-size: 0.8rem;
+    outline: none;
+}
+
+.schedule-creator-form input:focus {
+    border-color: var(--accent-cyan);
+}
+
+.schedule-creator-form button {
+    background: linear-gradient(135deg, var(--accent-orchid) 0%, var(--accent-cyan) 100%);
+    border: none;
+    border-radius: 6px;
+    color: var(--bg-primary);
+    padding: 0.4rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s ease;
+}
+
+.schedule-creator-form button:hover {
+    transform: scale(1.02);
+}
+
+/* Schedules container and items */
+.schedules-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    max-height: 160px;
+    overflow-y: auto;
+    padding-right: 0.2rem;
+}
+
+.schedule-item {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 0.6rem 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.8rem;
+    animation: slideIn 0.2s ease;
+}
+
+.schedule-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.schedule-title {
+    font-weight: 600;
+    color: var(--accent-cyan);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.schedule-prompt {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.schedule-info {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+}
+
+.schedule-delete-btn {
+    background: transparent;
+    border: none;
+    color: var(--status-failed);
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 0.25rem;
+    transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.schedule-delete-btn:hover {
+    transform: scale(1.15);
+    color: #ef4444;
+}
+
+/* Keyframes */
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.2);
+        opacity: 0.6;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+    .app-layout {
+        grid-template-columns: 1fr;
+    }
+    .app-container {
+        height: auto;
+        padding: 1rem;
+    }
+    .chat-section {
+        height: 600px;
+    }
+    .dashboard-sidebar {
+        overflow-y: visible;
+    }
+}

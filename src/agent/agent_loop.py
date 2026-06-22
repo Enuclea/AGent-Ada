@@ -1,0 +1,492 @@
+import asyncio
+import os
+import sys
+from pathlib import Path
+from typing import Any, List, Optional
+
+from dotenv import load_dotenv
+from google.antigravity import Agent, LocalAgentConfig
+from google.antigravity.hooks import policy, hooks
+from google.antigravity.types import CapabilitiesConfig, BuiltinTools, ToolCall, ModelTarget, ModelType
+from agent.keyless import KeylessGeminiAPIEndpoint, setup_keyless_environment
+from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
+from rich.markup import escape
+
+from agent import __version__
+from agent import memory
+from agent import tools
+
+# Load environment variables from ~/.agent/.env and local .env
+load_dotenv(Path.home() / ".agent" / ".env")
+load_dotenv()
+
+console = Console()
+
+async def run_agent(
+    initial_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    workspaces: Optional[List[str]] = None,
+    session_id: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    auto_approve: bool = False,
+    text_only: bool = False,
+    custom_instructions: Optional[str] = None,
+    interactive: bool = True,
+) -> None:
+    """Orchestrates the agent session and handles the CLI execution modes."""
+    model = model or "gemini-3.5-flash"
+    # 1. API Key (Optional)
+    api_key = os.environ.get("GEMINI_API_KEY")
+
+    # 2. Workspace Directories
+    if not workspaces:
+        # Default to current directory
+        workspaces = [os.getcwd()]
+    resolved_workspaces = [str(Path(w).resolve()) for w in workspaces]
+
+    # 3. Save Directory for Conversation Persistence
+    if not save_dir:
+        save_dir = str(Path.home() / ".agent" / "sessions")
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    # 4. Construct System Instructions
+    # Create skills directory
+    tools.SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    base_instructions = custom_instructions or (
+        "You are Ada, the autonomous AI developer assistant behind the Ada Task Engine, powered by AntiGravity.\n"
+        "You help the user write, test, debug, and manage code in their workspace.\n"
+        "Always be concise, professional, and helpful.\n\n"
+        "SELF-IMPROVEMENT & TOOL BUILDING:\n"
+        "- You have the ability to record facts about the user/project using `record_memory_fact`.\n"
+        "- You can record key-value pairs using `record_memory_key_value`.\n"
+        "- You can autonomously write new custom tools and skills using `create_agent_skill`, or modify/expand "
+        "existing custom skills (such as fixing bugs or adding scripts) using `improve_agent_skill`.\n"
+        "- When you successfully solve a non-trivial problem, figure out a complex workflow, or build a helper script, "
+        "you should save it as a reusable skill using `create_agent_skill` (or refine it using `improve_agent_skill`) "
+        "so you (or other agents) can reload it in future runs.\n"
+        "- You can search past conversations and sessions using `search_past_conversations`. Whenever the user "
+        "asks about previous tasks, context, or decisions, use `search_past_conversations` to recall what you did.\n"
+        "- Before starting any complex task, check the list of installed skills to see if you have relevant custom tools.\n\n"
+        "RUNNING LONG-RUNNING COMMANDS & PROCESSES:\n"
+        "- Any long-running command, service, server, background daemon, or Discord bot (like `discord/bot.py`) MUST be executed in the background using `nohup` and backgrounded, for example: `PYTHONPATH=src nohup .venv/bin/python3 discord/bot.py > discord/bot.log 2>&1 &`.\n"
+        "- You must NEVER run a persistent process or bot in the foreground, as it blocks the tool execution and hangs the agent connection.\n"
+        "- Never use interactive prompts or tail commands that block indefinitely (e.g. `tail -f`). Always ensure your commands exit immediately.\n\n"
+        "WORKSPACE SAFETY & DIRECTORY STRUCTURE:\n"
+        "- When writing, testing, or editing code to complete user requests, you must write files to the appropriate project directories (e.g. `src/` or `scratch/`).\n"
+        "- You must NEVER write, modify, or create project code files inside the `discord/` directory unless you are specifically asked to edit the Discord bot code itself. Keep the `discord/` folder isolated strictly for the bot's system files."
+    )
+    
+    # Inject persistent memory and custom skills summaries
+    memory_summary = memory.get_fact_summary()
+    installed_skills = tools.list_installed_skills()
+    
+    full_instructions = base_instructions
+    if memory_summary:
+        full_instructions += f"\n\n{memory_summary}"
+    if "No custom skills installed" not in installed_skills:
+        full_instructions += f"\n\n[INSTALLED CUSTOM SKILLS/TOOLS]\n{installed_skills}\n[END OF INSTALLED CUSTOM SKILLS/TOOLS]"
+
+    session_auto_approve = auto_approve
+    active_status = None
+    tool_calls_this_turn = 0
+    current_active_task_id = None
+
+    async def my_approval_handler(tool_call: ToolCall) -> bool:
+        nonlocal session_auto_approve, active_status, tool_calls_this_turn, current_active_task_id
+        tool_calls_this_turn += 1
+        
+        # Generate and save task ID
+        import uuid
+        task_id = str(uuid.uuid4())
+        current_active_task_id = task_id
+        
+        # Log to active tasks table
+        memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
+        
+        # Log the tool call step immediately to SQLite
+        memory.log_conversation_step(
+            current_session_id,
+            "tool_call",
+            str(tool_call.args),
+            tool_name=tool_call.name
+        )
+        
+        if session_auto_approve:
+            return True
+
+        if text_only:
+            # In scripting mode, non-auto-approved modifying tools should fail closed
+            memory.update_active_task_status(task_id, "denied")
+            current_active_task_id = None
+            return False
+
+        if active_status:
+            active_status.stop()
+
+        console.print()
+        console.print(Panel(
+            f"[bold]Tool:[/bold] {escape(tool_call.name)}\n"
+            f"[bold]Arguments:[/bold] {escape(str(tool_call.args))}",
+            title="🔔 [bold yellow]Tool Confirmation Required[/bold yellow]",
+            border_style="yellow",
+            expand=False,
+        ))
+
+        loop = asyncio.get_event_loop()
+        try:
+            choice = await loop.run_in_executor(
+                None,
+                lambda: input("Allow execution? [y/N/all/none]: ").strip().lower()
+            )
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[bold red]Execution denied due to user interrupt.[/bold red]")
+            memory.update_active_task_status(task_id, "denied")
+            current_active_task_id = None
+            if active_status:
+                active_status.start()
+            return False
+
+        if active_status:
+            active_status.start()
+
+        if choice in ("y", "yes"):
+            return True
+        elif choice == "all":
+            session_auto_approve = True
+            console.print("[bold green]Auto-approving all subsequent tools in this session.[/bold green]")
+            return True
+        else:
+            console.print("[bold red]Execution denied.[/bold red]")
+            memory.update_active_task_status(task_id, "denied")
+            current_active_task_id = None
+            return False
+
+    # Safety policy setup
+    if auto_approve:
+        policies = [policy.allow_all()]
+    else:
+        # Ask for confirmation on actions that modify the system
+        policies = [
+            policy.ask_user("run_command", handler=my_approval_handler),
+            policy.ask_user("create_file", handler=my_approval_handler),
+            policy.ask_user("edit_file", handler=my_approval_handler),
+            policy.ask_user("start_subagent", handler=my_approval_handler),
+            # Default to allowing read-only tools
+            policy.allow_all(),
+        ]
+
+    @hooks.post_tool_call
+    async def on_post_tool(data):
+        nonlocal current_active_task_id
+        if current_active_task_id:
+            memory.update_active_task_status(current_active_task_id, "completed")
+            current_active_task_id = None
+
+    @hooks.on_tool_error
+    async def on_tool_err(err):
+        nonlocal current_active_task_id
+        if current_active_task_id:
+            memory.update_active_task_status(current_active_task_id, "failed")
+            current_active_task_id = None
+
+    # 6. Enable all capabilities (including subagents and write tools)
+    capabilities = CapabilitiesConfig(
+        enable_subagents=True,
+    )
+
+    # 7. Register Custom Memory and Skill-Building Tools
+    custom_tools = [
+        tools.record_memory_fact,
+        tools.record_memory_key_value,
+        tools.create_agent_skill,
+        tools.improve_agent_skill,
+        tools.list_installed_skills,
+        tools.search_past_conversations,
+        tools.list_repository_skills,
+        tools.view_repository_skill_code,
+        tools.install_repository_skill,
+    ]
+
+    # 8. Build LocalAgentConfig
+    config_args = {
+        "system_instructions": full_instructions,
+        "capabilities": capabilities,
+        "tools": custom_tools,
+        "policies": policies,
+        "workspaces": resolved_workspaces,
+        "save_dir": save_dir,
+        "skills_paths": [str(tools.SKILLS_DIR)],
+        "hooks": [on_post_tool, on_tool_err],
+    }
+    
+    if api_key:
+        config_args["api_key"] = api_key
+        if model:
+            config_args["model"] = model
+    else:
+        # Set keyless system harness path
+        setup_keyless_environment()
+        # Explicit keyless models to bypass client-side key checks
+        text_model = ModelTarget(
+            name=model or "gemini-3.5-flash",
+            types=[ModelType.TEXT],
+            endpoint=KeylessGeminiAPIEndpoint()
+        )
+        image_model = ModelTarget(
+            name="gemini-3.1-flash-image-preview",
+            types=[ModelType.IMAGE],
+            endpoint=KeylessGeminiAPIEndpoint()
+        )
+        config_args["models"] = [text_model, image_model]
+
+    if session_id:
+        config_args["conversation_id"] = session_id
+
+    config = LocalAgentConfig(**config_args)
+
+    # 9. Start Agent Connection & Run Loops
+    async with Agent(config) as agent:
+        # Retrieve the session ID (can be printed to user or saved)
+        current_session_id = agent.conversation_id
+        
+        if not text_only:
+            print_startup_banner(
+                session_id=current_session_id,
+                workspace_path=resolved_workspaces[0],
+                model_name=model or "gemini-3.5-flash",
+                interactive=not initial_prompt and interactive
+            )
+
+        # Define turn execution logic
+        async def execute_turn(prompt_text: str) -> str:
+            nonlocal active_status, tool_calls_this_turn
+            tool_calls_this_turn = 0
+            
+            # Log the user prompt to SQLite
+            memory.log_conversation_step(current_session_id, "user", prompt_text)
+            
+            response = await agent.chat(prompt_text)
+            
+            # Streaming thoughts (handled via status spinner to keep UI clean)
+            thoughts_str = ""
+            if not text_only:
+                active_status = console.status("[bold dim]Thinking...[/bold dim]", spinner="dots")
+                with active_status:
+                    async for thought in response.thoughts:
+                        thoughts_str += thought
+                active_status = None
+                
+                if thoughts_str:
+                    memory.log_conversation_step(current_session_id, "thought", thoughts_str)
+
+            # Streaming final output
+            output_content = ""
+            if text_only:
+                async for chunk in response:
+                    sys.stdout.write(chunk)
+                    sys.stdout.flush()
+                # Ensure trailing newline
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            else:
+                console.print("[bold purple]Ada >[/bold purple] ", end="")
+                async for chunk in response:
+                    console.print(chunk, end="", markup=False)
+                    output_content += chunk
+                console.print()
+                
+            if output_content:
+                memory.log_conversation_step(current_session_id, "assistant", output_content)
+                
+            if not text_only and tool_calls_this_turn > 1:
+                console.print("\n💡 [dim]Tip: Ask me to compile this workflow into a reusable custom skill by saying: \"Save this as a skill called <name>\"[/dim]")
+            
+            return output_content
+
+        # Handle initial prompt if supplied
+        if initial_prompt:
+            if not text_only:
+                console.print(f"[bold blue]User >[/bold blue] {escape(initial_prompt)}")
+            await execute_turn(initial_prompt)
+            if not interactive:
+                return
+
+        # Interactive Chat Loop
+        if interactive:
+            from prompt_toolkit import PromptSession
+            from prompt_toolkit.completion import WordCompleter
+            from prompt_toolkit.history import FileHistory
+
+            commands_list = ["/help", "/memory", "/skills", "/tools", "/exit", "/quit", "/reset", "/search", "/multiline"]
+            completer = WordCompleter(commands_list, ignore_case=True)
+            
+            history_file = Path.home() / ".agent" / "history.txt"
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+            history = FileHistory(str(history_file))
+            session = PromptSession(
+                history=history,
+                completer=completer,
+                complete_while_typing=True,
+            )
+            
+            multiline_mode = False
+            
+            while True:
+                try:
+                    if multiline_mode:
+                        prompt_msg = "User (Multiline - Alt+Enter to submit) > "
+                        user_input = await session.prompt_async(prompt_msg, multiline=True)
+                    else:
+                        prompt_msg = "User > "
+                        user_input = await session.prompt_async(prompt_msg)
+                except (KeyboardInterrupt, EOFError):
+                    console.print("\n[bold yellow]Goodbye![/bold yellow]")
+                    break
+
+                cleaned_input = user_input.strip()
+                if not cleaned_input:
+                    continue
+
+                # Slash command routing
+                if cleaned_input.startswith("/"):
+                    cmd_parts = cleaned_input.split(maxsplit=1)
+                    cmd = cmd_parts[0].lower()
+                    
+                    if cmd in ("/exit", "/quit"):
+                        console.print("[bold yellow]Goodbye![/bold yellow]")
+                        break
+                    elif cmd == "/help":
+                        print_help()
+                        continue
+                    elif cmd == "/memory":
+                        print_memory()
+                        continue
+                    elif cmd in ("/skills", "/tools"):
+                        print_skills()
+                        continue
+                    elif cmd == "/multiline":
+                        multiline_mode = not multiline_mode
+                        status = "enabled (Press Alt+Enter to submit)" if multiline_mode else "disabled"
+                        console.print(f"[bold yellow]Multiline mode {status}.[/bold yellow]")
+                        continue
+                    elif cmd == "/search":
+                        if len(cmd_parts) < 2:
+                            console.print("[bold red]Please specify a search query. E.g. /search black[/bold red]")
+                        else:
+                            query = cmd_parts[1]
+                            results_text = tools.search_past_conversations(query)
+                            console.print(Panel(results_text, title=f"FTS Search Results: {query}", expand=False))
+                        continue
+                    elif cmd == "/reset":
+                        console.print("[bold yellow]Resetting session. New session started.[/bold yellow]")
+                        console.print("[dim]Please restart the CLI to fully reset the context.[/dim]")
+                        continue
+                    else:
+                        console.print(f"[bold red]Unknown slash command: {escape(cmd)}[/bold red]")
+                        continue
+
+                # Execute standard turn
+                await execute_turn(cleaned_input)
+
+def print_help() -> None:
+    help_text = """
+[bold]Available Commands:[/bold]
+  [bold cyan]/help[/bold cyan]       - Show this help message
+  [bold cyan]/memory[/bold cyan]     - Display the current persistent memory contents
+  [bold cyan]/skills[/bold cyan]     - Display all learned custom skills and tools (alias: [bold cyan]/tools[/bold cyan])
+  [bold cyan]/search <q>[/bold cyan] - Full-text search past sessions and logs
+  [bold cyan]/multiline[/bold cyan]  - Toggle multiline input mode (Alt+Enter to submit)
+  [bold cyan]/exit[/bold cyan]       - Exit the Ada Task Engine console (alias: [bold cyan]/quit[/bold cyan])
+"""
+    console.print(Panel(help_text.strip(), title="Ada Task Engine Help", expand=False))
+
+def print_skills() -> None:
+    installed = tools.list_installed_skills()
+    console.print(Panel(escape(installed), title="Learned Custom Skills & Tools", expand=False))
+
+def print_memory() -> None:
+    mem = memory.load_memory()
+    facts = mem.get("facts", [])
+    kv = mem.get("key_value", {})
+    
+    lines = []
+    if facts:
+        lines.append("[bold]Remembered facts/notes:[/bold]")
+        for fact in facts:
+            lines.append(f"  - {escape(fact)}")
+    if kv:
+        if lines:
+            lines.append("")
+        lines.append("[bold]Key-value settings/data:[/bold]")
+        for k, v in kv.items():
+            lines.append(f"  - [cyan]{escape(k)}[/cyan]: {escape(str(v))}")
+            
+    content = "\n".join(lines) if lines else "[dim]Memory is currently empty.[/dim]"
+    console.print(Panel(content, title="Persistent Memory", expand=False))
+
+
+def print_startup_banner(
+    session_id: str,
+    workspace_path: str,
+    model_name: str,
+    interactive: bool = True
+) -> None:
+    logo = r"""[bold orchid1]
+    ___       ___       ___   
+   /\  \     /\  \     /\  \  
+  /::\  \   /::\  \   /::\  \ 
+ /::\:\__\ /:/\:\__\ /::\:\__\
+ \/\::/  / \:\/:/  / \/\::/  /
+   /:/  /   \::/  /    /:/  / 
+   \/__/     \/__/     \/__/  
+      - - -   A D A   T A S K   E N G I N E   - - -[/bold orchid1]
+"""
+    console.print(logo)
+    
+    # Load memory to check for user nickname
+    mem = memory.load_memory()
+    kv = mem.get("key_value", {})
+    nickname = kv.get("user_name") or kv.get("nickname") or "Developer"
+    
+    # Parse custom skills count
+    skills = []
+    if tools.SKILLS_DIR.exists() and tools.SKILLS_DIR.is_dir():
+        for folder in tools.SKILLS_DIR.iterdir():
+            if folder.is_dir():
+                skill_md = folder / "SKILL.md"
+                if skill_md.exists() and skill_md.is_file():
+                    try:
+                        with open(skill_md, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        fm = tools._parse_frontmatter(content)
+                        name = fm.get("name", folder.name)
+                        desc = fm.get("description", "No description.")
+                        skills.append((name, desc))
+                    except Exception:
+                        continue
+
+    # Construct combined status and skills content
+    status_lines = [
+        f"🤖 [bold]Ada Task Engine v{__version__}[/bold] — Hermes-style AntiGravity Wrapper",
+        f"👋 Welcome, [bold cyan]{escape(nickname)}[/bold cyan]!",
+        "",
+        f"• [bold]Model:[/bold] {escape(model_name)}",
+        f"• [bold]Workspace:[/bold] {escape(workspace_path)}",
+        f"• [bold]Session ID:[/bold] [dim]{escape(session_id or 'New Session')}[/dim]",
+        "",
+        f"🧠 [bold]Loaded Custom Skills ({len(skills)})[/bold]",
+    ]
+    if skills:
+        for name, desc in skills:
+            status_lines.append(f"  • [cyan]{escape(name)}[/cyan]: {escape(desc)}")
+    else:
+        status_lines.append("  [dim]No custom skills loaded yet. Teach me a skill to build custom tools![/dim]")
+        
+    status_content = "\n".join(status_lines)
+    
+    console.print(Panel(status_content, border_style="blue", expand=False))
+    
+    if interactive:
+        console.print("[dim]Type your message or a slash command (e.g. /help, /memory, /exit).[/dim]\n")

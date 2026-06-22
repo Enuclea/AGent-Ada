@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Ada Task Engine Dashboard - A premium, real-time control interface for your autonomous developer agent.">
+    <title>Ada Task Engine - Dashboard</title>
+    <!-- Google Fonts: Inter and Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for beautiful icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-logo">
+                <div class="logo-icon">🌸</div>
+                <div class="logo-text">
+                    <h1>ADA TASK ENGINE</h1>
+                    <span class="logo-subtitle">Powered by AntiGravity SDK</span>
+                </div>
+            </div>
+            <div class="header-status">
+                <div class="status-indicator">
+                    <span class="pulse-dot"></span>
+                    <span id="connection-status">Online</span>
+                </div>
+                <div class="session-badge" id="header-session-id" title="Click to copy Session ID">
+                    <i class="fa-regular fa-copy"></i> <span class="id-val">Loading...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <main class="app-layout">
+            <!-- Left Panel: Chat -->
+            <section class="chat-section">
+                <div class="chat-messages-container" id="chat-messages">
+                    <!-- Default greeting message -->
+                    <div class="message system-message">
+                        <div class="message-avatar">🌸</div>
+                        <div class="message-content">
+                            <p>Hello! I am <strong>Ada</strong>, your autonomous developer assistant. Ask me to write, test, debug, or manage code in your workspace, or teach me new skills to automate your workflow. What are we working on today?</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="chat-input-area">
+                    <form id="chat-form" class="chat-form">
+                        <div class="input-wrapper">
+                            <textarea id="prompt-input" placeholder="Type your message here... (Press Shift+Enter for new line, Ctrl+Enter to send)" rows="1" required></textarea>
+                            <button type="submit" id="send-btn" class="send-btn" title="Send Message">
+                                <i class="fa-solid fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </form>
+                    <div class="chat-input-footer">
+                        <div class="input-tips">Ctrl+Enter to send</div>
+                        <div class="settings-trigger" id="settings-toggle">
+                            <i class="fa-solid fa-sliders"></i> Session Settings
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Dashboard Widgets -->
+            <aside class="dashboard-sidebar">
+                <!-- Session/Control Widget -->
+                <div class="widget-card glass-card" id="settings-card">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-gear"></i> Session Settings</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="model-select">Active Model</label>
+                            <select id="model-select">
+                                <option value="gemini-3.5-flash" selected>Gemini 3.5 Flash</option>
+                                <option value="gemini-3.5-pro">Gemini 3.5 Pro</option>
+                                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="session-select">Saved Sessions</label>
+                            <select id="session-select">
+                                <option value="">Start New Session</option>
+                            </select>
+                        </div>
+                        <div class="workspace-info">
+                            <span class="info-label">Active Workspace:</span>
+                            <span class="info-val" id="workspace-path" title="Loading...">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Running Tasks & Subagents (Twitter-Style cards) -->
+                <div class="widget-card glass-card feed-card-container">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-bolt"></i> Activity Feed</h2>
+                        <span class="active-count-badge" id="active-tasks-count">0 active</span>
+                    </div>
+                    <div class="activity-feed" id="activity-feed">
+                        <!-- Default empty state -->
+                        <div class="feed-empty-state" id="feed-empty-state">
+                            <i class="fa-solid fa-champagne-glasses"></i>
+                            <p>No active tasks or tool executions running right now.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Automation Schedules -->
+                <div class="widget-card glass-card">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-clock"></i> Automation Schedules</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="schedules-container" class="schedules-container">
+                            <!-- Schedules list will be rendered here -->
+                        </div>
+                        <form id="schedule-form" class="schedule-creator-form">
+                            <input type="text" id="schedule-name" placeholder="Schedule Name (e.g. Daily Review)" required>
+                            <input type="text" id="schedule-prompt" placeholder="Prompt (e.g. Run git status)" required>
+                            <input type="text" id="schedule-cron" placeholder="Interval (seconds e.g. 60) or Cron (* * * * *)" required>
+                            <button type="submit">Add Schedule</button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Custom Skills Inventory -->
+                <div class="widget-card glass-card">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-graduation-cap"></i> Learned Skills</h2>
+                    </div>
+                    <div class="skills-list" id="skills-list">
+                        <!-- Default empty state -->
+                        <div class="skills-empty-state" id="skills-empty-state">
+                            <p>No custom skills learned yet.</p>
+                            <span class="tip-text">Prompt Ada to save a workflow or tool to build a custom skill.</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
