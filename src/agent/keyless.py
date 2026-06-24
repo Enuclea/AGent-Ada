@@ -26,9 +26,10 @@ def get_harness_path() -> Optional[str]:
         return agy_path
         
     # Fallback to standard local bin paths
-    for p in ["/Users/dan/.local/bin/agy", "/home/dan/.local/bin/agy"]:
-        if os.path.exists(p):
-            return p
+    user_home = Path.home()
+    fallback_path = user_home / ".local" / "bin" / "agy"
+    if fallback_path.exists() and fallback_path.is_file():
+        return str(fallback_path)
             
     return None
 

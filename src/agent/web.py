@@ -2,10 +2,11 @@ import asyncio
 import os
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -54,7 +55,15 @@ class PriorityLock:
 
 backend_lock = PriorityLock()
 
-app = FastAPI(title="Ada Task Engine Dashboard")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    scheduler_task = asyncio.create_task(run_scheduler())
+    yield
+    # Shutdown
+    scheduler_task.cancel()
+
+app = FastAPI(title="Ada Task Engine Dashboard", lifespan=lifespan)
 
 # Global state to maintain active session
 active_agents = {}  # session_id -> dict
@@ -572,7 +581,7 @@ async def create_schedule_endpoint(req: ScheduleRequest):
     import uuid
     schedule_id = str(uuid.uuid4())
     try:
-        next_run_dt = get_next_cron_run(req.cron_expr, datetime.utcnow())
+        next_run_dt = get_next_cron_run(req.cron_expr, datetime.now(timezone.utc))
         next_run = next_run_dt.isoformat()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid cron expression or interval: {e}")
@@ -671,7 +680,9 @@ async def run_scheduler():
                     should_compact = True
                 else:
                     last_comp_dt = datetime.fromisoformat(last_comp)
-                    if (datetime.utcnow() - last_comp_dt).total_seconds() > 86400:  # 24 hours
+                    if last_comp_dt.tzinfo is None:
+                        last_comp_dt = last_comp_dt.replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - last_comp_dt).total_seconds() > 86400:  # 24 hours
                         should_compact = True
                         
                 if should_compact:
@@ -681,7 +692,7 @@ async def run_scheduler():
             except Exception as e:
                 print(f"Error checking/running daily compaction: {e}")
 
-            now_str = datetime.utcnow().isoformat()
+            now_str = datetime.now(timezone.utc).isoformat()
             conn = sqlite3.connect(memory.DB_FILE_PATH)
             cursor = conn.cursor()
             cursor.execute(
@@ -693,17 +704,13 @@ async def run_scheduler():
             
             for row in rows:
                 task_id, name, prompt, cron_expr = row
-                last_run_dt = datetime.utcnow()
+                last_run_dt = datetime.now(timezone.utc)
                 next_run_dt = get_next_cron_run(cron_expr, last_run_dt)
                 memory.update_scheduled_task_run(task_id, last_run_dt.isoformat(), next_run_dt.isoformat())
                 asyncio.create_task(execute_scheduled_task(name, prompt))
         except Exception:
             pass
         await asyncio.sleep(5)
-
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(run_scheduler())
 
 # Mount static files directory
 static_dir = Path(__file__).parent / "static"

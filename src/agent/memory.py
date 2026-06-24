@@ -1,7 +1,7 @@
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -164,7 +164,7 @@ def log_conversation_step(
     """Logs a conversation step to SQLite and indexes it in FTS5."""
     if not session_id:
         session_id = "New Session"
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
     
     conn = sqlite3.connect(DB_FILE_PATH)
     try:
@@ -244,7 +244,7 @@ def add_active_task(task_id: str, name: str, details: str) -> None:
     conn = sqlite3.connect(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
-        started_at = datetime.utcnow().isoformat()
+        started_at = datetime.now(timezone.utc).isoformat()
         cursor.execute(
             """
             INSERT OR REPLACE INTO active_tasks (id, name, details, started_at, status)
@@ -314,7 +314,7 @@ def add_task_log(task_id: str, message: str) -> None:
     conn = sqlite3.connect(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
         cursor.execute(
             "INSERT INTO task_logs (task_id, timestamp, message) VALUES (?, ?, ?)",
             (task_id, timestamp, message)
@@ -522,7 +522,7 @@ def compact_all_memories() -> Dict[str, Any]:
         
     # Record the last compaction completion time in persistent memory
     try:
-        update_key_value("last_compaction", datetime.utcnow().isoformat())
+        update_key_value("last_compaction", datetime.now(timezone.utc).isoformat())
     except Exception:
         pass
         
