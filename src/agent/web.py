@@ -1311,6 +1311,60 @@ async def execute_scheduled_task(name: str, prompt: str):
             print(f"[Scheduled Task: {name}] Error: {e}")
             return
 
+    if name == "Gmail Email Check":
+        conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "/home/dan/AGent/.venv/bin/python", "scratch/run_gmail_sync.py",
+                cwd="/home/dan/AGent",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+            stdout_str = stdout.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            
+            output = stdout_str
+            if stderr_str:
+                output += f"\n\nStderr Errors:\n{stderr_str}"
+            
+            memory.log_conversation_step(conversation_id, "assistant", output or "Gmail check completed with no output.")
+            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
+            return
+        except Exception as e:
+            err_msg = f"Failed to execute Gmail check script: {e}"
+            print(f"[Scheduled Task: {name}] Error: {err_msg}")
+            memory.log_conversation_step(conversation_id, "assistant", err_msg)
+            return
+
+    if name == "Grace Timekeeper":
+        conversation_id = f"sched-grace-timekeeper-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "/home/dan/AGent/.venv/bin/python", "src/agent/grace_monitor.py",
+                cwd="/home/dan/AGent",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+            stdout_str = stdout.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            
+            output = stdout_str
+            if stderr_str:
+                output += f"\n\nStderr Errors:\n{stderr_str}"
+            
+            memory.log_conversation_step(conversation_id, "assistant", output or "Grace timekeeper completed with no output.")
+            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
+            return
+        except Exception as e:
+            err_msg = f"Failed to execute Grace timekeeper script: {e}"
+            print(f"[Scheduled Task: {name}] Error: {err_msg}")
+            memory.log_conversation_step(conversation_id, "assistant", err_msg)
+            return
+
     # Generic scheduled tasks: use a dedicated, isolated KeylessAgyAgent
     # This prevents cross-contamination of conversation context between background tasks
     from agent.keyless import KeylessAgyAgent, TaskPriority
