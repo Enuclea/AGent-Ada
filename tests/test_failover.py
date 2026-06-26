@@ -6,12 +6,24 @@ from agent.keyless import KeylessAgyAgent
 
 @pytest.mark.anyio
 async def test_direct_api_routing():
-    # Test routing to direct API when API key is set
+    # Test routing to direct API when API key is set AND AGENT_USE_DIRECT_API=true
+    # Direct API is now the last resort after all agy and grok attempts fail
     agent = KeylessAgyAgent(model="gemini-3.5-flash", timeout=1.0)
     
-    with patch.dict(os.environ, {"GEMINI_API_KEY": "fake-key"}), \
-         patch.object(agent, "_call_direct_api", new_callable=AsyncMock) as mock_direct:
+    with patch.dict(os.environ, {"GEMINI_API_KEY": "fake-key", "AGENT_USE_DIRECT_API": "true"}), \
+         patch.object(agent, "_call_direct_api", new_callable=AsyncMock) as mock_direct, \
+         patch("asyncio.create_subprocess_exec") as mock_exec, \
+         patch("agent.keyless.get_grok_path") as mock_grok_path:
          
+        # All subprocess calls fail so we fall through to direct API
+        proc_fail = AsyncMock()
+        proc_fail.returncode = 1
+        proc_fail.communicate.return_value = (b"", b"Model fail")
+        mock_exec.return_value = proc_fail
+        
+        # No grok available
+        mock_grok_path.return_value = None
+        
         mock_direct.return_value = "Direct response content"
         response = await agent.chat("hello direct api")
         

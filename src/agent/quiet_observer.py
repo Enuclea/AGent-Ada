@@ -11,69 +11,18 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from agent import memory
-from agent.keyless import KeylessAgyAgent
+from agent.keyless import KeylessAgyAgent, TaskPriority
 
 # DB path resolved from memory module
 DB_PATH = memory.DB_FILE_PATH
 
-def get_discord_config():
-    config_path = Path(__file__).parent.parent.parent / "discord" / "config.json"
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"[QUIET-OBSERVER] Error loading Discord config: {e}")
-    return {}
-
-def get_bot_token():
-    env_path = Path(__file__).parent.parent.parent / "discord" / ".env"
-    if env_path.exists():
-        try:
-            with open(env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("DISCORD_BOT_TOKEN="):
-                        return line.split("=", 1)[1].strip().strip('"').strip("'")
-        except Exception as e:
-            print(f"[QUIET-OBSERVER] Error loading Discord .env: {e}")
-    return None
-
-def send_discord_alert(text):
-    token = get_bot_token()
-    if not token:
-        print("[QUIET-OBSERVER] No Discord bot token found.")
-        return False
-        
-    config = get_discord_config()
-    channel_id = 1518056970538586272  # Default control-room fallback
-    
-    for cid, info in config.get("channels", {}).items():
-        if info.get("channel_name") == "control-room":
-            try:
-                channel_id = int(cid)
-                break
-            except ValueError:
-                pass
-                
-    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
-    headers = {
-        "Authorization": f"Bot {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "DiscordBot (https://github.com/Rapptz/discord.py 2.3.2) Python/3.10"
-    }
-    
-    # Discord messages are capped at 2000 chars, so truncate safely if needed
-    if len(text) > 1950:
-        text = text[:1950] + "\n... [truncated]"
-
-    data = json.dumps({"content": text}).encode("utf-8")
-    
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return resp.getcode() == 200
-    except Exception as e:
-        print(f"[QUIET-OBSERVER] Failed to send Discord alert: {e}", file=sys.stderr)
+# Import shared Discord notification utilities
+try:
+    from agent.notifications import send_discord_alert
+except ImportError:
+    # Fallback for standalone execution
+    def send_discord_alert(text, channel_name="control-room"):
+        print(f"[QUIET-OBSERVER] Discord notification not available (standalone mode): {text[:100]}...")
         return False
 
 async def run_quiet_observer(days: int = 1):
@@ -154,7 +103,8 @@ async def run_quiet_observer(days: int = 1):
     print("[QUIET-OBSERVER] Sending conversation history to KeylessAgyAgent for analysis...")
     agent = KeylessAgyAgent(
         model="gemini-3.5-flash",
-        system_instructions="You are a passive, silent background observer agent dedicated to learning patterns and process optimization."
+        system_instructions="You are a passive, silent background observer agent dedicated to learning patterns and process optimization.",
+        task_priority=TaskPriority.BACKGROUND
     )
     
     response = await agent.chat(prompt)

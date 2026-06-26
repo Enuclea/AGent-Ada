@@ -70,13 +70,14 @@ def test_plan_then_drive_flow():
     mock_exec_agent.chat = AsyncMock(side_effect=mock_chat_generator)
     
     # We patch the agent instantiator
-    with patch("agent.keyless.KeylessAgyAgent", return_value=mock_planner_agent), \
+    with patch.dict(os.environ, {"AGENT_ENABLE_PLAN_DECOMPOSITION": "true"}), \
+         patch("agent.keyless.KeylessAgyAgent", return_value=mock_planner_agent), \
          patch("agent.web.get_or_create_agent", return_value=mock_exec_agent), \
          patch("agent.web.load_plugins"):  # Mock plugins to avoid extra logs/warnings
          
          with TestClient(app) as client:
              payload = {
-                 "prompt": "Create a file and read it",
+                  "prompt": "Create a file called test_output.txt in the project root with the content 'Hello World', then read the file back and verify the content is correct. This is a multi-step operation requiring file creation, writing, and validation of the output.",
                  "session_id": "test-drive-session-123"
              }
              response = client.post("/api/chat", json=payload)

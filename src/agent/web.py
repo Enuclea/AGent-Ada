@@ -400,9 +400,10 @@ async def chat_endpoint(req: ChatRequest):
         lock = get_session_lock(lookup_id)
         await lock.acquire(priority)
         try:
-            # 1. Decompose plan steps if not already present
+            # 1. Decompose plan steps if enabled and prompt is complex enough
+            enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "").lower() == "true"
             existing_plan = memory.get_session_plan(agent.conversation_id)
-            if not existing_plan:
+            if enable_planning and not existing_plan and len(req.prompt.strip()) > 200:
                 import uuid
                 plan_id = str(uuid.uuid4())
                 plan_prompt = (
@@ -411,10 +412,11 @@ async def chat_endpoint(req: ChatRequest):
                     "Example format: [{\"description\": \"Run lint checks\", \"assigned_tool\": \"run_command\"}]"
                 )
                 try:
-                    from agent.keyless import KeylessAgyAgent
-                    plan_agent = KeylessAgyAgent(
-                        model="gemini-1.5-flash",
+                    from agent.keyless import KeylessAgyAgent as PlanAgent, TaskPriority
+                    plan_agent = PlanAgent(
+                        model="gemini-3.5-flash",
                         system_instructions="You are a plan decomposer. Output ONLY raw JSON.",
+                        task_priority=TaskPriority.BACKGROUND
                     )
                     async with plan_agent as pa:
                         plan_resp = await pa.chat(plan_prompt)
@@ -1213,7 +1215,7 @@ async def fork_session_endpoint(req: ForkRequest):
 
 # Background scheduler execution
 async def execute_scheduled_task(name: str, prompt: str):
-    global active_agents
+    """Executes a scheduled task using an isolated agent instance (not the shared default)."""
     if name == "Meta-Evaluation":
         try:
             from agent.meta_evaluation import run_meta_evaluation
@@ -1244,24 +1246,61 @@ async def execute_scheduled_task(name: str, prompt: str):
             print(f"[Scheduled Task: {name}] Error: {e}")
             return
 
+    # Generic scheduled tasks: use a dedicated, isolated KeylessAgyAgent
+    # This prevents cross-contamination of conversation context between background tasks
+    from agent.keyless import KeylessAgyAgent, TaskPriority
+
+    # Determine priority: Grace is SCHEDULED_CRITICAL, everything else is SCHEDULED_ROUTINE
+    priority = TaskPriority.SCHEDULED_CRITICAL if "Grace" in name else TaskPriority.SCHEDULED_ROUTINE
+
+    conversation_id = f"sched-{name.lower().replace(' ', '-')}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     try:
-        agent = await get_or_create_agent()
-        memory.log_conversation_step(agent.conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-        response = await agent.chat(prompt)
-        
-        thoughts_str = ""
-        async for thought in response.thoughts:
-            thoughts_str += thought
-        if thoughts_str:
-            memory.log_conversation_step(agent.conversation_id, "thought", thoughts_str)
-            
-        output_content = ""
-        async for chunk in response:
-            output_content += chunk
-        if output_content:
-            memory.log_conversation_step(agent.conversation_id, "assistant", output_content)
-    except Exception:
-        active_agents.pop("default", None)
+        agent = KeylessAgyAgent(
+            model="gemini-3.5-flash",
+            system_instructions=f"You are executing the scheduled background task: {name}. Complete it and report results concisely.",
+            conversation_id=conversation_id,
+            timeout=120.0,
+            task_priority=priority
+        )
+        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+        async with agent as sched_agent:
+            response = await sched_agent.chat(prompt)
+
+            thoughts_str = ""
+            async for thought in response.thoughts:
+                thoughts_str += thought
+            if thoughts_str:
+                memory.log_conversation_step(conversation_id, "thought", thoughts_str)
+
+            output_content = ""
+            async for chunk in response:
+                output_content += chunk
+            if output_content:
+                memory.log_conversation_step(conversation_id, "assistant", output_content)
+        print(f"[Scheduled Task: {name}] Executed successfully.")
+    except Exception as e:
+        print(f"[Scheduled Task: {name}] Error: {e}")
+        memory.log_conversation_step(conversation_id, "assistant", f"Scheduled task failed: {e}")
+
+def _cleanup_stale_sandboxes(max_age_seconds: int = 3600) -> int:
+    """Removes subagent sandbox directories in /tmp older than max_age_seconds. Returns count removed."""
+    import shutil
+    import time
+    removed = 0
+    tmp = Path("/tmp")
+    if not tmp.exists():
+        return 0
+    now = time.time()
+    for item in tmp.iterdir():
+        if item.is_dir() and item.name.startswith("subagent_sandbox_"):
+            try:
+                age = now - item.stat().st_mtime
+                if age > max_age_seconds:
+                    shutil.rmtree(item)
+                    removed += 1
+            except Exception:
+                pass
+    return removed
 
 async def run_scheduler():
     await asyncio.sleep(2)
@@ -1288,6 +1327,14 @@ async def run_scheduler():
                     print(f"[COMPACTION] Once-a-day background memory compaction complete: {stats}")
             except Exception as e:
                 print(f"Error checking/running daily compaction: {e}")
+
+            # Cleanup stale subagent sandboxes (older than 1 hour)
+            try:
+                removed = _cleanup_stale_sandboxes(max_age_seconds=3600)
+                if removed > 0:
+                    print(f"[CLEANUP] Removed {removed} stale subagent sandbox(es).")
+            except Exception:
+                pass
 
             now_str = datetime.now(timezone.utc).isoformat()
             conn = sqlite3.connect(memory.DB_FILE_PATH)

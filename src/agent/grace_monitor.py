@@ -7,57 +7,13 @@ import urllib.request
 
 DB_PATH = Path.home() / ".agent" / "history.db"
 
-def get_discord_config():
-    config_path = Path(__file__).parent.parent.parent / "discord" / "config.json"
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
-
-def get_bot_token():
-    env_path = Path(__file__).parent.parent.parent / "discord" / ".env"
-    if env_path.exists():
-        with open(env_path, "r") as f:
-            for line in f:
-                if line.startswith("DISCORD_BOT_TOKEN="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return None
-
-def send_discord_alert(text):
-    token = get_bot_token()
-    if not token:
-        return False
-        
-    config = get_discord_config()
-    # Default fallback channel ID
-    channel_id = 1518056970538586272
-    
-    # Try to find control-room channel ID dynamically
-    for cid, info in config.get("channels", {}).items():
-        if info.get("channel_name") == "control-room":
-            try:
-                channel_id = int(cid)
-                break
-            except ValueError:
-                pass
-                
-    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
-    headers = {
-        "Authorization": f"Bot {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "DiscordBot (https://github.com/Rapptz/discord.py 2.3.2) Python/3.10"
-    }
-    data = json.dumps({"content": text}).encode("utf-8")
-    
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return resp.getcode() == 200
-    except Exception as e:
-        print(f"Failed to send Discord alert: {e}", file=sys.stderr)
+# Import shared Discord notification utilities
+try:
+    from agent.notifications import send_discord_alert
+except ImportError:
+    # Fallback for standalone execution
+    def send_discord_alert(text, channel_name="control-room"):
+        print(f"[GRACE] Discord notification not available (standalone mode): {text[:100]}...")
         return False
 
 def check_tasks(inactivity_threshold_mins=10):

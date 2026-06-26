@@ -5,9 +5,61 @@ import uuid
 import glob
 import json
 import re
+import time
+from enum import IntEnum
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from google.antigravity.models import GeminiAPIEndpoint
+
+
+class TaskPriority(IntEnum):
+    """Controls failover depth per call type to optimize quota usage."""
+    INTERACTIVE = 0       # User is waiting — full failover chain including Grok
+    SCHEDULED_CRITICAL = 1  # Grace monitor, Meta-Eval — Gemini + 3P, no Grok
+    SCHEDULED_ROUTINE = 2   # Gmail check, Morgen sync — Gemini only, retry next cycle
+    BACKGROUND = 3           # Compaction, observer — cheapest model, no failover
+
+
+class CircuitBreaker:
+    """Tracks consecutive failures per model and skips models in 'open' state.
+    
+    After `failure_threshold` consecutive failures, the circuit opens for
+    `reset_seconds` seconds, during which the model is skipped.
+    """
+    def __init__(self, failure_threshold: int = 3, reset_seconds: float = 300.0):
+        self._failures: Dict[str, int] = {}
+        self._open_until: Dict[str, float] = {}
+        self._failure_threshold = failure_threshold
+        self._reset_seconds = reset_seconds
+
+    def record_failure(self, model: str) -> None:
+        self._failures[model] = self._failures.get(model, 0) + 1
+        if self._failures[model] >= self._failure_threshold:
+            self._open_until[model] = time.monotonic() + self._reset_seconds
+
+    def record_success(self, model: str) -> None:
+        self._failures.pop(model, None)
+        self._open_until.pop(model, None)
+
+    def is_open(self, model: str) -> bool:
+        """Returns True if the model circuit is open (should be skipped)."""
+        deadline = self._open_until.get(model)
+        if deadline is None:
+            return False
+        if time.monotonic() >= deadline:
+            # Circuit has reset — allow retry
+            self._open_until.pop(model, None)
+            self._failures.pop(model, None)
+            return False
+        return True
+
+
+# Module-level circuit breaker instance shared across all agents
+_circuit_breaker = CircuitBreaker(failure_threshold=3, reset_seconds=300.0)
+
+# Failover pools — Gemini models share one quota bucket, 3P models share another
+GEMINI_POOL = ["gemini-3.5-flash", "gemini-3.5-pro"]
+THREE_P_POOL = ["Claude Sonnet 4.6 (Thinking)", "gpt-4o"]
 
 class KeylessGeminiAPIEndpoint(GeminiAPIEndpoint):
     def validate_endpoint(self) -> None:
@@ -269,6 +321,7 @@ class KeylessAgyAgent:
         response_schema: Optional[Any] = None,
         db_path: Optional[str] = None,
         timeout: Optional[float] = None,
+        task_priority: TaskPriority = TaskPriority.INTERACTIVE,
     ):
         self.model = model
         self.system_instructions = system_instructions
@@ -276,6 +329,7 @@ class KeylessAgyAgent:
         self.response_schema = response_schema
         self.db_path = db_path
         self.timeout = timeout
+        self.task_priority = task_priority
         self._conversations_dir = str(Path.home() / ".gemini" / "antigravity-cli" / "conversations")
 
     async def __aenter__(self):
@@ -410,20 +464,61 @@ class KeylessAgyAgent:
             schema_instructions += json.dumps(sample_dict, indent=2)
             full_prompt += schema_instructions
 
-        # Check for local Ollama or direct API keys first
+        # --- Pre-flight quota-aware model routing ---
         primary_model = self.model or "gemini-3.5-flash"
-        direct_result = await self._call_direct_api(primary_model, full_prompt)
-        if direct_result:
-            return KeylessAgyResponse(direct_result)
+        try:
+            from agent import memory
+            quotas = memory.get_model_quotas()
+            gemini_q = next((q for q in quotas if q["model_family"] == "gemini"), None)
+            if gemini_q and primary_model.lower().startswith("gemini"):
+                pct_5h = gemini_q.get("pct_5h", 100.0)
+                pct_weekly = gemini_q.get("pct_weekly", 100.0)
+                if pct_5h < 15.0 or pct_weekly < 15.0:
+                    print(f"[QUOTA] Gemini remaining low (5h: {pct_5h:.1f}%, weekly: {pct_weekly:.1f}%). Rerouting to 3P pool.")
+                    primary_model = THREE_P_POOL[0]
+        except Exception:
+            pass  # Quota check is best-effort; don't block on failures
 
-        # Failover prioritized chain: Gemini -> Claude -> GPT -> Grok
-        # We try each model through keyless agy CLI
-        failover_sequence = [primary_model]
-        
-        # Add fallbacks if they are not already the primary
-        for fallback in ["gemini-3.5-flash", "Claude Sonnet 4.6 (Thinking)", "gpt-4o"]:
-            if fallback not in failover_sequence:
-                failover_sequence.append(fallback)
+        # --- Build failover sequence based on task priority and pools ---
+        failover_sequence = []
+
+        # Determine which pool the primary model belongs to
+        is_primary_gemini = any(primary_model.lower().startswith(g.lower().split("-")[0]) for g in GEMINI_POOL) or primary_model.lower().startswith("gemini")
+
+        if is_primary_gemini:
+            # Start with Gemini pool, then fall to 3P pool
+            for m in GEMINI_POOL:
+                if m not in failover_sequence:
+                    failover_sequence.append(m)
+            if self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+                for m in THREE_P_POOL:
+                    if m not in failover_sequence:
+                        failover_sequence.append(m)
+        else:
+            # Primary is 3P — try it first, then Gemini, then rest of 3P
+            failover_sequence.append(primary_model)
+            for m in GEMINI_POOL:
+                if m not in failover_sequence:
+                    failover_sequence.append(m)
+            for m in THREE_P_POOL:
+                if m not in failover_sequence:
+                    failover_sequence.append(m)
+
+        # For BACKGROUND priority, only try the primary model — no failover
+        if self.task_priority >= TaskPriority.BACKGROUND:
+            failover_sequence = [primary_model]
+        # For SCHEDULED_ROUTINE, only try models in the primary pool
+        elif self.task_priority >= TaskPriority.SCHEDULED_ROUTINE:
+            if is_primary_gemini:
+                failover_sequence = [m for m in failover_sequence if m in GEMINI_POOL]
+            else:
+                failover_sequence = [primary_model]
+
+        # Filter out models with open circuits
+        failover_sequence = [m for m in failover_sequence if not _circuit_breaker.is_open(m)]
+        if not failover_sequence:
+            # All circuits open — force-try primary model anyway
+            failover_sequence = [primary_model]
 
         timeout_val = self.timeout if self.timeout is not None else 30.0
         harness_path = get_harness_path() or "agy"
@@ -444,8 +539,10 @@ class KeylessAgyAgent:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
+                    _circuit_breaker.record_success(current_model)
                     return KeylessAgyResponse(proc, timeout_val, agent=self, prev_newest=self._get_newest_conversation_id())
                 except Exception as e:
+                    _circuit_breaker.record_failure(current_model)
                     last_error = str(e)
                     # If primary streaming fails, continue to next model in failover sequence
                     continue
@@ -474,6 +571,7 @@ class KeylessAgyAgent:
                         elif not self.conversation_id and curr_newest:
                             self.conversation_id = curr_newest
 
+                        _circuit_breaker.record_success(current_model)
                         return KeylessAgyResponse(response_text)
                     else:
                         last_error = stderr_text.strip() or response_text.strip() or "Empty response"
@@ -492,41 +590,50 @@ class KeylessAgyAgent:
                     backoff *= 2.0
 
             # If we reached here, the current model in the sequence failed. Try next model.
+            _circuit_breaker.record_failure(current_model)
             print(f"[FAILOVER] Model {current_model} failed. Trying next model...")
 
-        # Final Fallback to Grok if all agy attempts failed
-        grok_path = get_grok_path()
-        if grok_path:
-            if check_and_record_grok_usage(db_path=self.db_path):
-                print("[FAILOVER] All models failed. Pivoting to Grok fallback...")
-                grok_cmd = [grok_path, "-p", full_prompt, "--deny", "*", "--no-plan"]
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *grok_cmd,
-                        stdin=asyncio.subprocess.DEVNULL,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
-                    response_text = stdout.decode("utf-8", errors="replace")
-                    if proc.returncode == 0 and response_text.strip():
-                        return KeylessAgyResponse(response_text)
-                    else:
-                        grok_err = stderr.decode("utf-8", errors="replace").strip() or "Empty response from grok"
-                        last_error = f"Grok fallback failed: {grok_err}"
-                except asyncio.TimeoutError:
-                    last_error = f"Grok fallback timed out after {timeout_val} seconds"
+        # --- Grok fallback (only for INTERACTIVE and SCHEDULED_CRITICAL priority) ---
+        if self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+            grok_path = get_grok_path()
+            if grok_path:
+                if check_and_record_grok_usage(db_path=self.db_path):
+                    print("[FAILOVER] All models failed. Pivoting to Grok fallback...")
+                    grok_cmd = [grok_path, "-p", full_prompt, "--deny", "*", "--no-plan"]
                     try:
-                        proc.kill()
-                        await proc.wait()
-                    except Exception:
-                        pass
-                except Exception as e:
-                    last_error = f"Grok fallback failed: {e}"
+                        proc = await asyncio.create_subprocess_exec(
+                            *grok_cmd,
+                            stdin=asyncio.subprocess.DEVNULL,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
+                        response_text = stdout.decode("utf-8", errors="replace")
+                        if proc.returncode == 0 and response_text.strip():
+                            return KeylessAgyResponse(response_text)
+                        else:
+                            grok_err = stderr.decode("utf-8", errors="replace").strip() or "Empty response from grok"
+                            last_error = f"Grok fallback failed: {grok_err}"
+                    except asyncio.TimeoutError:
+                        last_error = f"Grok fallback timed out after {timeout_val} seconds"
+                        try:
+                            proc.kill()
+                            await proc.wait()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        last_error = f"Grok fallback failed: {e}"
+                else:
+                    last_error += " (Grok fallback blocked by rate limits)"
             else:
-                last_error += " (Grok fallback blocked by rate limits)"
-        else:
-            last_error += " (Grok binary not found)"
+                last_error += " (Grok binary not found)"
 
-        raise RuntimeError(f"All models in priority failover chain and grok fallback failed. Last error: {last_error}")
+        # --- Direct API fallback (gated behind AGENT_USE_DIRECT_API env flag) ---
+        if os.environ.get("AGENT_USE_DIRECT_API", "").lower() == "true":
+            direct_result = await self._call_direct_api(primary_model, full_prompt)
+            if direct_result:
+                return KeylessAgyResponse(direct_result)
+
+        raise RuntimeError(f"All models in priority failover chain failed. Last error: {last_error}")
+
 

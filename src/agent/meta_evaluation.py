@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from agent import memory
-from agent.keyless import KeylessAgyAgent
+from agent.keyless import KeylessAgyAgent, TaskPriority
 
 async def run_meta_evaluation(days: int = 1):
     db_path = memory.DB_FILE_PATH
@@ -87,7 +87,8 @@ async def run_meta_evaluation(days: int = 1):
     # Execute via keyless agent
     agent = KeylessAgyAgent(
         model="gemini-3.5-flash",
-        response_schema=None
+        response_schema=None,
+        task_priority=TaskPriority.SCHEDULED_CRITICAL
     )
     
     print("[META-EVAL] Sending prompt to model...")
