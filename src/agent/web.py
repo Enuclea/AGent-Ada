@@ -63,7 +63,7 @@ def get_session_lock(session_id: str) -> PriorityLock:
 app = FastAPI(title="Ada Task Engine Dashboard")
 
 def ensure_default_scheduled_tasks(conn=None):
-    """Ensures that default scheduled background tasks are registered if the database is empty."""
+    """Ensures that default scheduled background tasks are registered if not already present."""
     close_conn = False
     if conn is None:
         conn = sqlite3.connect(memory.DB_FILE_PATH)
@@ -71,83 +71,48 @@ def ensure_default_scheduled_tasks(conn=None):
     try:
         cursor = conn.cursor()
         
-        # Check if table is empty
-        cursor.execute("SELECT count(*) FROM scheduled_tasks")
-        count = cursor.fetchone()[0]
-        if count > 0:
-            return
-            
-        # 1. Gmail Email Check
-        schedule_id = "gmail-check-task-id"
-        cron_expr = "*/5 * * * *"  # Every 5 minutes
-        next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
-        cursor.execute(
-            "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        default_tasks = [
             (
-                schedule_id,
+                "gmail-check-task-id",
                 "Gmail Email Check",
                 "Check for new Gmail emails since last run, parse them using AI to check importance, and create Morgen tasks for important ones.",
-                cron_expr,
-                next_run,
-                None,
-                "active"
-            )
-        )
-        print("[STARTUP] Registered Gmail Email Check background task.")
-        
-        # 2. Stock Game Auto Check
-        schedule_id = "stock-check-task-id"
-        cron_expr = "0 14 * * *"  # Daily at 14:00 UTC
-        next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
-        cursor.execute(
-            "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "*/5 * * * *",
+            ),
             (
-                schedule_id,
+                "stock-check-task-id",
                 "Stock Game Auto Check",
                 "Please check the stock game portfolio status using stock_game/portfolio.py status. Run the scan using stock_game/scan.py to identify new signals. If the 3-day cool-off has expired, make the necessary rebalancing adjustments (sell down heavy holdings to keep them under 33% and buy into strong buy tickers like JPM or IWM). Then commit the trades.",
-                cron_expr,
-                next_run,
-                None,
-                "active"
-            )
-        )
-        print("[STARTUP] Registered Stock Game Auto Check background task.")
-        
-        # 3. Grace Timekeeper
-        schedule_id = "grace-check-task-id"
-        cron_expr = "*/5 * * * *"  # Every 5 minutes
-        next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
-        cursor.execute(
-            "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "0 14 * * *",
+            ),
             (
-                schedule_id,
+                "grace-check-task-id",
                 "Grace Timekeeper",
                 "Ada: Run Timekeeper Health Check. Invoke the Grace subagent to check background tasks using src/agent/grace_monitor.py and output the summary report.",
-                cron_expr,
-                next_run,
-                None,
-                "active"
-            )
-        )
-        print("[STARTUP] Registered Grace Timekeeper background task.")
-        
-        # 4. Meta-Evaluation
-        schedule_id = "meta-evaluation-task-id"
-        cron_expr = "0 0 * * *"  # Daily at midnight UTC
-        next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
-        cursor.execute(
-            "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "*/5 * * * *",
+            ),
             (
-                schedule_id,
+                "meta-evaluation-task-id",
                 "Meta-Evaluation",
                 "Ada: Run Meta-Evaluation post-mortem analyzer. Query the failed background tasks and API error logs from the past 24 hours, identify bugs/edge cases, and record memory facts to prevent recurrence.",
-                cron_expr,
-                next_run,
-                None,
-                "active"
-            )
-        )
-        print("[STARTUP] Registered Meta-Evaluation background task.")
+                "0 0 * * *",
+            ),
+            (
+                "quiet-observer-task-id",
+                "Quiet Observer",
+                "Ada: Run Quiet Observer pattern analyzer. Query the conversation history and step logs from the past 24 hours, identify patterns, bottlenecks, or automation opportunities, and write a summary report.",
+                "0 8 * * *",
+            ),
+        ]
+        
+        for task_id, name, prompt, cron_expr in default_tasks:
+            cursor.execute("SELECT count(*) FROM scheduled_tasks WHERE id = ?", (task_id,))
+            if cursor.fetchone()[0] == 0:
+                next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
+                cursor.execute(
+                    "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (task_id, name, prompt, cron_expr, next_run, None, "active")
+                )
+                print(f"[STARTUP] Registered {name} background task.")
         
         conn.commit()
     except Exception as e:
@@ -1448,6 +1413,21 @@ async def execute_scheduled_task(name: str, prompt: str):
             await run_meta_evaluation()
             
             memory.log_conversation_step(conversation_id, "assistant", "Meta-Evaluation executed successfully.")
+            print(f"[Scheduled Task: {name}] Executed successfully.")
+            return
+        except Exception as e:
+            print(f"[Scheduled Task: {name}] Error: {e}")
+            return
+
+    if name == "Quiet Observer":
+        try:
+            from agent.quiet_observer import run_quiet_observer
+            conversation_id = "quiet-observer-run-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+            
+            await run_quiet_observer()
+            
+            memory.log_conversation_step(conversation_id, "assistant", "Quiet Observer executed successfully.")
             print(f"[Scheduled Task: {name}] Executed successfully.")
             return
         except Exception as e:
