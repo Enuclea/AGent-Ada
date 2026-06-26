@@ -61,18 +61,46 @@ async def verify_api_key(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 # ---------------------------------------------------------------------------
-# Harness path resolution (same logic as keyless.py)
+# Harness and Ollama path resolution
 # ---------------------------------------------------------------------------
 
 def _find_binary(name: str) -> Optional[str]:
-    """Find agy or grok binary, checking ~/.local/bin as fallback."""
+    """Find agy, grok, or ollama binary, checking common install paths."""
     found = shutil.which(name)
     if found:
         return found
-    fallback = Path.home() / ".local" / "bin" / name
-    if fallback.exists() and os.access(str(fallback), os.X_OK):
-        return str(fallback)
+    # Check common fallback locations
+    for fallback_dir in [
+        Path.home() / ".local" / "bin",
+        Path("/usr/local/bin"),
+        Path("/opt/homebrew/bin"),
+    ]:
+        candidate = fallback_dir / name
+        if candidate.exists() and os.access(str(candidate), os.X_OK):
+            return str(candidate)
     return None
+
+
+def _get_ollama_models() -> list:
+    """Returns a list of locally available Ollama model names."""
+    ollama = _find_binary("ollama")
+    if not ollama:
+        return []
+    try:
+        import subprocess
+        result = subprocess.run(
+            [ollama, "list"], capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return []
+        models = []
+        for line in result.stdout.strip().split("\n")[1:]:  # Skip header
+            parts = line.split()
+            if parts:
+                models.append(parts[0])  # e.g. "gemma4:12b"
+        return models
+    except Exception:
+        return []
 
 # ---------------------------------------------------------------------------
 # App lifecycle
@@ -81,15 +109,20 @@ def _find_binary(name: str) -> Optional[str]:
 async def _register_with_hub():
     """Register this worker with the Ada hub on startup."""
     import httpx
+    ollama_models = _get_ollama_models()
+    caps = list(CAPABILITIES)
+    if ollama_models and "ollama" not in caps:
+        caps.append("ollama")
     manifest = {
         "worker_id": WORKER_ID,
         "host": f"{_get_local_ip()}:{WORKER_PORT}",
-        "capabilities": CAPABILITIES,
+        "capabilities": caps,
         "platform": platform.system().lower(),
         "python_version": platform.python_version(),
         "max_concurrent": MAX_CONCURRENT,
         "has_agy": _find_binary("agy") is not None,
         "has_grok": _find_binary("grok") is not None,
+        "ollama_models": ollama_models,
     }
     headers = {}
     if API_KEY:
@@ -128,10 +161,15 @@ def _get_local_ip() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle."""
+    ollama_models = _get_ollama_models()
     print(f"[WORKER] Starting Ada Worker '{WORKER_ID}' on port {WORKER_PORT}")
     print(f"[WORKER] Capabilities: {CAPABILITIES}")
     print(f"[WORKER] Platform: {platform.system()} {platform.machine()}")
     print(f"[WORKER] Hub: {HUB_URL}")
+    if ollama_models:
+        print(f"[WORKER] Ollama models: {', '.join(ollama_models)}")
+    else:
+        print(f"[WORKER] Ollama: not available")
     asyncio.create_task(_register_with_hub())
     yield
     print(f"[WORKER] Shutting down.")
@@ -144,12 +182,16 @@ app = FastAPI(title=f"Ada Worker ({WORKER_ID})", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
+    ollama_models = _get_ollama_models()
+    caps = list(CAPABILITIES)
+    if ollama_models and "ollama" not in caps:
+        caps.append("ollama")
     return {
         "status": "ok",
         "worker_id": WORKER_ID,
         "platform": platform.system().lower(),
         "arch": platform.machine(),
-        "capabilities": CAPABILITIES,
+        "capabilities": caps,
         "active_tasks": _active_tasks,
         "max_concurrent": MAX_CONCURRENT,
         "uptime_seconds": int(time.time() - _start_time),
@@ -157,8 +199,15 @@ async def health():
         "tasks_failed": _tasks_failed,
         "has_agy": _find_binary("agy") is not None,
         "has_grok": _find_binary("grok") is not None,
+        "has_ollama": bool(ollama_models),
+        "ollama_models": ollama_models,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+@app.get("/models")
+async def list_models():
+    """Lists locally available Ollama models."""
+    return {"ollama_models": _get_ollama_models()}
 
 # ---------------------------------------------------------------------------
 # Execute endpoint — the core work dispatcher
@@ -194,7 +243,23 @@ async def execute_task(request: Request):
             if system_instructions:
                 full_prompt = f"[System Instructions]\n{system_instructions}\n\n[User Prompt]\n{prompt}"
 
-            # Try agy first, then grok
+            # If model starts with 'ollama:', route directly to Ollama
+            if model.startswith("ollama:"):
+                ollama_model = model[7:]  # Strip 'ollama:' prefix
+                yield f"data: {json.dumps({'type': 'thought', 'content': f'[Worker {WORKER_ID}] Running on local Ollama ({ollama_model})...'})}\n\n"
+                result = await _run_ollama(ollama_model, full_prompt, timeout_val)
+                if result is not None:
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': result, 'worker_id': WORKER_ID})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    _tasks_completed += 1
+                    return
+                else:
+                    yield f"data: {json.dumps({'type': 'error', 'content': f'Ollama model {ollama_model} failed on {WORKER_ID}'})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    _tasks_failed += 1
+                    return
+
+            # Try agy first, then grok, then Ollama as final local fallback
             harness = _find_binary("agy")
             if harness:
                 result = await _run_harness(harness, full_prompt, model, timeout_val, conversation_id)
@@ -215,8 +280,20 @@ async def execute_task(request: Request):
                     _tasks_completed += 1
                     return
 
-            # No harness available — return error
-            yield f"data: {json.dumps({'type': 'error', 'content': f'Worker {WORKER_ID} has no available harness (agy/grok)'})}\n\n"
+            # Final fallback: try Ollama with a default model
+            ollama_models = _get_ollama_models()
+            if ollama_models:
+                default_ollama = ollama_models[0]  # Use first available
+                yield f"data: {json.dumps({'type': 'thought', 'content': f'[Worker {WORKER_ID}] No agy/grok. Falling back to Ollama ({default_ollama})...'})}\n\n"
+                result = await _run_ollama(default_ollama, full_prompt, timeout_val)
+                if result is not None:
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': result, 'worker_id': WORKER_ID})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    _tasks_completed += 1
+                    return
+
+            # Nothing available
+            yield f"data: {json.dumps({'type': 'error', 'content': f'Worker {WORKER_ID} has no available harness (agy/grok/ollama)'})}\n\n"
             yield "data: [DONE]\n\n"
             _tasks_failed += 1
 
@@ -280,6 +357,49 @@ async def _run_harness(
         return None
     except Exception as e:
         print(f"[WORKER] Harness error: {e}")
+        return None
+
+
+async def _run_ollama(
+    model_name: str,
+    prompt: str,
+    timeout_val: float,
+) -> Optional[str]:
+    """Execute a prompt via Ollama CLI and return the response text."""
+    ollama = _find_binary("ollama")
+    if not ollama:
+        return None
+
+    cmd = [ollama, "run", model_name]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=prompt.encode("utf-8")),
+            timeout=timeout_val,
+        )
+        response_text = stdout.decode("utf-8", errors="replace")
+
+        if proc.returncode == 0 and response_text.strip():
+            return response_text.strip()
+        else:
+            err = stderr.decode("utf-8", errors="replace").strip()
+            print(f"[WORKER] Ollama failed (rc={proc.returncode}, model={model_name}): {err or 'empty response'}")
+            return None
+    except asyncio.TimeoutError:
+        print(f"[WORKER] Ollama timed out after {timeout_val}s (model={model_name})")
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        return None
+    except Exception as e:
+        print(f"[WORKER] Ollama error: {e}")
         return None
 
 # ---------------------------------------------------------------------------
