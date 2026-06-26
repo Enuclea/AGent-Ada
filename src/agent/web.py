@@ -278,6 +278,36 @@ async def run_quota_refresh_loop():
             pass
         await asyncio.sleep(15 * 60)
 
+def load_plugins(app: FastAPI) -> None:
+    """Dynamically loads core integrations and web routes from the plugins directory."""
+    import importlib.util
+    plugins_dir = Path(__file__).parent / "plugins"
+    if not plugins_dir.exists() or not plugins_dir.is_dir():
+        return
+        
+    for item in plugins_dir.iterdir():
+        if item.is_dir() and (item / "__init__.py").exists():
+            try:
+                # Dynamic import package __init__.py
+                spec = importlib.util.spec_from_file_location(f"agent.plugins.{item.name}", item / "__init__.py")
+                module = importlib.util.module_from_spec(spec)
+                import sys
+                sys.modules[f"agent.plugins.{item.name}"] = module
+                spec.loader.exec_module(module)
+                
+                # Execute setup contract
+                if hasattr(module, "setup_plugin"):
+                    module.setup_plugin(
+                        app=app,
+                        register_tools=tools.register_plugin_tools,
+                        register_scheduled_task=memory.ensure_plugin_scheduled_task
+                    )
+                    print(f"[PLUGINS] Successfully loaded plugin package '{item.name}'")
+            except Exception as e:
+                import traceback
+                print(f"[PLUGINS] Failed to load plugin package '{item.name}': {e}")
+                traceback.print_exc()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Clear any stale active tasks on startup (e.g. from previous runs/tests/crashes)
@@ -295,6 +325,9 @@ async def lifespan(app: FastAPI):
     quota_task.cancel()
 
 app = FastAPI(title="Ada Task Engine Dashboard", lifespan=lifespan)
+
+# Load dynamically registered plugins at module import time
+load_plugins(app)
 
 # Global state to maintain active session
 active_agents = {}  # session_id -> dict
@@ -470,7 +503,7 @@ async def get_or_create_agent(
                     tools.list_scheduled_tasks,
                     tools.delete_scheduled_task,
                     tools.run_command,
-                ]
+                ] + tools.PLUGIN_TOOLS
                 if not is_discord:
                     custom_tools.append(tools.backup_discord_channel)
 

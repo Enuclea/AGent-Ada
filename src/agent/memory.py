@@ -1116,6 +1116,40 @@ def get_model_quotas() -> List[Dict[str, Any]]:
         conn.close()
     return results
 
+def ensure_plugin_scheduled_task(name: str, prompt: str, cron_expr: str) -> None:
+    """Helper for plugins to register a default scheduled task in the database."""
+    import sqlite3
+    import uuid
+    from datetime import datetime, timezone
+    
+    # We resolve get_next_cron_run dynamically to avoid circular import with web.py
+    try:
+        from agent.web import get_next_cron_run
+        next_run_dt = get_next_cron_run(cron_expr, datetime.now(timezone.utc))
+        next_run = next_run_dt.isoformat()
+    except Exception:
+        from datetime import timedelta
+        next_run = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        # Check if a task with the same name already exists
+        cursor.execute("SELECT count(*) FROM scheduled_tasks WHERE name = ?", (name,))
+        count = cursor.fetchone()[0]
+        if count == 0:
+            schedule_id = "plugin-task-" + str(uuid.uuid4())
+            cursor.execute(
+                "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (schedule_id, name, prompt, cron_expr, next_run, None, "active")
+            )
+            conn.commit()
+            print(f"[PLUGINS] Registered default scheduled task '{name}' in database.")
+    except Exception as e:
+        print(f"[PLUGINS] Failed to register default scheduled task '{name}': {e}")
+    finally:
+        conn.close()
+
 # Initialize database on module load
 try:
     init_db()

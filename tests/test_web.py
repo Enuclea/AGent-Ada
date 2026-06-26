@@ -16,8 +16,10 @@ from agent import memory
 
 # Override DB_FILE_PATH directly since memory module might have been loaded earlier by other tests
 memory.DB_FILE_PATH = Path(tmp_db_path)
+memory.init_db()
 
 from agent.web import app
+from fastapi.testclient import TestClient
 client = TestClient(app)
 
 def setup_module():

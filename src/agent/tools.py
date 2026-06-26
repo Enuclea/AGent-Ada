@@ -12,6 +12,16 @@ OPENCLAW_EXTS_DIR = Path.home() / ".openclaw" / "extensions"
 OPENCLAW_SKILLS_DIR = Path.home() / ".openclaw" / "skills"
 HERMES_SKILLS_DIR = Path.home() / ".hermes" / "skills"
 
+# Third-party / plugin registered tools list
+PLUGIN_TOOLS = []
+
+def register_plugin_tools(tools_list: list) -> None:
+    """Dynamically registers tool functions from plugins."""
+    global PLUGIN_TOOLS
+    for t in tools_list:
+        if t not in PLUGIN_TOOLS:
+            PLUGIN_TOOLS.append(t)
+
 def get_skills_paths() -> List[Path]:
     """Returns a list of directories containing custom skills or tools."""
     paths = [SKILLS_DIR]
