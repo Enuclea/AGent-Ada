@@ -227,6 +227,9 @@
                 <div class="widget-card glass-card">
                     <div class="card-header">
                         <h2><i class="fa-solid fa-graduation-cap"></i> Learned Skills</h2>
+                        <button class="card-action-btn" id="open-skills-store-btn" title="Open Skill Store">
+                            <i class="fa-solid fa-store"></i> Browse Store
+                        </button>
                     </div>
                     <div class="skills-list" id="skills-list">
                         <!-- Default empty state -->
@@ -239,6 +242,51 @@
             </aside>
         </main>
     </div>
+
+    <!-- Skill Store / Management Modal -->
+    <div id="skills-modal" class="modal-overlay">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-graduation-cap"></i> Skill Store &amp; Repository Management</h2>
+                <button class="close-btn" id="close-skills-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Left panel: List of available skills from Hermes & OpenClaw -->
+                <div class="modal-sidebar">
+                    <div class="search-bar-wrapper">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="text" id="skill-search" placeholder="Search skills...">
+                    </div>
+                    <div class="skill-source-filter">
+                        <button class="filter-btn active" id="filter-all" data-filter="all">All</button>
+                        <button class="filter-btn" id="filter-hermes" data-filter="hermes">Hermes</button>
+                        <button class="filter-btn" id="filter-openclaw" data-filter="openclaw">OpenClaw</button>
+                    </div>
+                    <div class="repo-skills-list" id="repo-skills-list">
+                        <!-- Populated dynamically via JS -->
+                        <div class="loading-state">
+                            <i class="fa-solid fa-circle-notch fa-spin"></i>
+                            <span>Loading repository skills...</span>
+                        </div>
+                    </div>
+                    <!-- Manual Creator Action -->
+                    <div style="padding: 1rem; border-top: 1px solid var(--card-border); display: flex; flex-direction: column;">
+                        <button class="btn-secondary" id="btn-show-creator" style="width: 100%; justify-content: center;">
+                            <i class="fa-solid fa-plus"></i> Create Custom Skill
+                        </button>
+                    </div>
+                </div>
+                <!-- Right panel: Selected skill preview / audit / creation -->
+                <div class="modal-detail-panel" id="skill-detail-panel">
+                    <div class="detail-empty-state">
+                        <i class="fa-solid fa-graduation-cap"></i>
+                        <p>Select a skill from the list to preview, safety-audit, and install.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

@@ -13,35 +13,68 @@ def get_memory_file() -> Path:
     return MEMORY_FILE_PATH
 
 def load_memory() -> Dict[str, Any]:
-    """Loads the persistent memory JSON file.
+    """Loads persistent memory from the SQLite database, with automatic migration from memory.json."""
+    init_db()
     
-    Returns:
-        A dictionary containing 'facts' (list) and 'key_value' (dict).
-    """
-    path = get_memory_file()
-    if not path.exists():
-        return {"facts": [], "key_value": {}}
-    
+    # 1. Try to read from SQLite
+    conn = sqlite3.connect(DB_FILE_PATH)
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if not isinstance(data, dict):
-                data = {}
-            data.setdefault("facts", [])
-            data.setdefault("key_value", {})
-            return data
-    except (json.JSONDecodeError, OSError):
-        # Fallback in case of corruption
-        return {"facts": [], "key_value": {}}
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM persistent_memory WHERE key = ?", ("global_memory",))
+        row = cursor.fetchone()
+        if row:
+            try:
+                data = json.loads(row[0])
+                if isinstance(data, dict):
+                    data.setdefault("facts", [])
+                    data.setdefault("key_value", {})
+                    return data
+            except json.JSONDecodeError:
+                pass
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
-def save_memory(memory: Dict[str, Any]) -> None:
-    """Saves the memory state to the persistent JSON file."""
-    path = get_memory_file()
+    # 2. Check for migration from legacy memory.json
+    legacy_path = get_memory_file()
+    data = {"facts": [], "key_value": {}}
+    if legacy_path.exists():
+        try:
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data = loaded
+                    data.setdefault("facts", [])
+                    data.setdefault("key_value", {})
+            # Save migrated memory to SQLite
+            save_memory(data)
+            # Safe deletion of legacy file
+            try:
+                legacy_path.unlink()
+            except Exception:
+                pass
+        except Exception:
+            pass
+            
+    return data
+
+def save_memory(memory_dict: Dict[str, Any]) -> None:
+    """Saves the memory state to SQLite persistent_memory."""
+    init_db()
+    conn = sqlite3.connect(DB_FILE_PATH)
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(memory, f, indent=2, ensure_ascii=False)
-    except OSError as e:
+        cursor = conn.cursor()
+        val_str = json.dumps(memory_dict, ensure_ascii=False)
+        cursor.execute(
+            "INSERT OR REPLACE INTO persistent_memory (key, value) VALUES (?, ?)",
+            ("global_memory", val_str)
+        )
+        conn.commit()
+    except Exception as e:
         print(f"Warning: Failed to save persistent memory: {e}")
+    finally:
+        conn.close()
 
 def add_fact(fact: str) -> str:
     """Appends a new fact to the persistent facts list."""
@@ -95,6 +128,24 @@ def init_db() -> None:
     conn = sqlite3.connect(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
+        # Persistent memory key-values
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS persistent_memory (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """)
+        # Telemetry logs
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS telemetry_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            event_type TEXT,
+            event_details TEXT,
+            latency REAL,
+            timestamp TEXT
+        )
+        """)
         # Main step logs
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS conversation_steps (
@@ -767,9 +818,9 @@ def get_active_task_status(task_id: str) -> Optional[str]:
         conn.close()
     return None
 
-def get_auto_rag_context(prompt: Optional[str]) -> str:
-    """Runs a FTS search on past conversations for the given prompt under the hood,
-    returning a formatted string of the top 3 most relevant historical interactions.
+async def get_auto_rag_context(prompt: Optional[str]) -> str:
+    """Runs an FTS search on past conversations, then performs semantic ranking
+    using a keyless agent call to identify the 3 most relevant context snippets.
     """
     import re
     if not prompt:
@@ -791,25 +842,67 @@ def get_auto_rag_context(prompt: Optional[str]) -> str:
     if not results:
         return ""
 
-    lines = []
+    candidates = []
     seen_content = set()
-    count = 0
     for res in results:
-        content = res["content"].strip()
+        content = res["content"].strip() if res["content"] else ""
         if not content or content in seen_content:
             continue
         seen_content.add(content)
-        
+        candidates.append(res)
+        if len(candidates) >= 15:  # Limit candidate pool for performance
+            break
+
+    if not candidates:
+        return ""
+
+    # Perform semantic ranking if we have multiple candidates
+    if len(candidates) > 3:
+        try:
+            from agent.keyless import KeylessAgyAgent
+            # Format candidates for ranking
+            candidates_formatted = []
+            for idx, c in enumerate(candidates):
+                content_truncated = c["content"][:200]
+                candidates_formatted.append(f"[{idx}]: (Role: {c['role']}, Tool: {c['tool_name'] or 'None'}) {content_truncated}")
+            
+            candidates_text = "\n".join(candidates_formatted)
+            ranking_prompt = (
+                f"You are a semantic retrieval ranker. Given the user query: \"{prompt}\", "
+                f"select up to 3 most semantically relevant snippets from the candidates list below.\n\n"
+                f"Candidates list:\n{candidates_text}\n\n"
+                f"Return ONLY a JSON list of integers corresponding to the indices of the selected snippets. "
+                f"E.g., [2, 0, 5]. Output no extra text."
+            )
+            
+            agent = KeylessAgyAgent(
+                model="gemini-1.5-flash",
+                system_instructions="You are a passive RAG ranker. Output ONLY valid JSON list of integers."
+            )
+            async with agent as a:
+                resp = await a.chat(ranking_prompt)
+                resp_text = resp.text.strip().strip("`").strip("json").strip()
+                indices = json.loads(resp_text)
+                if isinstance(indices, list):
+                    selected = []
+                    for idx in indices:
+                        if isinstance(idx, int) and 0 <= idx < len(candidates):
+                            selected.append(candidates[idx])
+                    if selected:
+                        candidates = selected[:3]
+        except Exception:
+            # Fall back to top 3 FTS5 results on error
+            pass
+
+    lines = []
+    for res in candidates[:3]:
+        content = res["content"].strip()
         role = res["role"].upper()
         tool_desc = f" (Tool Call: {res['tool_name']})" if res["tool_name"] else ""
         truncated = content
         if len(truncated) > 300:
             truncated = truncated[:300] + "... [truncated]"
-            
         lines.append(f"- **Role:** {role}{tool_desc}\n  **Content:** {truncated}")
-        count += 1
-        if count >= 3:
-            break
 
     if not lines:
         return ""
@@ -1147,6 +1240,23 @@ def ensure_plugin_scheduled_task(name: str, prompt: str, cron_expr: str) -> None
             print(f"[PLUGINS] Registered default scheduled task '{name}' in database.")
     except Exception as e:
         print(f"[PLUGINS] Failed to register default scheduled task '{name}': {e}")
+    finally:
+        conn.close()
+
+def log_telemetry_event(session_id: str, event_type: str, event_details: str, latency: float) -> None:
+    """Logs a system/telemetry event to SQLite."""
+    init_db()
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "INSERT INTO telemetry_logs (session_id, event_type, event_details, latency, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (session_id, event_type, event_details, latency, timestamp)
+        )
+        conn.commit()
+    except Exception:
+        pass
     finally:
         conn.close()
 

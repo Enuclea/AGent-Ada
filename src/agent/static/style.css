@@ -131,6 +131,7 @@ body {
     letter-spacing: 1.5px;
     background: linear-gradient(135deg, var(--accent-orchid) 0%, var(--accent-cyan) 100%);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -1141,3 +1142,507 @@ select:focus {
 .quota-progress-bar.low {
     background: linear-gradient(90deg, #ff3344, #ff6688);
 }
+
+/* ==========================================
+   SKILL STORE & MANAGEMENT MODAL STYLES
+   ========================================== */
+
+/* Modal Overlay */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(4, 6, 15, 0.85);
+    backdrop-filter: blur(12px);
+    display: none; /* Hidden by default */
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-overlay.active {
+    display: flex;
+}
+
+/* Modal Container */
+.modal-container {
+    width: 92%;
+    max-width: 1200px;
+    height: 82vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 16px;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(20px);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem 1.75rem;
+    border-bottom: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.modal-header h2 {
+    font-family: var(--font-heading);
+    font-size: 1.35rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.modal-header h2 i {
+    color: var(--accent-orchid);
+    filter: drop-shadow(0 0 8px var(--accent-orchid-glow));
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 2rem;
+    cursor: pointer;
+    line-height: 1;
+    transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.close-btn:hover {
+    color: var(--accent-orchid);
+    transform: scale(1.1);
+}
+
+/* Modal Body split into Sidebar and Detail Panel */
+.modal-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+.modal-sidebar {
+    width: 350px;
+    border-right: 1px solid var(--card-border);
+    display: flex;
+    flex-direction: column;
+    background: rgba(4, 6, 15, 0.3);
+    overflow: hidden;
+}
+
+.search-bar-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 1.25rem;
+    padding: 0.6rem 0.85rem;
+    border-radius: 8px;
+    background: var(--input-bg);
+    border: 1px solid var(--card-border);
+    transition: border-color 0.2s ease;
+}
+
+.search-bar-wrapper:focus-within {
+    border-color: var(--accent-cyan);
+}
+
+.search-bar-wrapper i {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.search-bar-wrapper input {
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    width: 100%;
+    outline: none;
+    font-size: 0.9rem;
+    font-family: var(--font-body);
+}
+
+.skill-source-filter {
+    display: flex;
+    gap: 0.35rem;
+    padding: 0 1.25rem 1rem 1.25rem;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.filter-btn {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--card-border);
+    color: var(--text-secondary);
+    padding: 0.45rem 0.5rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    font-family: var(--font-body);
+    transition: all 0.2s ease;
+}
+
+.filter-btn:hover {
+    border-color: var(--accent-orchid-glow);
+    color: var(--text-primary);
+}
+
+.filter-btn.active {
+    background: var(--accent-orchid);
+    border-color: var(--accent-orchid);
+    color: var(--bg-primary);
+    font-weight: 600;
+}
+
+.repo-skills-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.loading-state, .error-state {
+    padding: 3rem 1.5rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.loading-state i {
+    color: var(--accent-cyan);
+    font-size: 1.5rem;
+}
+
+.repo-skill-item {
+    padding: 0.85rem;
+    border-radius: 10px;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.02);
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.repo-skill-item:hover {
+    border-color: var(--accent-cyan);
+    transform: translateY(-2px);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.repo-skill-item.selected {
+    border-color: var(--accent-orchid);
+    background: rgba(302, 100, 68, 0.06);
+}
+
+.repo-skill-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.35rem;
+}
+
+.repo-skill-name {
+    font-weight: 600;
+    font-size: 0.92rem;
+    color: var(--text-primary);
+}
+
+.repo-skill-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.repo-skill-badge.hermes {
+    background: rgba(302, 100, 68, 0.15);
+    color: var(--accent-orchid);
+    border: 1px solid rgba(302, 100, 68, 0.3);
+}
+
+.repo-skill-badge.openclaw {
+    background: rgba(186, 100, 50, 0.12);
+    color: var(--accent-cyan);
+    border: 1px solid rgba(186, 100, 50, 0.25);
+}
+
+.repo-skill-desc {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Detail Panel */
+.modal-detail-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: rgba(4, 6, 15, 0.15);
+}
+
+.detail-empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: var(--text-muted);
+    gap: 1rem;
+    text-align: center;
+    padding: 2rem;
+}
+
+.detail-empty-state i {
+    font-size: 3.5rem;
+    color: rgba(255, 255, 255, 0.05);
+}
+
+.detail-header {
+    padding: 1.5rem 1.75rem;
+    border-bottom: 1px solid var(--card-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    background: rgba(255, 255, 255, 0.01);
+}
+
+.detail-meta-info {
+    flex: 1;
+    padding-right: 1.5rem;
+}
+
+.detail-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.detail-title {
+    font-family: var(--font-heading);
+    font-size: 1.45rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.detail-subtitle-row {
+    display: flex;
+    gap: 1.25rem;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.detail-subtitle-row span strong {
+    color: var(--text-primary);
+}
+
+.detail-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.detail-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.75rem;
+}
+
+.detail-section-title {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.65rem;
+    color: var(--accent-cyan);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding-bottom: 0.35rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.detail-description {
+    font-size: 0.92rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.code-audit-container {
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: var(--input-bg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.code-audit-header {
+    background: rgba(4, 6, 15, 0.8);
+    padding: 0.6rem 1rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.code-audit-header span i {
+    color: var(--accent-cyan);
+}
+
+.code-audit-body {
+    padding: 1.25rem;
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 380px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+    font-size: 0.82rem;
+    color: hsl(120, 80%, 75%); /* Green terminal theme */
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.5;
+    background: hsl(224, 25%, 3%);
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    scrollbar-width: thin;
+}
+
+/* Custom Skill Creator Panel */
+.create-skill-panel {
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.create-skill-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+}
+
+.create-skill-form .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.create-skill-form label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.create-skill-form input, .create-skill-form textarea {
+    background: var(--input-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 0.6rem 0.85rem;
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.2s ease;
+}
+
+.create-skill-form input:focus, .create-skill-form textarea:focus {
+    border-color: var(--accent-cyan);
+}
+
+.create-skill-form textarea {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.85rem;
+}
+
+/* Buttons and Tags */
+.btn-primary, .btn-secondary {
+    padding: 0.55rem 1.1rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: var(--font-body);
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.btn-primary {
+    background: var(--accent-orchid);
+    color: var(--bg-primary);
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: hsl(302, 100%, 75%);
+    box-shadow: 0 0 12px var(--accent-orchid-glow);
+}
+
+.btn-primary:disabled {
+    background: var(--text-muted);
+    color: var(--bg-primary);
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.btn-secondary {
+    background: transparent;
+    border-color: var(--card-border);
+    color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--text-secondary);
+}
+
+/* Action button style inside widget headers */
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.card-action-btn {
+    background: transparent;
+    border: 1px solid var(--card-border);
+    color: var(--accent-cyan);
+    padding: 0.3rem 0.65rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    font-family: var(--font-body);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.card-action-btn:hover {
+    background: var(--accent-cyan-glow);
+    border-color: var(--accent-cyan);
+    transform: translateY(-1px);
+}
+

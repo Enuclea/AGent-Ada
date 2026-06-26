@@ -913,3 +913,334 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// ==========================================
+// SKILL STORE & MANAGEMENT INTERFACE
+// ==========================================
+
+const skillsModal = document.getElementById('skills-modal');
+const openSkillsStoreBtn = document.getElementById('open-skills-store-btn');
+const closeSkillsBtn = document.getElementById('close-skills-btn');
+const skillSearch = document.getElementById('skill-search');
+const repoSkillsList = document.getElementById('repo-skills-list');
+const skillDetailPanel = document.getElementById('skill-detail-panel');
+const btnShowCreator = document.getElementById('btn-show-creator');
+
+let availableRepoSkills = [];
+let currentFilter = 'all';
+let currentSearch = '';
+
+// Toggle Modal
+if (openSkillsStoreBtn) {
+    openSkillsStoreBtn.addEventListener('click', () => {
+        skillsModal.classList.add('active');
+        loadRepoSkills();
+    });
+}
+
+if (closeSkillsBtn) {
+    closeSkillsBtn.addEventListener('click', () => {
+        skillsModal.classList.remove('active');
+    });
+}
+
+// Close modal on click outside container
+if (skillsModal) {
+    skillsModal.addEventListener('click', (e) => {
+        if (e.target === skillsModal) {
+            skillsModal.classList.remove('active');
+        }
+    });
+}
+
+// Search and Filter Handlers
+if (skillSearch) {
+    skillSearch.addEventListener('input', (e) => {
+        currentSearch = e.target.value.toLowerCase();
+        renderRepoSkillsList();
+    });
+}
+
+const filterBtns = document.querySelectorAll('.skill-source-filter .filter-btn');
+filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        filterBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        renderRepoSkillsList();
+    });
+});
+
+// Show Skill Creator Form
+if (btnShowCreator) {
+    btnShowCreator.addEventListener('click', showSkillCreator);
+}
+
+// Fetch Repository Skills
+async function loadRepoSkills() {
+    repoSkillsList.innerHTML = `
+        <div class="loading-state">
+            <i class="fa-solid fa-circle-notch fa-spin"></i>
+            <span>Fetching repository skills...</span>
+        </div>
+    `;
+    try {
+        const res = await fetch('/api/repo-skills');
+        if (res.ok) {
+            const data = await res.json();
+            availableRepoSkills = data.skills || [];
+            renderRepoSkillsList();
+        } else {
+            throw new Error(`Failed to load repository skills (${res.status})`);
+        }
+    } catch (err) {
+        repoSkillsList.innerHTML = `
+            <div class="error-state">
+                <i class="fa-solid fa-triangle-exclamation" style="color: var(--status-failed); font-size: 1.5rem; margin-bottom: 0.5rem;"></i>
+                <span>Error loading skills. Please try again.</span>
+            </div>
+        `;
+        console.error(err);
+    }
+}
+
+// Render Available Skills List
+function renderRepoSkillsList() {
+    repoSkillsList.innerHTML = '';
+    const filtered = availableRepoSkills.filter(skill => {
+        const matchesFilter = currentFilter === 'all' || skill.type === currentFilter;
+        const matchesSearch = skill.name.toLowerCase().includes(currentSearch) || 
+                              skill.description.toLowerCase().includes(currentSearch);
+        return matchesFilter && matchesSearch;
+    });
+
+    if (filtered.length === 0) {
+        repoSkillsList.innerHTML = `
+            <div class="error-state">
+                <i class="fa-solid fa-magnifying-glass" style="font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--text-muted)"></i>
+                <span>No matching skills found.</span>
+            </div>
+        `;
+        return;
+    }
+
+    filtered.forEach(skill => {
+        const item = document.createElement('div');
+        item.className = 'repo-skill-item';
+        item.dataset.name = skill.name;
+        item.innerHTML = `
+            <div class="repo-skill-item-header">
+                <span class="repo-skill-name">${skill.name}</span>
+                <span class="repo-skill-badge ${skill.type}">${skill.type}</span>
+            </div>
+            <div class="repo-skill-desc">${skill.description}</div>
+        `;
+        item.addEventListener('click', () => {
+            document.querySelectorAll('.repo-skill-item').forEach(i => i.classList.remove('selected'));
+            item.classList.add('selected');
+            viewRepoSkill(skill);
+        });
+        repoSkillsList.appendChild(item);
+    });
+}
+
+// View and Safety Audit Repository Skill
+async function viewRepoSkill(skill) {
+    skillDetailPanel.innerHTML = `
+        <div class="loading-state">
+            <i class="fa-solid fa-circle-notch fa-spin"></i>
+            <span>Fetching skill source code...</span>
+        </div>
+    `;
+    try {
+        const res = await fetch(`/api/repo-skills/${encodeURIComponent(skill.name)}/code`);
+        if (res.ok) {
+            const data = await res.json();
+            
+            // Build visual detail view
+            skillDetailPanel.innerHTML = `
+                <div class="detail-header">
+                    <div class="detail-meta-info">
+                        <div class="detail-title-row">
+                            <h2 class="detail-title">${skill.name}</h2>
+                            <span class="repo-skill-badge ${skill.type}">${skill.type}</span>
+                        </div>
+                        <div class="detail-subtitle-row">
+                            <span>Repository: <strong>${skill.type === 'hermes' ? 'Hermes Skills' : 'OpenClaw Extensions'}</strong></span>
+                        </div>
+                    </div>
+                    <div class="detail-actions">
+                        <button class="btn-primary" id="btn-install-skill">
+                            <i class="fa-solid fa-download"></i> Install Skill
+                        </button>
+                    </div>
+                </div>
+                <div class="detail-body">
+                    <div>
+                        <h3 class="detail-section-title"><i class="fa-solid fa-circle-info"></i> Description</h3>
+                        <p class="detail-description">${skill.description}</p>
+                    </div>
+                    <div>
+                        <h3 class="detail-section-title"><i class="fa-solid fa-shield-halved"></i> Safety Code Audit</h3>
+                        <p class="detail-description" style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--text-muted);">
+                            Review the skill instructions and source files before installation to ensure the code complies with your security guidelines.
+                        </p>
+                        <div class="code-audit-container">
+                            <div class="code-audit-header">
+                                <span><i class="fa-solid fa-code"></i> Source File Contents</span>
+                                <span>Read-Only</span>
+                            </div>
+                            <pre class="code-audit-body" id="code-audit-body"></pre>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Escape HTML and populate code content safely
+            const codeBody = document.getElementById('code-audit-body');
+            codeBody.textContent = data.code || 'No source files found or empty skill.';
+            
+            // Add click action to Install button
+            const installBtn = document.getElementById('btn-install-skill');
+            installBtn.addEventListener('click', () => installRepoSkill(skill.name, installBtn));
+        } else {
+            throw new Error(`Failed to load skill code (${res.status})`);
+        }
+    } catch (err) {
+        skillDetailPanel.innerHTML = `
+            <div class="error-state" style="flex: 1;">
+                <i class="fa-solid fa-triangle-exclamation" style="color: var(--status-failed); font-size: 2.5rem; margin-bottom: 1rem;"></i>
+                <h2>Failed to Load Skill Details</h2>
+                <p>${err.message}</p>
+            </div>
+        `;
+        console.error(err);
+    }
+}
+
+// Trigger Skill Installation
+async function installRepoSkill(skillName, button) {
+    button.disabled = true;
+    button.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Installing...`;
+    try {
+        const res = await fetch(`/api/repo-skills/${encodeURIComponent(skillName)}/install`, {
+            method: 'POST'
+        });
+        if (res.ok) {
+            const data = await res.json();
+            button.className = 'btn-primary';
+            button.style.background = 'var(--status-completed)';
+            button.innerHTML = `<i class="fa-solid fa-check"></i> Installed`;
+            
+            // Alert user & reload main sidebar skills
+            alert(`Success: ${data.detail || 'Skill installed successfully!'}`);
+            loadStatus();
+        } else {
+            const errData = await res.json();
+            throw new Error(errData.detail || 'Error installing skill.');
+        }
+    } catch (err) {
+        button.disabled = false;
+        button.innerHTML = `<i class="fa-solid fa-download"></i> Try Again`;
+        alert(`Installation Failed: ${err.message}`);
+    }
+}
+
+// Show Custom Skill Creator Form
+function showSkillCreator() {
+    // Unselect sidebar item
+    document.querySelectorAll('.repo-skill-item').forEach(i => i.classList.remove('selected'));
+    
+    skillDetailPanel.innerHTML = `
+        <div class="create-skill-panel">
+            <div class="detail-title-row" style="margin-bottom: 1rem;">
+                <h2 class="detail-title">Create Custom Skill</h2>
+            </div>
+            <form id="skill-creator-form" class="create-skill-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="new-skill-name">Skill Name</label>
+                        <input type="text" id="new-skill-name" placeholder="e.g. My Helper Skill" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-skill-author">Author (Optional)</label>
+                        <input type="text" id="new-skill-author" placeholder="e.g. Developer Dan">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group" style="flex: 3;">
+                        <label for="new-skill-desc">Description</label>
+                        <input type="text" id="new-skill-desc" placeholder="What this skill enables the agent to do" required>
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <label for="new-skill-version">Version</label>
+                        <input type="text" id="new-skill-version" placeholder="e.g. 1.0.0">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="new-skill-instructions">Instructions &amp; Code (SKILL.md Markdown format)</label>
+                    <textarea id="new-skill-instructions" rows="12" placeholder="# Instructions for My Helper Skill&#10;&#10;Describe how the agent should utilize this skill and any specific rules or workflows..." required></textarea>
+                </div>
+                <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1rem;">
+                    <button type="button" class="btn-secondary" id="btn-cancel-creation">Cancel</button>
+                    <button type="submit" class="btn-primary" id="btn-submit-skill">
+                        <i class="fa-solid fa-floppy-disk"></i> Save &amp; Register Skill
+                    </button>
+                </div>
+            </form>
+        </div>
+    `;
+
+    document.getElementById('btn-cancel-creation').addEventListener('click', () => {
+        skillDetailPanel.innerHTML = `
+            <div class="detail-empty-state">
+                <i class="fa-solid fa-graduation-cap"></i>
+                <p>Select a skill from the list to preview, safety-audit, and install.</p>
+            </div>
+        `;
+    });
+
+    document.getElementById('skill-creator-form').addEventListener('submit', submitCustomSkill);
+}
+
+// Save Custom Skill
+async function submitCustomSkill(e) {
+    e.preventDefault();
+    const submitBtn = document.getElementById('btn-submit-skill');
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Saving...`;
+
+    const name = document.getElementById('new-skill-name').value;
+    const author = document.getElementById('new-skill-author').value || null;
+    const description = document.getElementById('new-skill-desc').value;
+    const version = document.getElementById('new-skill-version').value || null;
+    const instructions = document.getElementById('new-skill-instructions').value;
+
+    try {
+        const res = await fetch('/api/skills/install', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, author, description, version, instructions })
+        });
+
+        if (res.ok) {
+            alert(`Success: Skill '${name}' saved and registered!`);
+            loadStatus(); // refresh dashboard sidebar list
+            
+            // Clear panel
+            skillDetailPanel.innerHTML = `
+                <div class="detail-empty-state">
+                    <i class="fa-solid fa-graduation-cap"></i>
+                    <p>Select a skill from the list to preview, safety-audit, and install.</p>
+                </div>
+            `;
+        } else {
+            const errData = await res.json();
+            throw new Error(errData.detail || 'Failed to save custom skill.');
+        }
+    } catch (err) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> Save &amp; Register Skill`;
+        alert(`Error: ${err.message}`);
+    }
+}

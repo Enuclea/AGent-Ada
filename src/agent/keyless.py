@@ -292,6 +292,93 @@ class KeylessAgyAgent:
         db_files.sort(key=os.path.getmtime, reverse=True)
         return os.path.basename(db_files[0])[:-3]
 
+    async def _call_direct_api(self, model_name: str, full_prompt: str) -> Optional[str]:
+        """Attempts to call direct provider APIs if API keys are found in environment."""
+        import aiohttp
+        
+        # 1. Gemini direct API
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if gemini_key and ("gemini" in model_name.lower() or model_name == "default"):
+            actual_model = model_name if "gemini" in model_name.lower() else "gemini-1.5-flash"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{actual_model}:generateContent?key={gemini_key}"
+            headers = {"Content-Type": "application/json"}
+            payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, headers=headers, json=payload, timeout=self.timeout or 30.0) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            return data["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception as e:
+                print(f"[DIRECT-API] Gemini API call failed: {e}")
+
+        # 2. Anthropic direct API
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        if anthropic_key and ("claude" in model_name.lower() or "sonnet" in model_name.lower()):
+            actual_model = "claude-3-5-sonnet-20241022" if "sonnet" in model_name.lower() else model_name
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+            payload = {
+                "model": actual_model,
+                "max_tokens": 4096,
+                "messages": [{"role": "user", "content": full_prompt}]
+            }
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, headers=headers, json=payload, timeout=self.timeout or 30.0) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            return data["content"][0]["text"]
+            except Exception as e:
+                print(f"[DIRECT-API] Anthropic API call failed: {e}")
+
+        # 3. OpenAI direct API
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        if openai_key and ("gpt" in model_name.lower() or "openai" in model_name.lower()):
+            actual_model = "gpt-4o" if "gpt" in model_name.lower() else model_name
+            url = "https://api.openai.com/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {openai_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": actual_model,
+                "messages": [{"role": "user", "content": full_prompt}]
+            }
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, headers=headers, json=payload, timeout=self.timeout or 30.0) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            return data["choices"][0]["message"]["content"]
+            except Exception as e:
+                print(f"[DIRECT-API] OpenAI API call failed: {e}")
+
+        # 4. Ollama local API
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if "ollama" in model_name.lower() or os.environ.get("USE_OLLAMA") == "true":
+            actual_model = model_name.replace("ollama/", "") if "/" in model_name else "llama3"
+            url = f"{ollama_host}/api/generate"
+            payload = {
+                "model": actual_model,
+                "prompt": full_prompt,
+                "stream": False
+            }
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, timeout=self.timeout or 60.0) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            return data["response"]
+            except Exception as e:
+                print(f"[LOCAL-OLLAMA] Ollama call failed: {e}")
+                
+        return None
+
     async def chat(self, prompt: str) -> KeylessAgyResponse:
         full_prompt = prompt
         if self.system_instructions:
@@ -303,7 +390,6 @@ class KeylessAgyAgent:
                 "\n\nYou MUST return the response ONLY as a raw JSON object. Do not include markdown code block formatting (such as ```json). "
                 "Do not include any explanation or extra text. The JSON object structure MUST match:\n"
             )
-            # Generate sample JSON from response_schema fields
             if hasattr(self.response_schema, "model_fields"):
                 schema_fields = self.response_schema.model_fields
             elif hasattr(self.response_schema, "__fields__"):
@@ -323,86 +409,95 @@ class KeylessAgyAgent:
             schema_instructions += json.dumps(sample_dict, indent=2)
             full_prompt += schema_instructions
 
-        harness_path = get_harness_path() or "agy"
-        cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions"]
-        if self.conversation_id:
-            cmd.extend(["--conversation", self.conversation_id])
-        if self.model:
-            cmd.extend(["--model", self.model])
+        # Check for local Ollama or direct API keys first
+        primary_model = self.model or "gemini-3.5-flash"
+        direct_result = await self._call_direct_api(primary_model, full_prompt)
+        if direct_result:
+            return KeylessAgyResponse(direct_result)
+
+        # Failover prioritized chain: Gemini -> Claude -> GPT -> Grok
+        # We try each model through keyless agy CLI
+        failover_sequence = [primary_model]
+        
+        # Add fallbacks if they are not already the primary
+        for fallback in ["gemini-3.5-flash", "Claude Sonnet 4.6 (Thinking)", "gpt-4o"]:
+            if fallback not in failover_sequence:
+                failover_sequence.append(fallback)
 
         timeout_val = self.timeout if self.timeout is not None else 30.0
-        prev_newest = self._get_newest_conversation_id()
+        harness_path = get_harness_path() or "agy"
+        last_error = "All agy execution attempts failed."
 
-        # For long user chats (timeout > 30s), stream in real-time immediately
-        if timeout_val > 30.0:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            return KeylessAgyResponse(proc, timeout_val, agent=self, prev_newest=prev_newest)
+        for current_model in failover_sequence:
+            cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions"]
+            if self.conversation_id:
+                cmd.extend(["--conversation", self.conversation_id])
+            cmd.extend(["--model", current_model])
 
-        # For short background tasks (timeout <= 30s), run synchronously with retries and fallback
-        max_retries = 2
-        backoff = 1.0
-        last_error = "Unknown error"
-
-        for attempt in range(max_retries):
-            # Get list of existing conversation IDs before run
-            prev_newest = self._get_newest_conversation_id()
-
-            try:
-                # Run agy command, redirecting stdin from DEVNULL to avoid hangs
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                
-                # Enforce timeout for model response
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
-                
-                response_text = stdout.decode("utf-8", errors="replace")
-                stderr_text = stderr.decode("utf-8", errors="replace")
-
-                if proc.returncode == 0 and response_text.strip():
-                    # Look for newly created conversation database
-                    curr_newest = self._get_newest_conversation_id()
-                    if curr_newest and curr_newest != prev_newest:
-                        self.conversation_id = curr_newest
-                    elif not self.conversation_id and curr_newest:
-                        self.conversation_id = curr_newest
-
-                    return KeylessAgyResponse(response_text)
-                else:
-                    last_error = stderr_text.strip() or response_text.strip() or "Empty response"
-            except asyncio.TimeoutError:
-                last_error = f"Timeout after {timeout_val} seconds"
+            # For long-running user chats (timeout > 30s), run primary model only with streaming
+            if timeout_val > 30.0:
                 try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            except Exception as e:
-                last_error = str(e)
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdin=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    return KeylessAgyResponse(proc, timeout_val, agent=self, prev_newest=self._get_newest_conversation_id())
+                except Exception as e:
+                    last_error = str(e)
+                    # If primary streaming fails, continue to next model in failover sequence
+                    continue
 
-            if attempt < max_retries - 1:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Keyless Gemini/agy call failed (attempt %d/%d): %s. Retrying in %ss...",
-                    attempt + 1, max_retries, last_error, backoff
-                )
-                await asyncio.sleep(backoff)
-                backoff *= 2.0
+            # Run with retries for short/background tasks (timeout <= 30s)
+            max_retries = 2
+            backoff = 1.0
 
-        # Fallback to Grok if available and permitted by guardrails
+            for attempt in range(max_retries):
+                prev_newest = self._get_newest_conversation_id()
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdin=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
+                    response_text = stdout.decode("utf-8", errors="replace")
+                    stderr_text = stderr.decode("utf-8", errors="replace")
+
+                    if proc.returncode == 0 and response_text.strip():
+                        curr_newest = self._get_newest_conversation_id()
+                        if curr_newest and curr_newest != prev_newest:
+                            self.conversation_id = curr_newest
+                        elif not self.conversation_id and curr_newest:
+                            self.conversation_id = curr_newest
+
+                        return KeylessAgyResponse(response_text)
+                    else:
+                        last_error = stderr_text.strip() or response_text.strip() or "Empty response"
+                except asyncio.TimeoutError:
+                    last_error = f"Timeout after {timeout_val} seconds"
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    last_error = str(e)
+
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(backoff)
+                    backoff *= 2.0
+
+            # If we reached here, the current model in the sequence failed. Try next model.
+            print(f"[FAILOVER] Model {current_model} failed. Trying next model...")
+
+        # Final Fallback to Grok if all agy attempts failed
         grok_path = get_grok_path()
         if grok_path:
             if check_and_record_grok_usage(db_path=self.db_path):
-                import logging
-                logging.getLogger(__name__).warning("All agy attempts failed. Falling back to grok...")
+                print("[FAILOVER] All models failed. Pivoting to Grok fallback...")
                 grok_cmd = [grok_path, "-p", full_prompt, "--deny", "*", "--no-plan"]
                 try:
                     proc = await asyncio.create_subprocess_exec(
@@ -432,5 +527,5 @@ class KeylessAgyAgent:
         else:
             last_error += " (Grok binary not found)"
 
-        raise RuntimeError(f"Keyless Gemini/agy and grok fallback failed. Last error: {last_error}")
+        raise RuntimeError(f"All models in priority failover chain and grok fallback failed. Last error: {last_error}")
 

@@ -227,3 +227,52 @@ def test_conditional_tool_registration():
     assert "tools.backup_discord_channel" in source
     assert "if not is_discord:" in source or "if not is_discord" in source
 
+def test_repo_skills_endpoints():
+    """Verify that the repository skills endpoints are exposed and return correct formats."""
+    # 1. Test GET /api/repo-skills
+    with patch("agent.tools._find_repository_skills") as mock_find:
+        mock_find.return_value = {
+            "test-skill": {
+                "name": "test-skill",
+                "type": "hermes",
+                "path": Path("/tmp/test-skill"),
+                "description": "A mock hermes skill"
+            }
+        }
+        response = client.get("/api/repo-skills")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert len(data["skills"]) == 1
+        assert data["skills"][0]["name"] == "test-skill"
+        assert data["skills"][0]["type"] == "hermes"
+        assert data["skills"][0]["description"] == "A mock hermes skill"
+
+    # 2. Test GET /api/repo-skills/{name}/code
+    with patch("agent.tools.view_repository_skill_code") as mock_view:
+        mock_view.return_value = "=== Skill: test-skill ===\ncode contents"
+        response = client.get("/api/repo-skills/test-skill/code")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "code contents" in data["code"]
+
+        # Test error handling
+        mock_view.return_value = "Error: Skill not found"
+        response = client.get("/api/repo-skills/nonexistent/code")
+        assert response.status_code == 404
+
+    # 3. Test POST /api/repo-skills/{name}/install
+    with patch("agent.tools.install_repository_skill") as mock_install:
+        mock_install.return_value = "Successfully downloaded and installed skill test-skill"
+        response = client.post("/api/repo-skills/test-skill/install")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "Successfully" in data["detail"]
+
+        # Test error handling
+        mock_install.return_value = "Error installing skill: perm denied"
+        response = client.post("/api/repo-skills/test-skill/install")
+        assert response.status_code == 400
+
