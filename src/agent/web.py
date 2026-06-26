@@ -886,17 +886,16 @@ class WorkerRegistrationRequest(BaseModel):
     has_agy: bool = False
     has_grok: bool = False
     python_version: Optional[str] = None
+    ollama_models: List[str] = []
 
 @app.post("/api/workers/register")
 async def register_worker_endpoint(req: WorkerRegistrationRequest):
     """Accepts worker self-registration from remote nodes."""
-    # Validate API key if configured
-    api_key = os.environ.get("WORKER_API_KEY", "")
-    # (Key validation is handled by the worker sending X-Worker-Key header)
-
     metadata = {}
     if req.python_version:
         metadata["python_version"] = req.python_version
+    if req.ollama_models:
+        metadata["ollama_models"] = req.ollama_models
 
     memory.register_worker(
         worker_id=req.worker_id,
@@ -909,6 +908,8 @@ async def register_worker_endpoint(req: WorkerRegistrationRequest):
         metadata=metadata,
     )
     print(f"[WORKERS] Registered worker '{req.worker_id}' at {req.host} with capabilities: {req.capabilities}")
+    if req.ollama_models:
+        print(f"[WORKERS]   Ollama models: {', '.join(req.ollama_models)}")
     return {"status": "success", "worker_id": req.worker_id}
 
 @app.get("/api/workers")

@@ -83,6 +83,36 @@ class OrchestrationService:
             if skills:
                 full_instructions += f"\n\n[INSTALLED CUSTOM SKILLS/TOOLS]\n{skills_summary}\n[END OF INSTALLED CUSTOM SKILLS/TOOLS]"
 
+            # 4a. Inject worker infrastructure context
+            try:
+                workers = memory.get_registered_workers()
+                if workers:
+                    worker_lines = []
+                    for w in workers:
+                        caps = ", ".join(w.get("capabilities", []))
+                        status = w.get("status", "unknown")
+                        ollama_models = w.get("metadata", {}).get("ollama_models", [])
+                        worker_lines.append(
+                            f"- {w['worker_id']} ({w.get('platform', '?')}/{w.get('host', '?')}) "
+                            f"[{status}] capabilities: [{caps}] has_agy={w.get('has_agy', False)}"
+                        )
+                        if ollama_models:
+                            worker_lines.append(f"  Ollama models: {', '.join(ollama_models)}")
+                    worker_context = (
+                        "\n\n[REMOTE WORKER INFRASTRUCTURE]\n"
+                        "You have access to remote worker machines via the Ada Worker system. "
+                        "These workers are already registered and reachable — do NOT scan the network to find them.\n"
+                        "To query workers programmatically, use the Ada API:\n"
+                        "  - GET http://localhost:8050/api/workers — list all workers\n"
+                        "  - GET http://localhost:8050/api/workers/{worker_id}/health — check health\n"
+                        "  - Workers can execute tasks dispatched from the hub via POST /execute\n"
+                        "Registered workers:\n" + "\n".join(worker_lines) +
+                        "\n[END OF REMOTE WORKER INFRASTRUCTURE]"
+                    )
+                    full_instructions += worker_context
+            except Exception:
+                pass
+
         # 4. Resolve capabilities, tools, policies
         is_discord = session_id is not None and (session_id.startswith("discord-session-") or session_id.startswith("discord-roleplay-"))
         
