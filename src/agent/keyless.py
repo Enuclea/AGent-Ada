@@ -211,9 +211,10 @@ def get_grok_path() -> Optional[str]:
     if grok_path:
         return grok_path
         
-    for p in ["/Users/dan/.local/bin/grok", "/home/dan/.local/bin/grok"]:
-        if os.path.exists(p):
-            return p
+    user_home = Path.home()
+    fallback_path = user_home / ".local" / "bin" / "grok"
+    if fallback_path.exists() and fallback_path.is_file():
+        return str(fallback_path)
             
     return None
 
