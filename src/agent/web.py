@@ -53,10 +53,115 @@ class PriorityLock:
             if not fut.done():
                 fut.set_result(None)
 
-backend_lock = PriorityLock()
+session_locks = {}
+
+def get_session_lock(session_id: str) -> PriorityLock:
+    if session_id not in session_locks:
+        session_locks[session_id] = PriorityLock()
+    return session_locks[session_id]
+
+def ensure_default_scheduled_tasks(conn=None):
+    """Ensures that default scheduled background tasks are registered if the database is empty."""
+    close_conn = False
+    if conn is None:
+        conn = sqlite3.connect(memory.DB_FILE_PATH)
+        close_conn = True
+    try:
+        cursor = conn.cursor()
+        
+        # Check if table is empty
+        cursor.execute("SELECT count(*) FROM scheduled_tasks")
+        count = cursor.fetchone()[0]
+        if count > 0:
+            return
+            
+        # 1. Gmail Email Check
+        schedule_id = "gmail-check-task-id"
+        cron_expr = "*/5 * * * *"  # Every 5 minutes
+        next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
+        cursor.execute(
+            "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                schedule_id,
+                "Gmail Email Check",
+                "Check for new Gmail emails since last run, parse them using AI to check importance, and create Morgen tasks for important ones.",
+                cron_expr,
+                next_run,
+                None,
+                "active"
+            )
+        )
+        print("[STARTUP] Registered Gmail Email Check background task.")
+        
+        # 2. Stock Game Auto Check
+        schedule_id = "stock-check-task-id"
+        cron_expr = "0 14 * * *"  # Daily at 14:00 UTC
+        next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
+        cursor.execute(
+            "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                schedule_id,
+                "Stock Game Auto Check",
+                "Please check the stock game portfolio status using stock_game/portfolio.py status. Run the scan using stock_game/scan.py to identify new signals. If the 3-day cool-off has expired, make the necessary rebalancing adjustments (sell down heavy holdings to keep them under 33% and buy into strong buy tickers like JPM or IWM). Then commit the trades.",
+                cron_expr,
+                next_run,
+                None,
+                "active"
+            )
+        )
+        print("[STARTUP] Registered Stock Game Auto Check background task.")
+        
+        # 3. Grace Timekeeper
+        schedule_id = "grace-check-task-id"
+        cron_expr = "*/5 * * * *"  # Every 5 minutes
+        next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
+        cursor.execute(
+            "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                schedule_id,
+                "Grace Timekeeper",
+                "Ada: Run Timekeeper Health Check. Invoke the Grace subagent to check background tasks using src/agent/grace_monitor.py and output the summary report.",
+                cron_expr,
+                next_run,
+                None,
+                "active"
+            )
+        )
+        print("[STARTUP] Registered Grace Timekeeper background task.")
+        
+        # 4. Meta-Evaluation
+        schedule_id = "meta-evaluation-task-id"
+        cron_expr = "0 0 * * *"  # Daily at midnight UTC
+        next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
+        cursor.execute(
+            "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                schedule_id,
+                "Meta-Evaluation",
+                "Ada: Run Meta-Evaluation post-mortem analyzer. Query the failed background tasks and API error logs from the past 24 hours, identify bugs/edge cases, and record memory facts to prevent recurrence.",
+                cron_expr,
+                next_run,
+                None,
+                "active"
+            )
+        )
+        print("[STARTUP] Registered Meta-Evaluation background task.")
+        
+        conn.commit()
+    except Exception as e:
+        print(f"Error registering default background tasks: {e}")
+    finally:
+        if close_conn:
+            conn.close()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Clear any stale active tasks on startup (e.g. from previous runs/tests/crashes)
+    memory.clear_active_tasks()
+    
+    # Register default background tasks if not already registered
+    ensure_default_scheduled_tasks()
+
     # Startup
     scheduler_task = asyncio.create_task(run_scheduler())
     yield
@@ -144,7 +249,14 @@ async def get_or_create_agent(
         resolved_id_to_pass = resolved_id
         
         # Load API Key if available (ignored by default to enforce keyless agy CLI execution)
-        api_key = None
+        api_key = os.environ.get("GEMINI_API_KEY")
+        
+        # Check and compact session history before instantiating the agent
+        if resolved_id_to_pass:
+            try:
+                await check_and_compact_session_history(resolved_id_to_pass, model_name=model_name, api_key=api_key)
+            except Exception as e:
+                print(f"[COMPACTION] Error checking/compacting session history: {e}")
 
         # Construct instructions and configure capabilities/tools/policies
         memory.active_session_id = session_id
@@ -291,6 +403,42 @@ async def get_or_create_agent(
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
     global active_agents
+    lookup_id = req.session_id or "default"
+    
+    # Intercept reload commands
+    if req.prompt.strip() == "/reload":
+        evicted = []
+        resolved_id = lookup_id
+        if lookup_id.startswith("discord-session-"):
+            mem = memory.load_memory()
+            session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+            if isinstance(session_mappings, dict):
+                resolved_id = session_mappings.get(lookup_id, lookup_id)
+                
+        for k, v in list(active_agents.items()):
+            if k == lookup_id or (v.get("agent") and v["agent"].conversation_id == resolved_id):
+                item = active_agents.pop(k, None)
+                if item and "agent" in item:
+                    try:
+                        await item["agent"].__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    evicted.append(k)
+                    
+        async def reload_generator():
+            yield f"data: {json.dumps({'type': 'chunk', 'content': '🌸 Custom skills directory reloaded and session cache cleared!'})}\n\n"
+            yield "data: [DONE]\n\n"
+            
+        return StreamingResponse(
+            reload_generator(),
+            media_type="text/event-stream",
+            headers={
+                "X-Accel-Buffering": "no",
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive"
+            }
+        )
+
     try:
         agent = await get_or_create_agent(req.model, req.session_id, req.system_instructions, req.disable_tools)
     except Exception as e:
@@ -311,7 +459,8 @@ async def chat_endpoint(req: ChatRequest):
     async def event_generator():
         global active_agents
         lookup_id = req.session_id or "default"
-        await backend_lock.acquire(priority)
+        lock = get_session_lock(lookup_id)
+        await lock.acquire(priority)
         try:
             # Log user prompt
             memory.log_conversation_step(agent.conversation_id, "user", req.prompt)
@@ -349,9 +498,17 @@ async def chat_endpoint(req: ChatRequest):
             yield f"data: {json.dumps({'type': 'error', 'content': f'Agent connection error: {e}'})}\n\n"
             yield "data: [DONE]\n\n"
         finally:
-            backend_lock.release()
+            lock.release()
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive"
+        }
+    )
 
 @app.get("/api/status")
 async def status_endpoint():
@@ -380,7 +537,7 @@ async def status_endpoint():
                         
     session_data = active_agents.get("default", {})
     return {
-        "status": "busy" if backend_lock._locked else "ready",
+        "status": "busy" if get_session_lock("default")._locked else "ready",
         "version": __version__,
         "model": session_data.get("model", "gemini-3.5-flash"),
         "workspace": os.getcwd(),
@@ -573,6 +730,7 @@ async def get_task_logs_endpoint(task_id: str):
 # Endpoints for schedules
 @app.get("/api/schedule")
 async def list_schedule_endpoint():
+    ensure_default_scheduled_tasks()
     schedules = memory.get_scheduled_tasks()
     return {"schedules": schedules}
 
@@ -645,6 +803,168 @@ def get_next_cron_run(cron_expr: str, from_dt: datetime) -> datetime:
     
     return from_dt + timedelta(hours=1)
 
+# SQLite history context window rolling summary compaction
+async def check_and_compact_session_history(session_id: str, model_name: str = "gemini-3.5-flash", api_key: Optional[str] = None) -> None:
+    """Checks conversation history size and compacts oldest 40 rows into a summary if row count exceeds 60."""
+    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    steps_count = 0
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT count(*) FROM conversation_steps WHERE session_id = ?", (session_id,))
+        steps_count = cursor.fetchone()[0]
+    except Exception:
+        pass
+    finally:
+        conn.close()
+        
+    if steps_count < 60:
+        return
+        
+    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    rows_to_compact = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, role, content, tool_name FROM conversation_steps WHERE session_id = ? ORDER BY id ASC LIMIT 40",
+            (session_id,)
+        )
+        rows_to_compact = cursor.fetchall()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+        
+    if not rows_to_compact:
+        return
+        
+    history_text = ""
+    row_ids = []
+    for r_id, role, content, tool_name in rows_to_compact:
+        row_ids.append(r_id)
+        if role == "user":
+            history_text += f"User: {content}\n"
+        elif role == "assistant":
+            history_text += f"Assistant: {content}\n"
+        elif role == "thought":
+            history_text += f"Thought: {content}\n"
+        elif role == "tool_call":
+            history_text += f"Tool Call ({tool_name}): {content}\n"
+            
+    summary_prompt = (
+        "Please read the following conversation history between a user and an AI coding agent. "
+        "Summarize the context, achievements, variables, custom settings, and decisions made in a concise "
+        "paragraph of 150-250 words. Do not include unnecessary conversational filler.\n\n"
+        f"--- HISTORY ---\n{history_text}\n--- END HISTORY ---"
+    )
+    
+    summary_text = ""
+    try:
+        if api_key:
+            from google.antigravity import Agent, LocalAgentConfig
+            from google.antigravity.types import CapabilitiesConfig
+            tmp_config = LocalAgentConfig(
+                model=model_name,
+                api_key=api_key,
+                system_instructions="You are a context window compressor. Output only the summary.",
+                capabilities=CapabilitiesConfig(enable_subagents=False),
+                workspaces=[os.getcwd()],
+            )
+            async with Agent(tmp_config) as tmp_agent:
+                resp = await tmp_agent.chat(summary_prompt)
+                async for chunk in resp:
+                    summary_text += chunk
+        else:
+            tmp_agent = KeylessAgyAgent(
+                model=model_name,
+                system_instructions="You are a context window compressor. Output only the summary.",
+                timeout=60.0
+            )
+            async with tmp_agent as agent_ctx:
+                resp = await agent_ctx.chat(summary_prompt)
+                async for chunk in resp:
+                    summary_text += chunk
+    except Exception as e:
+        print(f"[COMPACTION] Summarization failed: {e}")
+        return
+        
+    if not summary_text:
+        return
+        
+    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        min_id = min(row_ids)
+        placeholders = ",".join("?" for _ in row_ids)
+        cursor.execute(f"DELETE FROM conversation_steps WHERE id IN ({placeholders})", row_ids)
+        try:
+            cursor.execute(f"DELETE FROM conversation_search WHERE step_id IN ({placeholders})", row_ids)
+        except Exception:
+            pass
+            
+        timestamp = datetime.now(timezone.utc).isoformat()
+        formatted_summary = f"[System Context Compression Summary]: {summary_text.strip()}"
+        cursor.execute(
+            "INSERT INTO conversation_steps (id, session_id, timestamp, role, content) VALUES (?, ?, ?, ?, ?)",
+            (min_id, session_id, timestamp, "thought", formatted_summary)
+        )
+        conn.commit()
+        print(f"[COMPACTION] Successfully compacted {len(row_ids)} turns for session {session_id} into a single summary block.")
+    except Exception as e:
+        print(f"[COMPACTION] DB commit failed: {e}")
+    finally:
+        conn.close()
+
+class ForkRequest(BaseModel):
+    session_id: str
+    fork_step_index: int
+
+@app.post("/api/sessions/fork")
+async def fork_session_endpoint(req: ForkRequest):
+    global active_agents
+    session_id = req.session_id
+    resolved_id = session_id
+    if session_id.startswith("discord-session-"):
+        mem = memory.load_memory()
+        session_mappings = mem.setdefault("key_value", {}).get("session_mappings", {})
+        if isinstance(session_mappings, dict):
+            resolved_id = session_mappings.get(session_id, session_id)
+            
+    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    forked_steps = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT role, content, tool_name, tool_result, timestamp FROM conversation_steps WHERE session_id = ? ORDER BY id ASC LIMIT ?",
+            (resolved_id, req.fork_step_index)
+        )
+        forked_steps = cursor.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database query error: {e}")
+    finally:
+        conn.close()
+        
+    if not forked_steps:
+        raise HTTPException(status_code=400, detail="No conversation history found to fork from.")
+        
+    import uuid
+    new_session_id = str(uuid.uuid4())
+    
+    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        for role, content, tool_name, tool_result, timestamp in forked_steps:
+            cursor.execute(
+                "INSERT INTO conversation_steps (session_id, timestamp, role, content, tool_name, tool_result) VALUES (?, ?, ?, ?, ?, ?)",
+                (new_session_id, timestamp, role, content, tool_name, tool_result)
+            )
+        conn.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to copy history for fork: {e}")
+    finally:
+        conn.close()
+        
+    return {"status": "success", "new_session_id": new_session_id}
+
 # Background scheduler execution
 async def execute_scheduled_task(name: str, prompt: str):
     global active_agents
@@ -671,6 +991,7 @@ async def run_scheduler():
     await asyncio.sleep(2)
     while True:
         try:
+            ensure_default_scheduled_tasks()
             # Automatic once-a-day database and memory compaction
             try:
                 mem = memory.load_memory()

@@ -244,6 +244,14 @@ async def run_agent(
     if session_id:
         config_args["conversation_id"] = session_id
 
+    # Check and compact session history before initializing the agent connection
+    if session_id:
+        try:
+            from agent.web import check_and_compact_session_history
+            await check_and_compact_session_history(session_id, model_name=model, api_key=api_key)
+        except Exception:
+            pass
+
     config = LocalAgentConfig(**config_args)
 
     # 9. Start Agent Connection & Run Loops

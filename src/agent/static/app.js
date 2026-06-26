@@ -539,52 +539,94 @@ async function pollTasks() {
             const data = await res.json();
             const tasks = data.tasks;
             
-            activeTasksCount.textContent = `${tasks.length} active`;
+            const runningCount = tasks.filter(t => t.status === 'running').length;
+            activeTasksCount.textContent = `${runningCount} active`;
 
-            // If empty
-            if (tasks.length === 0) {
-                // Clear any running tasks from feed
-                activityFeed.innerHTML = '';
+            const currentTaskIds = new Set(tasks.map(t => t.id));
+            
+            // Transition cards in activeTasksMap that are no longer returned in the tasks list
+            for (let [taskId, cardEl] of activeTasksMap.entries()) {
+                if (!currentTaskIds.has(taskId)) {
+                    if (!cardEl.classList.contains('completed') && !cardEl.classList.contains('failed')) {
+                        cardEl.className = 'activity-card completed';
+                        const dot = cardEl.querySelector('.card-status-dot');
+                        if (dot) {
+                            dot.replaceChildren();
+                            const ind = document.createElement('span');
+                            ind.className = 'status-indicator-mini';
+                            dot.appendChild(ind);
+                            dot.appendChild(document.createTextNode(' Completed'));
+                        }
+                        cardEl.querySelector('.card-loader')?.remove();
+                    }
+                    
+                    // Remove from DOM after 5 seconds to keep dashboard clean
+                    if (!cardEl.dataset.timeoutSet) {
+                        cardEl.dataset.timeoutSet = "true";
+                        setTimeout(() => {
+                            cardEl.remove();
+                            activeTasksMap.delete(taskId);
+                            if (activeTasksMap.size === 0 && tasks.length === 0) {
+                                if (!document.getElementById('feed-empty-state')) {
+                                    activityFeed.appendChild(feedEmptyState);
+                                }
+                            }
+                        }, 5000);
+                    }
+                }
+            }
+
+            if (tasks.length === 0 && activeTasksMap.size === 0) {
+                activityFeed.replaceChildren();
                 activityFeed.appendChild(feedEmptyState);
-                activeTasksMap.clear();
                 return;
             }
 
-            feedEmptyState.remove();
-
-            // Render/Update cards
-            const currentTaskIds = new Set(tasks.map(t => t.id));
-            
-            // Remove cards no longer present (or completed in database)
-            for (let [taskId, cardEl] of activeTasksMap.entries()) {
-                if (!currentTaskIds.has(taskId)) {
-                    // Update status to completed or fade out
-                    cardEl.className = 'activity-card completed';
-                    cardEl.querySelector('.card-status-dot').innerHTML = '<span class="status-indicator-mini"></span> Completed';
-                    cardEl.querySelector('.card-loader')?.remove();
-                    
-                    // Remove from DOM after 5 seconds to keep dashboard clean
-                    setTimeout(() => {
-                        cardEl.remove();
-                        activeTasksMap.delete(taskId);
-                        if (activityFeed.children.length === 0) {
-                            activityFeed.appendChild(feedEmptyState);
-                        }
-                    }, 5000);
-                }
+            if (tasks.length > 0) {
+                feedEmptyState.remove();
             }
 
             // Create or update tasks
             for (let task of tasks) {
                 if (activeTasksMap.has(task.id)) {
+                    const card = activeTasksMap.get(task.id);
+                    // Update classes and status based on task status
+                    if (task.status === 'completed' || task.status === 'failed' || task.status === 'denied') {
+                        const statusClass = task.status === 'denied' ? 'failed' : task.status;
+                        if (!card.classList.contains(statusClass)) {
+                            card.className = `activity-card ${statusClass}`;
+                            const dot = card.querySelector('.card-status-dot');
+                            if (dot) {
+                                dot.replaceChildren();
+                                const ind = document.createElement('span');
+                                ind.className = 'status-indicator-mini';
+                                dot.appendChild(ind);
+                                const statusLabel = task.status.charAt(0).toUpperCase() + task.status.slice(1);
+                                dot.appendChild(document.createTextNode(` ${statusLabel}`));
+                            }
+                            card.querySelector('.card-loader')?.remove();
+                        }
+                    } else {
+                        // running
+                        card.className = 'activity-card running';
+                        const dot = card.querySelector('.card-status-dot');
+                        if (dot) {
+                            dot.replaceChildren();
+                            const ind = document.createElement('span');
+                            ind.className = 'status-indicator-mini';
+                            dot.appendChild(ind);
+                            dot.appendChild(document.createTextNode(' Active'));
+                        }
+                    }
                     // Update logs for this card
-                    await updateCardLogs(task.id, activeTasksMap.get(task.id));
+                    await updateCardLogs(task.id, card);
                     continue;
                 }
 
                 // New card
                 const card = document.createElement('div');
-                card.className = 'activity-card running';
+                const initialStatusClass = task.status === 'denied' ? 'failed' : task.status;
+                card.className = `activity-card ${initialStatusClass}`;
                 card.id = `task-card-${task.id}`;
                 
                 const top = document.createElement('div');
@@ -592,11 +634,21 @@ async function pollTasks() {
                 
                 const title = document.createElement('div');
                 title.className = 'card-title';
-                title.innerHTML = `<i class="fa-solid fa-code-fork"></i> ${task.name}`;
+                
+                const icon = document.createElement('i');
+                icon.className = 'fa-solid fa-code-fork';
+                title.appendChild(icon);
+                title.appendChild(document.createTextNode(` ${task.name}`));
                 
                 const status = document.createElement('div');
                 status.className = 'card-status-dot';
-                status.innerHTML = '<span class="status-indicator-mini"></span> Active';
+                
+                const indicator = document.createElement('span');
+                indicator.className = 'status-indicator-mini';
+                status.appendChild(indicator);
+                
+                const capitalizedStatus = task.status === 'running' ? 'Active' : (task.status.charAt(0).toUpperCase() + task.status.slice(1));
+                status.appendChild(document.createTextNode(` ${capitalizedStatus}`));
                 
                 top.appendChild(title);
                 top.appendChild(status);
@@ -616,11 +668,12 @@ async function pollTasks() {
                 const startTime = new Date(task.started_at);
                 timeSpan.textContent = `Started: ${startTime.toLocaleTimeString()}`;
                 
-                const loader = document.createElement('div');
-                loader.className = 'card-loader';
-                
                 bottom.appendChild(timeSpan);
-                bottom.appendChild(loader);
+                if (task.status === 'running') {
+                    const loader = document.createElement('div');
+                    loader.className = 'card-loader';
+                    bottom.appendChild(loader);
+                }
                 
                 card.appendChild(top);
                 card.appendChild(details);
@@ -647,7 +700,7 @@ async function updateCardLogs(taskId, cardEl) {
             const data = await res.json();
             const logsDiv = cardEl.querySelector('.card-logs');
             if (logsDiv && data.logs && data.logs.length > 0) {
-                logsDiv.innerHTML = '';
+                logsDiv.replaceChildren();
                 data.logs.forEach(log => {
                     const logEl = document.createElement('div');
                     logEl.className = 'log-item';

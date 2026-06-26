@@ -124,9 +124,14 @@ def init_db() -> None:
             name TEXT,
             details TEXT,
             started_at TEXT,
-            status TEXT
+            status TEXT,
+            completed_at TEXT
         )
         """)
+        try:
+            cursor.execute("ALTER TABLE active_tasks ADD COLUMN completed_at TEXT")
+        except sqlite3.OperationalError:
+            pass
         # Task progress logs
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS task_logs (
@@ -263,9 +268,10 @@ def update_active_task_status(task_id: str, status: str) -> None:
     conn = sqlite3.connect(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
+        completed_at = datetime.now(timezone.utc).isoformat()
         cursor.execute(
-            "UPDATE active_tasks SET status = ? WHERE id = ?",
-            (status, task_id)
+            "UPDATE active_tasks SET status = ?, completed_at = ? WHERE id = ?",
+            (status, completed_at, task_id)
         )
         conn.commit()
     except Exception:
@@ -274,13 +280,13 @@ def update_active_task_status(task_id: str, status: str) -> None:
         conn.close()
 
 def get_active_tasks() -> List[Dict[str, Any]]:
-    """Retrieves all active running tasks."""
+    """Retrieves all active running tasks and recently completed/failed tasks (within last 15 seconds)."""
     conn = sqlite3.connect(DB_FILE_PATH)
     results = []
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, name, details, started_at, status FROM active_tasks WHERE status = 'running' ORDER BY started_at DESC"
+            "SELECT id, name, details, started_at, status, completed_at FROM active_tasks WHERE status = 'running' ORDER BY started_at DESC"
         )
         rows = cursor.fetchall()
         for row in rows:
@@ -289,7 +295,30 @@ def get_active_tasks() -> List[Dict[str, Any]]:
                 "name": row[1],
                 "details": row[2],
                 "started_at": row[3],
-                "status": row[4]
+                "status": row[4],
+                "completed_at": row[5]
+            })
+            
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=15)).isoformat()
+        cursor.execute(
+            """
+            SELECT id, name, details, started_at, status, completed_at 
+            FROM active_tasks 
+            WHERE status IN ('completed', 'failed', 'denied') AND (completed_at >= ? OR (completed_at IS NULL AND started_at >= ?))
+            ORDER BY completed_at DESC, started_at DESC
+            """,
+            (cutoff, cutoff)
+        )
+        rows = cursor.fetchall()
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "name": row[1],
+                "details": row[2],
+                "started_at": row[3],
+                "status": row[4],
+                "completed_at": row[5]
             })
     except Exception:
         pass

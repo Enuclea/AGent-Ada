@@ -130,6 +130,18 @@ def main() -> None:
         action="store_true",
         help="Do not start interactive loop after the query completes",
     )
+    parser.add_argument(
+        "--fork",
+        type=str,
+        default=None,
+        help="Fork from an existing session ID"
+    )
+    parser.add_argument(
+        "--fork-step",
+        type=int,
+        default=999999,
+        help="Number of history steps to copy from parent session when forking"
+    )
 
     args, unknown = parser.parse_known_args()
 
@@ -194,8 +206,43 @@ def main() -> None:
         else:
             instructions = args.instructions
 
-    # Strip extension if provided
     session_id = args.session
+    if args.fork:
+        parent_session = args.fork
+        if parent_session.endswith(".db"):
+            parent_session = parent_session[:-3]
+        
+        import uuid
+        import sqlite3
+        from agent import memory
+        new_session_id = str(uuid.uuid4())
+        
+        conn = sqlite3.connect(memory.DB_FILE_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT role, content, tool_name, tool_result, timestamp FROM conversation_steps WHERE session_id = ? ORDER BY id ASC LIMIT ?",
+                (parent_session, args.fork_step)
+            )
+            rows = cursor.fetchall()
+            if not rows:
+                console.print(f"[bold red]Error: No history found for session {parent_session}.[/bold red]")
+                sys.exit(1)
+            
+            for role, content, tool_name, tool_result, timestamp in rows:
+                cursor.execute(
+                    "INSERT INTO conversation_steps (session_id, timestamp, role, content, tool_name, tool_result) VALUES (?, ?, ?, ?, ?, ?)",
+                    (new_session_id, timestamp, role, content, tool_name, tool_result)
+                )
+            conn.commit()
+            console.print(f"[bold green]Forked session {parent_session} into new session: {new_session_id}[/bold green]")
+            session_id = new_session_id
+        except Exception as e:
+            console.print(f"[bold red]Failed to fork session: {e}[/bold red]")
+            sys.exit(1)
+        finally:
+            conn.close()
+
     if session_id and session_id.endswith(".db"):
         session_id = session_id[:-3]
 
