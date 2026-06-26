@@ -36,117 +36,35 @@ async def run_agent(
     interactive: bool = True,
 ) -> None:
     """Orchestrates the agent session and handles the CLI execution modes."""
-    model = model or "gemini-3.5-flash"
-    # 1. API Key (Optional)
-    api_key = os.environ.get("GEMINI_API_KEY")
+    import uuid
+    from agent.orchestrator import orchestration_service
 
-    # 2. Workspace Directories
+    model = model or "gemini-3.5-flash"
     if not workspaces:
-        # Default to current directory
         workspaces = [os.getcwd()]
     resolved_workspaces = [str(Path(w).resolve()) for w in workspaces]
-
-    # 3. Save Directory for Conversation Persistence
-    if not save_dir:
-        save_dir = str(Path.home() / ".agent" / "sessions")
-    Path(save_dir).mkdir(parents=True, exist_ok=True)
-
-    # 4. Construct System Instructions
-    # Create skills directory
-    tools.SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    base_instructions = custom_instructions or (
-        "You are Ada, the autonomous AI developer assistant behind the Ada Task Engine, powered by AntiGravity.\n"
-        "You help the user write, test, debug, and manage code in their workspace.\n"
-        "Always be concise, professional, and helpful.\n\n"
-        "SELF-IMPROVEMENT & TOOL BUILDING:\n"
-        "- You have the ability to record facts about the user/project using `record_memory_fact`.\n"
-        "- You can record key-value pairs using `record_memory_key_value`.\n"
-        "- You can autonomously write new custom tools and skills using `create_agent_skill`, or modify/expand "
-        "existing custom skills (such as fixing bugs or adding scripts) using `improve_agent_skill`.\n"
-        "- When you successfully solve a non-trivial problem, figure out a complex workflow, or build a helper script, "
-        "you should save it as a reusable skill using `create_agent_skill` (or refine it using `improve_agent_skill`) "
-        "so you (or other agents) can reload it in future runs.\n"
-        "- You can search past conversations and sessions using `search_past_conversations`. Whenever the user "
-        "asks about previous tasks, context, or decisions, use `search_past_conversations` to recall what you did.\n"
-        "- Before starting any complex task, check the list of installed skills to see if you have relevant custom tools.\n\n"
-        "RUNNING LONG-RUNNING COMMANDS & PROCESSES:\n"
-        "- Any long-running command, service, server, background daemon, or Discord bot (like `discord/bot.py`) MUST be executed in the background using `nohup` and backgrounded, for example: `PYTHONPATH=src nohup .venv/bin/python3 discord/bot.py > discord/bot.log 2>&1 &`.\n"
-        "- You must NEVER run a persistent process or bot in the foreground, as it blocks the tool execution and hangs the agent connection.\n"
-        "- Never use interactive prompts or tail commands that block indefinitely (e.g. `tail -f`). Always ensure your commands exit immediately.\n\n"
-        "WORKSPACE SAFETY & DIRECTORY STRUCTURE:\n"
-        "- When writing, testing, or editing code to complete user requests, you must write files to the appropriate project directories (e.g. `src/` or `scratch/`).\n"
-        "- You must NEVER write, modify, or create project code files inside the `discord/` directory unless you are specifically asked to edit the Discord bot code itself. Keep the `discord/` folder isolated strictly for the bot's system files."
-    )
-    
-    # Inject persistent memory and custom skills summaries
-    memory_summary = memory.get_fact_summary()
-    installed_skills = tools.get_relevant_skills(initial_prompt)
-    rag_context = memory.get_auto_rag_context(initial_prompt)
-    
-    full_instructions = base_instructions
-    if memory_summary:
-        full_instructions += f"\n\n{memory_summary}"
-    if rag_context:
-        full_instructions += f"\n\n{rag_context}"
-    if "No custom skills installed" not in installed_skills:
-        full_instructions += f"\n\n[INSTALLED CUSTOM SKILLS/TOOLS]\n{installed_skills}\n[END OF INSTALLED CUSTOM SKILLS/TOOLS]"
 
     session_auto_approve = auto_approve
     active_status = None
     tool_calls_this_turn = 0
-    current_active_task_id = None
 
-    @hooks.pre_tool_call_decide
-    async def on_pre_tool(tool_call: ToolCall):
-        nonlocal current_active_task_id
-        import uuid
-        from google.antigravity.hooks.hooks import HookResult
-        
-        task_id = str(uuid.uuid4())
-        current_active_task_id = task_id
-        
-        # Record in active tasks tracker
-        memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
-        
-        # Log step to database history
-        memory.log_conversation_step(
-            current_session_id,
-            "tool_call",
-            str(tool_call.args),
-            tool_name=tool_call.name
-        )
-        return HookResult(allow=True)
-
-    async def my_approval_handler(tool_call: ToolCall) -> bool:
-        nonlocal session_auto_approve, active_status, tool_calls_this_turn, current_active_task_id
+    # Custom approval handler for CLI
+    async def my_cli_approval_handler(tool_call: ToolCall) -> bool:
+        nonlocal session_auto_approve, active_status, tool_calls_this_turn
         tool_calls_this_turn += 1
         
-        task_id = current_active_task_id
-        if not task_id:
-            import uuid
-            task_id = str(uuid.uuid4())
-            current_active_task_id = task_id
-            memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
-            memory.log_conversation_step(
-                current_session_id,
-                "tool_call",
-                str(tool_call.args),
-                tool_name=tool_call.name
-            )
+        # Get active task ID from database
+        active_tasks = memory.get_active_tasks()
+        task_id = active_tasks[0]["id"] if active_tasks else str(uuid.uuid4())
         
         if session_auto_approve:
             return True
 
         if text_only:
-            # In scripting mode, non-auto-approved modifying tools should fail closed
             memory.update_active_task_status(task_id, "denied")
-            current_active_task_id = None
             return False
 
-        # Update database task status to pending_approval
         memory.update_active_task_status(task_id, "pending_approval")
-
-        # Post the approval request to Discord
         await memory.ask_discord_approval(task_id, tool_call.name, str(tool_call.args))
 
         if active_status:
@@ -162,7 +80,6 @@ async def run_agent(
             expand=False,
         ))
 
-        # Helper coroutine to poll database status
         async def poll_db():
             while True:
                 await asyncio.sleep(1.0)
@@ -174,13 +91,10 @@ async def run_agent(
 
         choice = None
         choice_source = None
-        
         loop = asyncio.get_event_loop()
-        import sys
         
         try:
             if sys.stdin.isatty():
-                # We have a TTY. Run console input in executor and poll DB concurrently.
                 db_task = asyncio.create_task(poll_db())
                 console_task = loop.run_in_executor(
                     None,
@@ -191,7 +105,6 @@ async def run_agent(
                     [db_task, console_task],
                     return_when=asyncio.FIRST_COMPLETED
                 )
-                
                 for p in pending:
                     p.cancel()
                     
@@ -199,7 +112,6 @@ async def run_agent(
                     try:
                         res = d.result()
                         if isinstance(res, str):
-                            # DB status update won the race
                             choice_source = "discord"
                             if res == "approved":
                                 choice = "y"
@@ -207,7 +119,6 @@ async def run_agent(
                                 feedback = res.split(":", 1)[1].strip() if ":" in res else ""
                                 raise PermissionError(f"Permission denied by user. Feedback: {feedback}" if feedback else "Permission denied by user.")
                         else:
-                            # Console input won the race
                             choice_source = "console"
                             choice = res
                     except PermissionError:
@@ -215,7 +126,6 @@ async def run_agent(
                     except Exception:
                         choice = "n"
             else:
-                # No TTY. Just wait for Discord approval in the DB.
                 res = await poll_db()
                 choice_source = "discord"
                 if res == "approved":
@@ -228,7 +138,6 @@ async def run_agent(
         except (KeyboardInterrupt, EOFError):
             console.print("\n[bold red]Execution denied due to user interrupt.[/bold red]")
             memory.update_active_task_status(task_id, "denied")
-            current_active_task_id = None
             if active_status:
                 active_status.start()
             return False
@@ -249,113 +158,24 @@ async def run_agent(
             console.print("[bold red]Execution denied.[/bold red]")
             if choice_source == "console":
                 memory.update_active_task_status(task_id, "denied")
-            current_active_task_id = None
             return False
 
-    # Safety policy setup
-    if auto_approve:
-        policies = [policy.allow_all()]
-    else:
-        # Ask for confirmation on actions that modify the system
-        policies = [
-            policy.ask_user("run_command", handler=my_approval_handler),
-            policy.ask_user("create_file", handler=my_approval_handler),
-            policy.ask_user("edit_file", handler=my_approval_handler),
-            policy.ask_user("start_subagent", handler=my_approval_handler),
-            # Default to allowing read-only tools
-            policy.allow_all(),
-        ]
-
-    @hooks.post_tool_call
-    async def on_post_tool(data):
-        nonlocal current_active_task_id
-        if current_active_task_id:
-            memory.update_active_task_status(current_active_task_id, "completed")
-            current_active_task_id = None
-
-    @hooks.on_tool_error
-    async def on_tool_err(err):
-        nonlocal current_active_task_id
-        if current_active_task_id:
-            memory.update_active_task_status(current_active_task_id, "failed")
-            current_active_task_id = None
-
-    # 6. Enable all capabilities (including subagents and write tools)
-    capabilities = CapabilitiesConfig(
-        enable_subagents=True,
+    # Get or create agent through OrchestrationService
+    agent = await orchestration_service.get_or_create_agent(
+        model=model,
+        session_id=session_id,
+        custom_instructions=custom_instructions,
+        disable_tools=False,
+        roleplay=False,
+        workspaces=resolved_workspaces,
+        auto_approve=auto_approve,
+        prompt=initial_prompt,
+        custom_approval_handler=my_cli_approval_handler
     )
 
-    # 7. Register Custom Memory and Skill-Building Tools
-    custom_tools = [
-        tools.record_memory_fact,
-        tools.record_memory_key_value,
-        tools.create_agent_skill,
-        tools.improve_agent_skill,
-        tools.list_installed_skills,
-        tools.search_past_conversations,
-        tools.youtube_to_mp3,
-        tools.schedule_task,
-        tools.list_scheduled_tasks,
-        tools.delete_scheduled_task,
-        tools.run_command,
-    ]
+    current_session_id = agent.conversation_id
 
-    # Resolve global and workspace skill folders
-    workspace_skills = Path(os.getcwd()) / ".agents" / "skills"
-    skills_paths = [str(tools.SKILLS_DIR)]
-    if workspace_skills.exists() and workspace_skills.is_dir():
-        skills_paths.append(str(workspace_skills))
-
-    # 8. Build LocalAgentConfig
-    config_args = {
-        "system_instructions": full_instructions,
-        "capabilities": capabilities,
-        "tools": custom_tools,
-        "policies": policies,
-        "workspaces": resolved_workspaces,
-        "save_dir": save_dir,
-        "skills_paths": skills_paths,
-        "hooks": [on_pre_tool, on_post_tool, on_tool_err],
-    }
-    
-    if api_key:
-        config_args["api_key"] = api_key
-        if model:
-            config_args["model"] = model
-    else:
-        # Set keyless system harness path
-        setup_keyless_environment()
-        # Explicit keyless models to bypass client-side key checks
-        text_model = ModelTarget(
-            name=model or "gemini-3.5-flash",
-            types=[ModelType.TEXT],
-            endpoint=KeylessGeminiAPIEndpoint()
-        )
-        image_model = ModelTarget(
-            name="gemini-3.1-flash-image-preview",
-            types=[ModelType.IMAGE],
-            endpoint=KeylessGeminiAPIEndpoint()
-        )
-        config_args["models"] = [text_model, image_model]
-
-    if session_id:
-        config_args["conversation_id"] = session_id
-
-    # Check and compact session history before initializing the agent connection
-    if session_id:
-        try:
-            from agent.web import check_and_compact_session_history
-            await check_and_compact_session_history(session_id, model_name=model, api_key=api_key)
-        except Exception:
-            pass
-
-    config = LocalAgentConfig(**config_args)
-
-    # 9. Start Agent Connection & Run Loops
-    async with Agent(config) as agent:
-        # Retrieve the session ID (can be printed to user or saved)
-        current_session_id = agent.conversation_id
-        
+    try:
         if not text_only:
             print_startup_banner(
                 session_id=current_session_id,
@@ -364,17 +184,14 @@ async def run_agent(
                 interactive=not initial_prompt and interactive
             )
 
-        # Define turn execution logic
         async def execute_turn(prompt_text: str) -> str:
             nonlocal active_status, tool_calls_this_turn
             tool_calls_this_turn = 0
             
-            # Log the user prompt to SQLite
             memory.log_conversation_step(current_session_id, "user", prompt_text)
             
             response = await agent.chat(prompt_text)
             
-            # Streaming thoughts (handled via status spinner to keep UI clean)
             thoughts_str = ""
             if not text_only:
                 active_status = console.status("[bold dim]Thinking...[/bold dim]", spinner="dots")
@@ -386,13 +203,11 @@ async def run_agent(
                 if thoughts_str:
                     memory.log_conversation_step(current_session_id, "thought", thoughts_str)
 
-            # Streaming final output
             output_content = ""
             if text_only:
                 async for chunk in response:
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
-                # Ensure trailing newline
                 sys.stdout.write("\n")
                 sys.stdout.flush()
             else:
@@ -410,7 +225,6 @@ async def run_agent(
             
             return output_content
 
-        # Handle initial prompt if supplied
         if initial_prompt:
             if not text_only:
                 console.print(f"[bold blue]User >[/bold blue] {escape(initial_prompt)}")
@@ -418,7 +232,6 @@ async def run_agent(
             if not interactive:
                 return
 
-        # Interactive Chat Loop
         if interactive:
             from prompt_toolkit import PromptSession
             from prompt_toolkit.completion import WordCompleter
@@ -454,7 +267,6 @@ async def run_agent(
                 if not cleaned_input:
                     continue
 
-                # Slash command routing
                 if cleaned_input.startswith("/"):
                     cmd_parts = cleaned_input.split(maxsplit=1)
                     cmd = cmd_parts[0].lower()
@@ -492,8 +304,17 @@ async def run_agent(
                         console.print(f"[bold red]Unknown slash command: {escape(cmd)}[/bold red]")
                         continue
 
-                # Execute standard turn
                 await execute_turn(cleaned_input)
+
+    finally:
+        # Exit context cleanly
+        lookup_id = session_id or "default"
+        session_data = orchestration_service.active_agents.pop(lookup_id, None)
+        if session_data:
+            try:
+                await session_data["agent"].__aexit__(None, None, None)
+            except Exception:
+                pass
 
 def print_help() -> None:
     help_text = """

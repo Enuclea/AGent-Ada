@@ -7,10 +7,13 @@ from agent import memory
 
 @pytest.fixture
 def temp_memory_file():
-    """Fixture that redirects MEMORY_FILE_PATH to a temporary file."""
+    """Fixture that redirects MEMORY_FILE_PATH and DB_FILE_PATH to temporary files."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / "memory.json"
-        with mock.patch("agent.memory.MEMORY_FILE_PATH", tmp_path):
+        tmp_db_path = Path(tmpdir) / "history.db"
+        with mock.patch("agent.memory.MEMORY_FILE_PATH", tmp_path), \
+             mock.patch("agent.memory.DB_FILE_PATH", tmp_db_path):
+            memory.init_db()
             yield tmp_path
 
 def test_load_memory_empty(temp_memory_file):
@@ -142,10 +145,11 @@ def test_global_backstory_roleplay_memories(temp_db_file):
     assert "Tavern Rules" not in keys
 
 
-def test_get_auto_rag_context(temp_db_file):
+@pytest.mark.anyio
+async def test_get_auto_rag_context(temp_db_file):
     """Test retrieving Auto-RAG context dynamically using FTS search."""
     # Initially should be empty
-    assert memory.get_auto_rag_context("FTS5") == ""
+    assert await memory.get_auto_rag_context("FTS5") == ""
 
     # Log some steps
     memory.log_conversation_step(
@@ -162,7 +166,7 @@ def test_get_auto_rag_context(temp_db_file):
     )
 
     # Search for FTS5
-    context = memory.get_auto_rag_context("FTS5")
+    context = await memory.get_auto_rag_context("FTS5")
     assert "[AUTO-RAG: RELEVANT HISTORICAL INTERACTIONS]" in context
     assert "FTS5 search works wonderfully" in context or "unit test on FTS5" in context
 
