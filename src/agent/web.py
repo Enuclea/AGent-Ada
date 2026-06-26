@@ -728,16 +728,6 @@ async def chat_endpoint(req: ChatRequest):
                 except Exception as pe:
                     print(f"[PLANNING] Failed to decompose plan: {pe}")
 
-            # Update first pending step of the plan to 'running'
-            current_plan = memory.get_session_plan(agent.conversation_id)
-            running_step_id = None
-            if current_plan:
-                for step in current_plan["steps"]:
-                    if step["status"] == "pending":
-                        running_step_id = step["id"]
-                        memory.update_plan_step_status(running_step_id, "running")
-                        break
-
             # Log user prompt
             memory.log_conversation_step(agent.conversation_id, "user", req.prompt)
             
@@ -792,33 +782,94 @@ async def chat_endpoint(req: ChatRequest):
                 cost = (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
                 memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.5-flash", input_tokens, output_tokens, cost)
 
-            try:
-                # Primary attempt
-                active_agent = await get_or_create_agent(primary_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
-                async for item in stream_agent_response(active_agent, req.prompt):
-                    yield f"data: {json.dumps(item)}\n\n"
-            except Exception as first_error:
-                print(f"[STUCK PREVENTION] Primary model ({primary_model}) failed: {first_error}. Triggering fallback double check.")
-                active_agents.pop(lookup_id, None)
-                
-                # Notify frontend of retry
-                yield f"data: {json.dumps({'type': 'thought', 'content': '\n⚠️ [System: Model got stuck/errored. Retrying with fallback model...]\n'})}\n\n"
-                
-                # Fallback model selection
-                fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
-                fallback_prompt = f"The previous model run got stuck/encountered an error. Please analyze and solve it.\n\nOriginal prompt: {req.prompt}"
-                
-                try:
-                    fallback_agent = await get_or_create_agent(fallback_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
-                    async for item in stream_agent_response(fallback_agent, fallback_prompt):
-                        yield f"data: {json.dumps(item)}\n\n"
-                except Exception as second_error:
-                    print(f"[STUCK PREVENTION] Fallback model ({fallback_model}) also failed: {second_error}")
-                    raise second_error
+            # Run sequential driving steps
+            current_plan = memory.get_session_plan(agent.conversation_id)
+            if current_plan and "steps" in current_plan:
+                steps_to_run = [s for s in current_plan["steps"] if s["status"] != "completed"]
+            else:
+                steps_to_run = []
 
-            # Update running step status to 'completed'
-            if running_step_id:
-                memory.update_plan_step_status(running_step_id, "completed")
+            if steps_to_run:
+                total_steps = len(current_plan["steps"])
+                for step in steps_to_run:
+                    step_id = step["id"]
+                    step_desc = step["description"]
+                    step_tool = step.get("assigned_tool") or "any tool"
+                    step_order = step["step_order"]
+                    
+                    # Update status to running
+                    memory.update_plan_step_status(step_id, "running")
+                    
+                    # Yield thought block to visual progress
+                    yield f"data: {json.dumps({'type': 'thought', 'content': f'\n⚙️ [Step {step_order}/{total_steps}]: {step_desc}...\n'})}\n\n"
+                    
+                    # Construct driving prompt
+                    driver_prompt = (
+                        f"[SYSTEM DRIVER]\n"
+                        f"You are executing Step {step_order} of {total_steps}: \"{step_desc}\".\n"
+                        f"The recommended tool for this step is \"{step_tool}\".\n\n"
+                        f"Please execute this step now using your tools. Review the previous conversation history "
+                        f"and outputs to obtain any context you need. Once this step is complete, summarize your findings "
+                        f"clearly so we can transition to the next step."
+                    )
+                    
+                    step_failed = False
+                    try:
+                        active_agent = await get_or_create_agent(primary_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
+                        async for item in stream_agent_response(active_agent, driver_prompt):
+                            yield f"data: {json.dumps(item)}\n\n"
+                    except Exception as step_err:
+                        print(f"[DRIVER] Step {step_order} failed: {step_err}")
+                        memory.update_plan_step_status(step_id, "failed", error_message=str(step_err))
+                        step_failed = True
+                        
+                        # Fallback try
+                        fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
+                        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n⚠️ [System: Step {step_order} failed. Retrying step with fallback model...]\n'})}\n\n"
+                        
+                        fallback_prompt = (
+                            f"[SYSTEM DRIVER - FALLBACK]\n"
+                            f"The previous attempt to execute Step {step_order} failed with error: {step_err}.\n"
+                            f"Original step task: \"{step_desc}\".\n"
+                            f"Please complete this step successfully now."
+                        )
+                        try:
+                            active_agents.pop(lookup_id, None)
+                            fallback_agent = await get_or_create_agent(fallback_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
+                            async for item in stream_agent_response(fallback_agent, fallback_prompt):
+                                yield f"data: {json.dumps(item)}\n\n"
+                            step_failed = False
+                        except Exception as fallback_err:
+                            print(f"[DRIVER] Step {step_order} fallback also failed: {fallback_err}")
+                            memory.update_plan_step_status(step_id, "failed", error_message=str(fallback_err))
+                            raise fallback_err
+                    
+                    if not step_failed:
+                        memory.update_plan_step_status(step_id, "completed")
+            else:
+                # Fallback to single call with fallback model routing & stuck prevention
+                try:
+                    active_agent = await get_or_create_agent(primary_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
+                    async for item in stream_agent_response(active_agent, req.prompt):
+                        yield f"data: {json.dumps(item)}\n\n"
+                except Exception as first_error:
+                    print(f"[STUCK PREVENTION] Primary model ({primary_model}) failed: {first_error}. Triggering fallback double check.")
+                    active_agents.pop(lookup_id, None)
+                    
+                    # Notify frontend of retry
+                    yield f"data: {json.dumps({'type': 'thought', 'content': '\n⚠️ [System: Model got stuck/errored. Retrying with fallback model...]\n'})}\n\n"
+                    
+                    # Fallback model selection
+                    fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
+                    fallback_prompt = f"The previous model run got stuck/encountered an error. Please analyze and solve it.\n\nOriginal prompt: {req.prompt}"
+                    
+                    try:
+                        fallback_agent = await get_or_create_agent(fallback_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
+                        async for item in stream_agent_response(fallback_agent, fallback_prompt):
+                            yield f"data: {json.dumps(item)}\n\n"
+                    except Exception as second_error:
+                        print(f"[STUCK PREVENTION] Fallback model ({fallback_model}) also failed: {second_error}")
+                        raise second_error
 
             # Complete
             yield "data: [DONE]\n\n"
@@ -827,8 +878,8 @@ async def chat_endpoint(req: ChatRequest):
             traceback.print_exc()
             active_agents.pop(lookup_id, None)
             # Update running step status to 'failed'
-            if 'running_step_id' in locals() and running_step_id:
-                memory.update_plan_step_status(running_step_id, "failed", error_message=str(e))
+            if 'step_id' in locals() and step_id:
+                memory.update_plan_step_status(step_id, "failed", error_message=str(e))
             yield f"data: {json.dumps({'type': 'error', 'content': f'Agent connection error: {e}'})}\n\n"
             yield "data: [DONE]\n\n"
         finally:
