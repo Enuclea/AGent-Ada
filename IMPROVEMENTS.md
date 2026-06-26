@@ -21,10 +21,15 @@ This document outlines a comprehensive set of potential improvements for the AGe
 
 ## 2. Robustness Improvements
 
-### Systematic Error Handling & Fallbacks
-- **Current State:** Fallback logic exists but is scattered and implementation-specific.
-- **Improvement:** Implement a centralized, policy-driven error handling and model fallback strategy.
-- **Benefits:** Increases system reliability, handles transient API failures gracefully, and provides more predictable agent behavior.
+### Systematic Error Handling & Multi-Model Failover
+- **Current State:** Fallback logic exists but is scattered and primarily focuses on a single fallback model.
+- **Improvement:** Implement a robust multi-model failover sequence orchestrated through the `agy` CLI.
+    - **Primary Sequence:** The engine should attempt execution through `agy` using a prioritized model sequence: **Gemini -> Claude -> GPT**.
+    - **Final Fallback:** If all `agy`-mediated attempts fail, the system should pivot to **Grok** as a high-success final fallback method.
+- **Extension Capabilities:**
+    - While maintaining the "keyless-by-design" approach through `agy`, the engine should be extended to **allow (but not require)** the use of direct provider API keys.
+    - Support for **local Ollama calls** should be integrated as an optional extension, providing a fully offline fallback or primary path for users with local compute resources.
+- **Benefits:** Maximum resilience against provider-specific outages, quota exhaustion, or networking issues.
 
 ### Strict Type Safety with Pydantic
 - **Current State:** Heavy reliance on raw dictionaries for data transfer and storage.
