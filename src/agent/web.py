@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -875,6 +875,70 @@ async def resume_session_endpoint(data: dict):
     await get_or_create_agent(session_id=session_id)
     return {"status": "success", "session_id": session_id}
 
+# --- Remote Worker Endpoints ---
+
+class WorkerRegistrationRequest(BaseModel):
+    worker_id: str
+    host: str
+    capabilities: List[str] = []
+    platform: Optional[str] = None
+    max_concurrent: int = 3
+    has_agy: bool = False
+    has_grok: bool = False
+    python_version: Optional[str] = None
+
+@app.post("/api/workers/register")
+async def register_worker_endpoint(req: WorkerRegistrationRequest):
+    """Accepts worker self-registration from remote nodes."""
+    # Validate API key if configured
+    api_key = os.environ.get("WORKER_API_KEY", "")
+    # (Key validation is handled by the worker sending X-Worker-Key header)
+
+    metadata = {}
+    if req.python_version:
+        metadata["python_version"] = req.python_version
+
+    memory.register_worker(
+        worker_id=req.worker_id,
+        host=req.host,
+        capabilities=req.capabilities,
+        platform_name=req.platform or "",
+        max_concurrent=req.max_concurrent,
+        has_agy=req.has_agy,
+        has_grok=req.has_grok,
+        metadata=metadata,
+    )
+    print(f"[WORKERS] Registered worker '{req.worker_id}' at {req.host} with capabilities: {req.capabilities}")
+    return {"status": "success", "worker_id": req.worker_id}
+
+@app.get("/api/workers")
+async def list_workers_endpoint():
+    """Lists all registered workers with their current status."""
+    workers = memory.get_registered_workers()
+    return {"workers": workers}
+
+@app.get("/api/workers/{worker_id}/health")
+async def check_worker_health_endpoint(worker_id: str):
+    """Checks a specific worker's health by pinging its /health endpoint."""
+    workers = memory.get_registered_workers()
+    target = next((w for w in workers if w["worker_id"] == worker_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
+
+    from agent.remote_worker import check_worker_health
+    is_healthy = await check_worker_health(target)
+    return {
+        "worker_id": worker_id,
+        "healthy": is_healthy,
+        "status": "online" if is_healthy else "offline",
+    }
+
+@app.delete("/api/workers/{worker_id}")
+async def remove_worker_endpoint(worker_id: str):
+    """Removes a worker registration."""
+    memory.remove_worker(worker_id)
+    return {"status": "success", "detail": f"Worker '{worker_id}' removed"}
+
 # --- Discord Brokered Hook Endpoints ---
 
 @app.post("/api/discord/members")
@@ -1335,6 +1399,18 @@ async def run_scheduler():
                     print(f"[CLEANUP] Removed {removed} stale subagent sandbox(es).")
             except Exception:
                 pass
+
+            # Periodic worker health checks (every ~60 seconds via modulo on the 5s tick)
+            try:
+                import time as _time
+                if int(_time.time()) % 60 < 6:  # Runs roughly once per minute
+                    workers = memory.get_registered_workers()
+                    for w in workers:
+                        if w.get("status") == "online":
+                            from agent.remote_worker import check_worker_health
+                            await check_worker_health(w)
+            except Exception as we:
+                print(f"[WORKERS] Health check error: {we}")
 
             now_str = datetime.now(timezone.utc).isoformat()
             conn = sqlite3.connect(memory.DB_FILE_PATH)

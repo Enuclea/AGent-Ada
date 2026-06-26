@@ -268,6 +268,23 @@ def init_db() -> None:
             last_updated TEXT
         )
         """)
+        # Remote workers
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS workers (
+            worker_id TEXT PRIMARY KEY,
+            host TEXT,
+            capabilities TEXT,
+            platform TEXT,
+            status TEXT DEFAULT 'online',
+            active_tasks INTEGER DEFAULT 0,
+            max_concurrent INTEGER DEFAULT 3,
+            has_agy INTEGER DEFAULT 0,
+            has_grok INTEGER DEFAULT 0,
+            registered_at TEXT,
+            last_heartbeat TEXT,
+            metadata TEXT
+        )
+        """)
         conn.commit()
     except Exception:
         pass
@@ -1265,3 +1282,121 @@ try:
     init_db()
 except Exception:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Remote Worker helpers
+# ---------------------------------------------------------------------------
+
+def register_worker(worker_id: str, host: str, capabilities: List[str],
+                    platform_name: str = "", max_concurrent: int = 3,
+                    has_agy: bool = False, has_grok: bool = False,
+                    metadata: Optional[Dict[str, Any]] = None) -> None:
+    """Registers or updates a remote worker node."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        caps_str = ",".join(capabilities) if isinstance(capabilities, list) else str(capabilities)
+        meta_str = json.dumps(metadata) if metadata else "{}"
+        cursor.execute(
+            """
+            INSERT INTO workers (worker_id, host, capabilities, platform, status,
+                                active_tasks, max_concurrent, has_agy, has_grok,
+                                registered_at, last_heartbeat, metadata)
+            VALUES (?, ?, ?, ?, 'online', 0, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(worker_id) DO UPDATE SET
+                host = excluded.host,
+                capabilities = excluded.capabilities,
+                platform = excluded.platform,
+                status = 'online',
+                max_concurrent = excluded.max_concurrent,
+                has_agy = excluded.has_agy,
+                has_grok = excluded.has_grok,
+                last_heartbeat = excluded.last_heartbeat,
+                metadata = excluded.metadata
+            """,
+            (worker_id, host, caps_str, platform_name, max_concurrent,
+             int(has_agy), int(has_grok), now, now, meta_str)
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"[MEMORY] Failed to register worker {worker_id}: {e}")
+    finally:
+        conn.close()
+
+
+def get_registered_workers() -> List[Dict[str, Any]]:
+    """Returns all registered workers."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    results = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT worker_id, host, capabilities, platform, status, active_tasks, "
+            "max_concurrent, has_agy, has_grok, registered_at, last_heartbeat, metadata "
+            "FROM workers ORDER BY last_heartbeat DESC"
+        )
+        for row in cursor.fetchall():
+            caps = row[2].split(",") if row[2] else []
+            meta = {}
+            try:
+                meta = json.loads(row[11]) if row[11] else {}
+            except (json.JSONDecodeError, TypeError):
+                pass
+            results.append({
+                "worker_id": row[0],
+                "host": row[1],
+                "capabilities": caps,
+                "platform": row[3],
+                "status": row[4],
+                "active_tasks": row[5],
+                "max_concurrent": row[6],
+                "has_agy": bool(row[7]),
+                "has_grok": bool(row[8]),
+                "registered_at": row[9],
+                "last_heartbeat": row[10],
+                "metadata": meta,
+            })
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return results
+
+
+def update_worker_health(worker_id: str, status: str = "online",
+                         active_tasks: Optional[int] = None) -> None:
+    """Updates a worker's health status and optional task count."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        if active_tasks is not None:
+            cursor.execute(
+                "UPDATE workers SET status = ?, active_tasks = ?, last_heartbeat = ? WHERE worker_id = ?",
+                (status, active_tasks, now, worker_id)
+            )
+        else:
+            cursor.execute(
+                "UPDATE workers SET status = ?, last_heartbeat = ? WHERE worker_id = ?",
+                (status, now, worker_id)
+            )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def remove_worker(worker_id: str) -> None:
+    """Removes a worker registration."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM workers WHERE worker_id = ?", (worker_id,))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
