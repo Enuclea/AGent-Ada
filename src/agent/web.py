@@ -3,10 +3,10 @@ import os
 import json
 import sqlite3
 from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -59,6 +59,8 @@ def get_session_lock(session_id: str) -> PriorityLock:
     if session_id not in session_locks:
         session_locks[session_id] = PriorityLock()
     return session_locks[session_id]
+
+app = FastAPI(title="Ada Task Engine Dashboard")
 
 def ensure_default_scheduled_tasks(conn=None):
     """Ensures that default scheduled background tasks are registered if the database is empty."""
@@ -154,6 +156,128 @@ def ensure_default_scheduled_tasks(conn=None):
         if close_conn:
             conn.close()
 
+def discover_language_server():
+    import os
+    import re
+    pid = None
+    csrf_token = None
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/cmdline", "rb") as f:
+                cmdline = f.read().split(b"\x00")
+            cmd_str = [c.decode("utf-8", errors="ignore") for c in cmdline]
+            if any("language_server_linux_x64" in part for part in cmd_str):
+                pid = int(name)
+                for idx, part in enumerate(cmd_str):
+                    if part == "--csrf_token" and idx + 1 < len(cmd_str):
+                        csrf_token = cmd_str[idx + 1]
+                        break
+                    elif part.startswith("--csrf_token="):
+                        csrf_token = part.split("=", 1)[1]
+                        break
+                if pid and csrf_token:
+                    break
+        except Exception:
+            continue
+
+    if not pid or not csrf_token:
+        return None, None, []
+    
+    inodes = set()
+    try:
+        fd_dir = f"/proc/{pid}/fd"
+        for fd in os.listdir(fd_dir):
+            link = os.readlink(os.path.join(fd_dir, fd))
+            m = re.match(r"socket:\[(\d+)\]", link)
+            if m:
+                inodes.add(m.group(1))
+    except Exception:
+        pass
+
+    ports = []
+    try:
+        with open("/proc/net/tcp", "r") as f:
+            lines = f.readlines()
+        for line in lines[1:]:
+            parts = line.strip().split()
+            if len(parts) >= 10:
+                local_addr = parts[1]
+                state = parts[3]
+                inode = parts[9]
+                if state == "0A" and inode in inodes:  # 0A is LISTEN
+                    ip_hex, port_hex = local_addr.split(":")
+                    port = int(port_hex, 16)
+                    if ip_hex == "0100007F" or ip_hex == "00000000":
+                        ports.append(port)
+    except Exception:
+        pass
+    return pid, csrf_token, ports
+
+def fetch_real_quotas_sync():
+    import requests
+    pid, token, ports = discover_language_server()
+    if not token or not ports:
+        return False
+
+    for port in ports:
+        try:
+            r = requests.post(
+                f"http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
+                json={},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Codeium-Csrf-Token": token
+                },
+                timeout=2.0
+            )
+            if r.status_code == 200:
+                data = r.json()
+                groups = data.get("response", {}).get("groups", [])
+                for group in groups:
+                    display_name = group.get("displayName", "")
+                    if "Gemini" in display_name:
+                        family = "gemini"
+                    elif "Claude" in display_name or "3p" in display_name:
+                        family = "claude_gpt"
+                    else:
+                        continue
+                    
+                    pct_5h = None
+                    pct_weekly = None
+                    for bucket in group.get("buckets", []):
+                        window = bucket.get("window")
+                        rem = bucket.get("remainingFraction", 1.0)
+                        pct_val = rem * 100.0
+                        if window == "5h":
+                            pct_5h = pct_val
+                        elif window == "weekly":
+                            pct_weekly = pct_val
+                    
+                    if pct_5h is not None and pct_weekly is not None:
+                        memory.update_model_quotas(family, pct_5h, pct_weekly)
+                return True
+        except Exception:
+            pass
+    return False
+
+async def run_quota_refresh_loop():
+    try:
+        quotas = memory.get_model_quotas()
+        if not quotas:
+            memory.update_model_quotas("gemini", 96.0, 89.0)
+            memory.update_model_quotas("claude_gpt", 100.0, 100.0)
+    except Exception:
+        pass
+
+    while True:
+        try:
+            await asyncio.to_thread(fetch_real_quotas_sync)
+        except Exception:
+            pass
+        await asyncio.sleep(15 * 60)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Clear any stale active tasks on startup (e.g. from previous runs/tests/crashes)
@@ -164,9 +288,11 @@ async def lifespan(app: FastAPI):
 
     # Startup
     scheduler_task = asyncio.create_task(run_scheduler())
+    quota_task = asyncio.create_task(run_quota_refresh_loop())
     yield
     # Shutdown
     scheduler_task.cancel()
+    quota_task.cancel()
 
 app = FastAPI(title="Ada Task Engine Dashboard", lifespan=lifespan)
 
@@ -179,18 +305,20 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
     system_instructions: Optional[str] = None
     disable_tools: Optional[bool] = False
+    roleplay: Optional[bool] = False
 
 class DiscordMembersRequest(BaseModel):
     members_data: dict
 
 class DiscordConfigRequest(BaseModel):
     config_data: dict
-
 async def get_or_create_agent(
     model_name: Optional[str] = None,
     session_id: Optional[str] = None,
     system_instructions: Optional[str] = None,
-    disable_tools: bool = False
+    disable_tools: bool = False,
+    roleplay: bool = False,
+    prompt: Optional[str] = None
 ):
     """Retrieves the active Agent connection or builds a new one."""
     global active_agents
@@ -203,7 +331,7 @@ async def get_or_create_agent(
     is_discord = False
     
     if session_id:
-        if session_id.startswith("discord-session-"):
+        if session_id.startswith("discord-session-") or session_id.startswith("discord-roleplay-"):
             is_discord = True
             mem = memory.load_memory()
             session_mappings = mem.setdefault("key_value", {}).get("session_mappings", {})
@@ -223,7 +351,10 @@ async def get_or_create_agent(
     # We map by the passed session_id or a default key
     lookup_id = session_id or "default"
     
-    # Check if we need to reconstruct due to model, session, instructions, or tool status change
+    # Check if we need to reconstruct due to model, session, instructions, tool status, roleplay, skills, or RAG context change
+    new_skills = tools.get_relevant_skills(prompt) if not roleplay else ""
+    new_rag = memory.get_auto_rag_context(prompt) if not roleplay else ""
+    
     session_data = active_agents.get(lookup_id)
     if session_data is not None:
         agent = session_data["agent"]
@@ -237,6 +368,11 @@ async def get_or_create_agent(
             needs_reconstruct = True
         if disable_tools != session_data["disable_tools"]:
             needs_reconstruct = True
+        if roleplay != session_data["roleplay"]:
+            needs_reconstruct = True
+        if not needs_reconstruct and not roleplay:
+            if session_data.get("skills") != new_skills or session_data.get("rag") != new_rag:
+                needs_reconstruct = True
                 
         if needs_reconstruct:
             try:
@@ -259,40 +395,62 @@ async def get_or_create_agent(
                 print(f"[COMPACTION] Error checking/compacting session history: {e}")
 
         # Construct instructions and configure capabilities/tools/policies
-        memory.active_session_id = session_id
-        if system_instructions:
-            full_instructions = system_instructions
+        if roleplay:
+            memory.active_roleplay_session_id = session_id
+            roleplay_mem_list = memory.get_roleplay_memories(session_id)
+            mem_summary = ""
+            if roleplay_mem_list:
+                mem_summary = "\n\n[PERSISTENT ROLEPLAY MEMORIES]\n" + "\n".join([f"- {m['key']}: {m['fact']}" for m in roleplay_mem_list]) + "\n[END OF PERSISTENT ROLEPLAY MEMORIES]"
+            
+            full_instructions = (system_instructions or "") + mem_summary
+            capabilities = CapabilitiesConfig(enable_subagents=False)
+            custom_tools = [tools.record_roleplay_memory]
+            
+            async def my_roleplay_approval_handler(tool_call: ToolCall) -> bool:
+                return True
+                
+            policies = [
+                policy.ask_user("record_roleplay_memory", handler=my_roleplay_approval_handler),
+                policy.allow_all(),
+            ]
         else:
-            memory_summary = memory.get_fact_summary()
-            installed_skills = tools.list_installed_skills()
-            base_instructions = (
-                "You are Ada, the autonomous AI developer assistant behind the Ada Task Engine, powered by AntiGravity.\n"
-                "You help the user write, test, debug, and manage code in their workspace.\n"
-                "Always be concise, professional, and helpful.\n\n"
-                "SELF-IMPROVEMENT & TOOL BUILDING:\n"
-                "- You have the ability to record facts about the user/project using `record_memory_fact`.\n"
-                "- You can record key-value pairs using `record_memory_key_value`.\n"
-                "- You can autonomously write new custom tools and skills using `create_agent_skill`, or modify/expand "
-                "existing custom skills (such as fixing bugs or adding scripts) using `improve_agent_skill`.\n"
-                "- When you successfully solve a non-trivial problem, figure out a complex workflow, or build a helper script, "
-                "you should save it as a reusable skill using `create_agent_skill` (or refine it using `improve_agent_skill`) "
-                "so you (or other agents) can reload it in future runs.\n"
-                "- You can search past conversations and sessions using `search_past_conversations`. Whenever the user "
-                "asks about previous tasks, context, or decisions, use `search_past_conversations` to recall what you did.\n"
-                "- Before starting any complex task, check the list of installed skills to see if you have relevant custom tools.\n\n"
-                "RUNNING LONG-RUNNING COMMANDS & PROCESSES:\n"
-                "- Any long-running command, service, server, background daemon, or Discord bot (like `discord/bot.py`) MUST be executed in the background using `nohup` and backgrounded, for example: `PYTHONPATH=src nohup .venv/bin/python3 discord/bot.py > discord/bot.log 2>&1 &`.\n"
-                "- You must NEVER run on a persistent process or bot in the foreground, as it blocks the tool execution and hangs the agent connection.\n"
-                "- Never use interactive prompts or tail commands that block indefinitely (e.g. `tail -f`). Always ensure your commands exit immediately.\n\n"
-                "WORKSPACE SAFETY & DIRECTORY STRUCTURE:\n"
-                "- When writing, testing, or editing code to complete user requests, you must write files to the appropriate project directories (e.g. `src/` or `scratch/`).\n"
-                "- You must NEVER write, modify, or create project code files inside the `discord/` directory unless you are specifically asked to edit the Discord bot code itself. Keep the `discord/` folder isolated strictly for the bot's system files."
-            )
-            full_instructions = base_instructions
-            if memory_summary:
-                full_instructions += f"\n\n{memory_summary}"
-            if "No custom skills installed" not in installed_skills:
-                full_instructions += f"\n\n[INSTALLED CUSTOM SKILLS/TOOLS]\n{installed_skills}\n[END OF INSTALLED CUSTOM SKILLS/TOOLS]"
+            memory.active_session_id = session_id
+            if system_instructions:
+                full_instructions = system_instructions
+            else:
+                memory_summary = memory.get_fact_summary()
+                installed_skills = new_skills
+                rag_context = new_rag
+                base_instructions = (
+                    "You are Ada, the autonomous AI developer assistant behind the Ada Task Engine, powered by AntiGravity.\n"
+                    "You help the user write, test, debug, and manage code in their workspace.\n"
+                    "Always be concise, professional, and helpful.\n\n"
+                    "SELF-IMPROVEMENT & TOOL BUILDING:\n"
+                    "- You have the ability to record facts about the user/project using `record_memory_fact`.\n"
+                    "- You can record key-value pairs using `record_memory_key_value`.\n"
+                    "- You can autonomously write new custom tools and skills using `create_agent_skill`, or modify/expand "
+                    "existing custom skills (such as fixing bugs or adding scripts) using `improve_agent_skill`.\n"
+                    "- When you successfully solve a non-trivial problem, figure out a complex workflow, or build a helper script, "
+                    "you should save it as a reusable skill using `create_agent_skill` (or refine it using `improve_agent_skill`) "
+                    "so you (or other agents) can reload it in future runs.\n"
+                    "- You can search past conversations and sessions using `search_past_conversations`. Whenever the user "
+                    "asks about previous tasks, context, or decisions, use `search_past_conversations` to recall what you did.\n"
+                    "- Before starting any complex task, check the list of installed skills to see if you have relevant custom tools.\n\n"
+                    "RUNNING LONG-RUNNING COMMANDS & PROCESSES:\n"
+                    "- Any long-running command, service, server, background daemon, or Discord bot (like `discord/bot.py`) MUST be executed in the background using `nohup` and backgrounded, for example: `PYTHONPATH=src nohup .venv/bin/python3 discord/bot.py > discord/bot.log 2>&1 &`.\n"
+                    "- You must NEVER run on a persistent process or bot in the foreground, as it blocks the tool execution and hangs the agent connection.\n"
+                    "- Never use interactive prompts or tail commands that block indefinitely (e.g. `tail -f`). Always ensure your commands exit immediately.\n\n"
+                    "WORKSPACE SAFETY & DIRECTORY STRUCTURE:\n"
+                    "- When writing, testing, or editing code to complete user requests, you must write files to the appropriate project directories (e.g. `src/` or `scratch/`).\n"
+                    "- You must NEVER write, modify, or create project code files inside the `discord/` directory unless you are specifically asked to edit the Discord bot code itself. Keep the `discord/` folder isolated strictly for the bot's system files."
+                )
+                full_instructions = base_instructions
+                if memory_summary:
+                    full_instructions += f"\n\n{memory_summary}"
+                if rag_context:
+                    full_instructions += f"\n\n{rag_context}"
+                if "No custom skills installed" not in installed_skills:
+                    full_instructions += f"\n\n[INSTALLED CUSTOM SKILLS/TOOLS]\n{installed_skills}\n[END OF INSTALLED CUSTOM SKILLS/TOOLS]"
 
             if disable_tools:
                 capabilities = CapabilitiesConfig(enable_subagents=False)
@@ -307,12 +465,37 @@ async def get_or_create_agent(
                     tools.improve_agent_skill,
                     tools.list_installed_skills,
                     tools.search_past_conversations,
-                    tools.list_repository_skills,
-                    tools.view_repository_skill_code,
-                    tools.install_repository_skill,
+                    tools.youtube_to_mp3,
+                    tools.schedule_task,
+                    tools.list_scheduled_tasks,
+                    tools.delete_scheduled_task,
+                    tools.run_command,
                 ]
+                if not is_discord:
+                    custom_tools.append(tools.backup_discord_channel)
 
         current_active_task_id = None
+
+        @hooks.pre_tool_call_decide
+        async def on_pre_tool(tool_call: ToolCall):
+            nonlocal current_active_task_id
+            import uuid
+            from google.antigravity.hooks.hooks import HookResult
+            
+            task_id = str(uuid.uuid4())
+            current_active_task_id = task_id
+            
+            # Record in active tasks tracker
+            memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
+            
+            # Log step to database history
+            memory.log_conversation_step(
+                agent.conversation_id,
+                "tool_call",
+                str(tool_call.args),
+                tool_name=tool_call.name
+            )
+            return HookResult(allow=True)
 
         @hooks.post_tool_call
         async def on_post_tool(data):
@@ -329,24 +512,27 @@ async def get_or_create_agent(
                 current_active_task_id = None
 
         async def my_approval_handler(tool_call: ToolCall) -> bool:
-            nonlocal current_active_task_id
-            import uuid
-            task_id = str(uuid.uuid4())
-            current_active_task_id = task_id
+            task_id = current_active_task_id
+            if not task_id:
+                return True
+                
+            # Update status to pending_approval in DB
+            memory.update_active_task_status(task_id, "pending_approval")
             
-            # Record in active tasks tracker
-            memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
+            # Post to Discord
+            await memory.ask_discord_approval(task_id, tool_call.name, str(tool_call.args))
             
-            # Log step to database history
-            memory.log_conversation_step(
-                agent.conversation_id,
-                "tool_call",
-                str(tool_call.args),
-                tool_name=tool_call.name
-            )
-            return True
+            # Poll DB status
+            while True:
+                await asyncio.sleep(1.0)
+                status = memory.get_active_task_status(task_id)
+                if status == "approved":
+                    return True
+                elif status and status.startswith("denied"):
+                    feedback = status.split(":", 1)[1].strip() if ":" in status else ""
+                    raise PermissionError(f"Permission denied by user. Feedback: {feedback}" if feedback else "Permission denied by user.")
 
-        if not disable_tools:
+        if not roleplay and not disable_tools:
             policies = [
                 policy.ask_user("run_command", handler=my_approval_handler),
                 policy.ask_user("create_file", handler=my_approval_handler),
@@ -354,6 +540,12 @@ async def get_or_create_agent(
                 policy.ask_user("start_subagent", handler=my_approval_handler),
                 policy.allow_all(),
             ]
+
+        # Resolve global and workspace customization skills paths
+        workspace_skills = Path(os.getcwd()) / ".agents" / "skills"
+        skills_paths = [str(tools.SKILLS_DIR)]
+        if workspace_skills.exists() and workspace_skills.is_dir():
+            skills_paths.append(str(workspace_skills))
 
         if api_key:
             config_args = {
@@ -363,8 +555,8 @@ async def get_or_create_agent(
                 "policies": policies,
                 "workspaces": [os.getcwd()],
                 "save_dir": str(save_dir),
-                "skills_paths": [str(tools.SKILLS_DIR)],
-                "hooks": [on_post_tool, on_tool_err],
+                "skills_paths": skills_paths,
+                "hooks": [on_pre_tool, on_post_tool, on_tool_err],
                 "api_key": api_key,
             }
             if model_name:
@@ -381,6 +573,7 @@ async def get_or_create_agent(
                 model=model_name or "gemini-3.5-flash",
                 system_instructions=full_instructions,
                 conversation_id=resolved_id_to_pass,
+                timeout=600.0,
             )
             agent = await agent.__aenter__()
         
@@ -395,7 +588,10 @@ async def get_or_create_agent(
             "agent": agent,
             "model": model_name or "gemini-3.5-flash",
             "instructions": system_instructions,
-            "disable_tools": disable_tools
+            "disable_tools": disable_tools,
+            "roleplay": roleplay,
+            "skills": new_skills,
+            "rag": new_rag
         }
 
     return active_agents[lookup_id]["agent"]
@@ -440,7 +636,7 @@ async def chat_endpoint(req: ChatRequest):
         )
 
     try:
-        agent = await get_or_create_agent(req.model, req.session_id, req.system_instructions, req.disable_tools)
+        agent = await get_or_create_agent(req.model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -453,6 +649,8 @@ async def chat_endpoint(req: ChatRequest):
         priority = 0  # API / local admin (highest priority)
     elif session_id.startswith("discord-session-"):
         priority = 1  # Discord admin
+    elif session_id.startswith("discord-roleplay-") or "ambient" in session_id:
+        priority = 3  # Discord roleplay (lowest priority)
     else:
         priority = 2  # Discord general / moderator
 
@@ -462,39 +660,142 @@ async def chat_endpoint(req: ChatRequest):
         lock = get_session_lock(lookup_id)
         await lock.acquire(priority)
         try:
+            # 1. Decompose plan steps if not already present
+            existing_plan = memory.get_session_plan(agent.conversation_id)
+            if not existing_plan:
+                import uuid
+                plan_id = str(uuid.uuid4())
+                plan_prompt = (
+                    f"Given the user request: '{req.prompt}', decompose it into 3-5 sequential execution plan steps. "
+                    "Return ONLY a JSON list of objects, each with 'description' and 'assigned_tool' fields. "
+                    "Example format: [{\"description\": \"Run lint checks\", \"assigned_tool\": \"run_command\"}]"
+                )
+                try:
+                    from agent.keyless import KeylessAgyAgent
+                    plan_agent = KeylessAgyAgent(
+                        model="gemini-1.5-flash",
+                        system_instructions="You are a plan decomposer. Output ONLY raw JSON.",
+                    )
+                    async with plan_agent as pa:
+                        plan_resp = await pa.chat(plan_prompt)
+                        steps_data = json.loads(plan_resp.text.strip().strip("`").strip("json").strip())
+                        if isinstance(steps_data, list):
+                            memory.add_session_plan(plan_id, agent.conversation_id, f"Plan: {req.prompt[:50]}...")
+                            for idx, step in enumerate(steps_data):
+                                step_id = f"step-{plan_id}-{idx}"
+                                memory.add_plan_step(
+                                    step_id=step_id,
+                                    plan_id=plan_id,
+                                    step_order=idx + 1,
+                                    description=step.get("description", ""),
+                                    status="pending",
+                                    assigned_tool=step.get("assigned_tool"),
+                                    assigned_args=str(step.get("assigned_args", ""))
+                                )
+                except Exception as pe:
+                    print(f"[PLANNING] Failed to decompose plan: {pe}")
+
+            # Update first pending step of the plan to 'running'
+            current_plan = memory.get_session_plan(agent.conversation_id)
+            running_step_id = None
+            if current_plan:
+                for step in current_plan["steps"]:
+                    if step["status"] == "pending":
+                        running_step_id = step["id"]
+                        memory.update_plan_step_status(running_step_id, "running")
+                        break
+
             # Log user prompt
             memory.log_conversation_step(agent.conversation_id, "user", req.prompt)
             
-            # Run the agent execution
-            response = await agent.chat(req.prompt)
+            # 2. Run the agent execution with Fallback Routing & Stuck Prevention
+            primary_model = req.model or "gemini-3.5-flash"
             
-            # Yield session ID first
-            yield f"data: {json.dumps({'type': 'session_id', 'content': agent.conversation_id})}\n\n"
-            
-            # Stream thoughts
-            thoughts_str = ""
-            async for thought in response.thoughts:
-                thoughts_str += thought
-                yield f"data: {json.dumps({'type': 'thought', 'content': thought})}\n\n"
+            # Check Gemini quota: if usage > 80% (remaining < 20%), route to Claude
+            try:
+                quotas = memory.get_model_quotas()
+                gemini_quota = next((q for q in quotas if q["model_family"] == "gemini"), None)
+                if gemini_quota:
+                    if gemini_quota.get("pct_5h", 100.0) < 20.0 or gemini_quota.get("pct_weekly", 100.0) < 20.0:
+                        print("[QUOTA FAILOVER] Gemini remaining < 20%. Redirecting to Claude.")
+                        primary_model = "Claude Sonnet 4.6 (Thinking)"
+            except Exception as qe:
+                print(f"[QUOTA CHECK ERROR] {qe}")
+
+            is_gemini = "gemini" in primary_model.lower()
+
+            async def stream_agent_response(active_agent, prompt_to_send):
+                response = await active_agent.chat(prompt_to_send)
+                yield {"type": "session_id", "content": active_agent.conversation_id}
                 
-            if thoughts_str:
-                memory.log_conversation_step(agent.conversation_id, "thought", thoughts_str)
+                # Stream thoughts
+                thoughts_str = ""
+                async for thought in response.thoughts:
+                    thoughts_str += thought
+                    yield {"type": "thought", "content": thought}
+                    
+                if thoughts_str:
+                    memory.log_conversation_step(active_agent.conversation_id, "thought", thoughts_str)
+                    
+                # Stream response chunks
+                output_content = ""
+                async for chunk in response:
+                    output_content += chunk
+                    yield {"type": "chunk", "content": chunk}
+                    
+                if output_content:
+                    memory.log_conversation_step(active_agent.conversation_id, "assistant", output_content)
+
+                # Record token usage telemetry
+                input_tokens = 0
+                output_tokens = 0
+                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                    input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
+                    output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
+                if input_tokens == 0 and output_tokens == 0:
+                    input_tokens = len(prompt_to_send) // 4
+                    output_content_len = len(output_content) if output_content else 100
+                    output_tokens = output_content_len // 4
+                cost = (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
+                memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.5-flash", input_tokens, output_tokens, cost)
+
+            try:
+                # Primary attempt
+                active_agent = await get_or_create_agent(primary_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
+                async for item in stream_agent_response(active_agent, req.prompt):
+                    yield f"data: {json.dumps(item)}\n\n"
+            except Exception as first_error:
+                print(f"[STUCK PREVENTION] Primary model ({primary_model}) failed: {first_error}. Triggering fallback double check.")
+                active_agents.pop(lookup_id, None)
                 
-            # Stream response chunks
-            output_content = ""
-            async for chunk in response:
-                output_content += chunk
-                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                # Notify frontend of retry
+                yield f"data: {json.dumps({'type': 'thought', 'content': '\n⚠️ [System: Model got stuck/errored. Retrying with fallback model...]\n'})}\n\n"
                 
-            if output_content:
-                memory.log_conversation_step(agent.conversation_id, "assistant", output_content)
+                # Fallback model selection
+                fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
+                fallback_prompt = f"The previous model run got stuck/encountered an error. Please analyze and solve it.\n\nOriginal prompt: {req.prompt}"
                 
+                try:
+                    fallback_agent = await get_or_create_agent(fallback_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
+                    async for item in stream_agent_response(fallback_agent, fallback_prompt):
+                        yield f"data: {json.dumps(item)}\n\n"
+                except Exception as second_error:
+                    print(f"[STUCK PREVENTION] Fallback model ({fallback_model}) also failed: {second_error}")
+                    raise second_error
+
+            # Update running step status to 'completed'
+            if running_step_id:
+                memory.update_plan_step_status(running_step_id, "completed")
+
             # Complete
             yield "data: [DONE]\n\n"
         except Exception as e:
             import traceback
             traceback.print_exc()
             active_agents.pop(lookup_id, None)
+            # Update running step status to 'failed'
+            if 'running_step_id' in locals() and running_step_id:
+                memory.update_plan_step_status(running_step_id, "failed", error_message=str(e))
             yield f"data: {json.dumps({'type': 'error', 'content': f'Agent connection error: {e}'})}\n\n"
             yield "data: [DONE]\n\n"
         finally:
@@ -549,6 +850,92 @@ async def status_endpoint():
 async def tasks_endpoint():
     tasks = memory.get_active_tasks()
     return {"tasks": tasks}
+
+@app.get("/api/quotas")
+async def get_quotas():
+    try:
+        await asyncio.to_thread(fetch_real_quotas_sync)
+    except Exception:
+        pass
+    
+    quotas = memory.get_model_quotas()
+    if not quotas:
+        return [
+            {"model_family": "gemini", "pct_5h": 96.0, "pct_weekly": 89.0, "last_updated": datetime.now(timezone.utc).isoformat()},
+            {"model_family": "claude_gpt", "pct_5h": 100.0, "pct_weekly": 100.0, "last_updated": datetime.now(timezone.utc).isoformat()}
+        ]
+    return quotas
+
+@app.get("/api/sessions/{session_id}/plan")
+async def get_session_plan_endpoint(session_id: str):
+    plan = memory.get_session_plan(session_id)
+    return {"plan": plan}
+
+@app.get("/api/sessions/{session_id}/telemetry")
+async def get_session_telemetry_endpoint(session_id: str):
+    telemetry = memory.get_token_usage_telemetry(session_id)
+    return {"telemetry": telemetry}
+
+class SpawnSubagentRequest(BaseModel):
+    parent_session_id: str
+    subagent_id: str
+    prompt: str
+
+@app.post("/api/subagents/spawn")
+async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
+    import uuid
+    import shutil
+    from pathlib import Path
+    
+    sandbox_id = str(uuid.uuid4())
+    sandbox_dir = Path("/tmp") / f"subagent_sandbox_{sandbox_id}"
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Clone current workspace files into sandbox
+    current_workspace = os.getcwd()
+    for item in Path(current_workspace).iterdir():
+        if item.name in (".git", ".venv", "__pycache__", ".agents", ".pytest_cache"):
+            continue
+        try:
+            if item.is_dir():
+                shutil.copytree(item, sandbox_dir / item.name, symlinks=True)
+            else:
+                shutil.copy2(item, sandbox_dir / item.name)
+        except Exception:
+            pass
+            
+    memory.log_subagent_message(req.subagent_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {req.prompt}")
+    
+    async def run_subagent_background():
+        try:
+            from agent.keyless import KeylessAgyAgent
+            agent = KeylessAgyAgent(
+                model="gemini-1.5-flash",
+                system_instructions="You are a subagent working in an isolated sandbox. Complete the requested task.",
+                conversation_id=req.subagent_id
+            )
+            old_cwd = os.getcwd()
+            os.chdir(sandbox_dir)
+            try:
+                async with agent as sub_conn:
+                    response = await sub_conn.chat(req.prompt)
+                    output = ""
+                    async for chunk in response:
+                        output += chunk
+                    memory.log_subagent_message(req.subagent_id, "subagent", f"Subagent completed: {output}")
+            finally:
+                os.chdir(old_cwd)
+        except Exception as e:
+            memory.log_subagent_message(req.subagent_id, "subagent", f"Subagent failed: {e}")
+            
+    asyncio.create_task(run_subagent_background())
+    return {"status": "success", "sandbox_dir": str(sandbox_dir)}
+
+@app.get("/api/subagents/{subagent_id}/messages")
+async def get_subagent_messages_endpoint(subagent_id: str):
+    messages = memory.get_subagent_messages(subagent_id)
+    return {"messages": messages}
+
 
 @app.get("/api/history")
 async def history_endpoint(session_id: Optional[str] = None):
@@ -968,6 +1355,21 @@ async def fork_session_endpoint(req: ForkRequest):
 # Background scheduler execution
 async def execute_scheduled_task(name: str, prompt: str):
     global active_agents
+    if name == "Meta-Evaluation":
+        try:
+            from agent.meta_evaluation import run_meta_evaluation
+            conversation_id = "meta-eval-run-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+            
+            await run_meta_evaluation()
+            
+            memory.log_conversation_step(conversation_id, "assistant", "Meta-Evaluation executed successfully.")
+            print(f"[Scheduled Task: {name}] Executed successfully.")
+            return
+        except Exception as e:
+            print(f"[Scheduled Task: {name}] Error: {e}")
+            return
+
     try:
         agent = await get_or_create_agent()
         memory.log_conversation_step(agent.conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")

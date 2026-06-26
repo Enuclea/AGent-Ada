@@ -102,6 +102,11 @@ def test_compact_all_memories(temp_memory_file, temp_db_file):
     mem["facts"] = ["Double Fact", "double fact", "Short Fact", "Short Fact that is much longer now and more descriptive"]
     memory.save_memory(mem)
     
+    # Write some duplicate / redundant memories to sqlite roleplay table
+    memory.add_roleplay_memory("discord-roleplay-1518087367465111594", "Key", "Fact") # main bar
+    memory.add_roleplay_memory("discord-roleplay-other", "Key", "Fact") # other session with identical fact (redundant)
+    memory.add_roleplay_memory("discord-roleplay-other", "Key", "Fact") # duplicate in same session
+    
     # Write more than 100 active tasks
     for i in range(115):
         memory.add_active_task(f"task-{i}", "test", f"details-{i}")
@@ -111,7 +116,54 @@ def test_compact_all_memories(temp_memory_file, temp_db_file):
     
     assert stats["memory_json_before_facts"] == 4
     assert stats["memory_json_after_facts"] == 2 # "double fact" (exact lowercase match) and "Short Fact" (subset of longer) pruned
+    assert stats["roleplay_memories_before"] == 3
+    assert stats["roleplay_memories_after"] == 1 # only main bar is kept because "other" is identical
     assert stats["active_tasks_before"] == 115
     assert stats["active_tasks_after"] == 100 # capped at 100
+
+def test_global_backstory_roleplay_memories(temp_db_file):
+    """Test that Ada's backstory and lore memories are retrieved globally across session IDs."""
+    # Add a memory about Ada's past in a specific session
+    memory.add_roleplay_memory("discord-roleplay-session-1", "Ada's Past - Childhood", "She grew up in the Coerthas Western Highlands.")
+    memory.add_roleplay_memory("discord-roleplay-session-1", "Ada's History", "Her uncle Octavian taught her archery.")
+    memory.add_roleplay_memory("discord-roleplay-session-1", "Ada's Lore", "She traveled to Gridania once.")
+    # Add standard memory that should not be global
+    memory.add_roleplay_memory("discord-roleplay-session-1", "Tavern Rules", "No fighting allowed.")
+
+    # Retrieve memories for a completely different session
+    results = memory.get_roleplay_memories("discord-roleplay-session-2")
+    
+    # Verify that the global backstory memories are present
+    keys = [r["key"] for r in results]
+    assert "Ada's Past - Childhood" in keys
+    assert "Ada's History" in keys
+    assert "Ada's Lore" in keys
+    # Verify that standard non-global memory is not present
+    assert "Tavern Rules" not in keys
+
+
+def test_get_auto_rag_context(temp_db_file):
+    """Test retrieving Auto-RAG context dynamically using FTS search."""
+    # Initially should be empty
+    assert memory.get_auto_rag_context("FTS5") == ""
+
+    # Log some steps
+    memory.log_conversation_step(
+        session_id="session_auto_rag",
+        role="user",
+        content="I am doing a unit test on FTS5 search",
+        tool_name=None
+    )
+    memory.log_conversation_step(
+        session_id="session_auto_rag",
+        role="assistant",
+        content="FTS5 search works wonderfully in SQLite.",
+        tool_name=None
+    )
+
+    # Search for FTS5
+    context = memory.get_auto_rag_context("FTS5")
+    assert "[AUTO-RAG: RELEVANT HISTORICAL INTERACTIONS]" in context
+    assert "FTS5 search works wonderfully" in context or "unit test on FTS5" in context
 
 

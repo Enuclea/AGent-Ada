@@ -80,11 +80,14 @@ async def run_agent(
     
     # Inject persistent memory and custom skills summaries
     memory_summary = memory.get_fact_summary()
-    installed_skills = tools.list_installed_skills()
+    installed_skills = tools.get_relevant_skills(initial_prompt)
+    rag_context = memory.get_auto_rag_context(initial_prompt)
     
     full_instructions = base_instructions
     if memory_summary:
         full_instructions += f"\n\n{memory_summary}"
+    if rag_context:
+        full_instructions += f"\n\n{rag_context}"
     if "No custom skills installed" not in installed_skills:
         full_instructions += f"\n\n[INSTALLED CUSTOM SKILLS/TOOLS]\n{installed_skills}\n[END OF INSTALLED CUSTOM SKILLS/TOOLS]"
 
@@ -93,25 +96,43 @@ async def run_agent(
     tool_calls_this_turn = 0
     current_active_task_id = None
 
-    async def my_approval_handler(tool_call: ToolCall) -> bool:
-        nonlocal session_auto_approve, active_status, tool_calls_this_turn, current_active_task_id
-        tool_calls_this_turn += 1
-        
-        # Generate and save task ID
+    @hooks.pre_tool_call_decide
+    async def on_pre_tool(tool_call: ToolCall):
+        nonlocal current_active_task_id
         import uuid
+        from google.antigravity.hooks.hooks import HookResult
+        
         task_id = str(uuid.uuid4())
         current_active_task_id = task_id
         
-        # Log to active tasks table
+        # Record in active tasks tracker
         memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
         
-        # Log the tool call step immediately to SQLite
+        # Log step to database history
         memory.log_conversation_step(
             current_session_id,
             "tool_call",
             str(tool_call.args),
             tool_name=tool_call.name
         )
+        return HookResult(allow=True)
+
+    async def my_approval_handler(tool_call: ToolCall) -> bool:
+        nonlocal session_auto_approve, active_status, tool_calls_this_turn, current_active_task_id
+        tool_calls_this_turn += 1
+        
+        task_id = current_active_task_id
+        if not task_id:
+            import uuid
+            task_id = str(uuid.uuid4())
+            current_active_task_id = task_id
+            memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
+            memory.log_conversation_step(
+                current_session_id,
+                "tool_call",
+                str(tool_call.args),
+                tool_name=tool_call.name
+            )
         
         if session_auto_approve:
             return True
@@ -122,24 +143,88 @@ async def run_agent(
             current_active_task_id = None
             return False
 
+        # Update database task status to pending_approval
+        memory.update_active_task_status(task_id, "pending_approval")
+
+        # Post the approval request to Discord
+        await memory.ask_discord_approval(task_id, tool_call.name, str(tool_call.args))
+
         if active_status:
             active_status.stop()
 
         console.print()
         console.print(Panel(
             f"[bold]Tool:[/bold] {escape(tool_call.name)}\n"
-            f"[bold]Arguments:[/bold] {escape(str(tool_call.args))}",
+            f"[bold]Arguments:[/bold] {escape(str(tool_call.args))}\n\n"
+            f"[bold cyan]Approval request posted to Discord control-room channel.[/bold cyan]",
             title="🔔 [bold yellow]Tool Confirmation Required[/bold yellow]",
             border_style="yellow",
             expand=False,
         ))
 
+        # Helper coroutine to poll database status
+        async def poll_db():
+            while True:
+                await asyncio.sleep(1.0)
+                status = memory.get_active_task_status(task_id)
+                if status == "approved":
+                    return "approved"
+                elif status and status.startswith("denied"):
+                    return status
+
+        choice = None
+        choice_source = None
+        
         loop = asyncio.get_event_loop()
+        import sys
+        
         try:
-            choice = await loop.run_in_executor(
-                None,
-                lambda: input("Allow execution? [y/N/all/none]: ").strip().lower()
-            )
+            if sys.stdin.isatty():
+                # We have a TTY. Run console input in executor and poll DB concurrently.
+                db_task = asyncio.create_task(poll_db())
+                console_task = loop.run_in_executor(
+                    None,
+                    lambda: input("Allow execution? [y/N/all/none]: ").strip().lower()
+                )
+                
+                done, pending = await asyncio.wait(
+                    [db_task, console_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                for p in pending:
+                    p.cancel()
+                    
+                for d in done:
+                    try:
+                        res = d.result()
+                        if isinstance(res, str):
+                            # DB status update won the race
+                            choice_source = "discord"
+                            if res == "approved":
+                                choice = "y"
+                            elif res.startswith("denied"):
+                                feedback = res.split(":", 1)[1].strip() if ":" in res else ""
+                                raise PermissionError(f"Permission denied by user. Feedback: {feedback}" if feedback else "Permission denied by user.")
+                        else:
+                            # Console input won the race
+                            choice_source = "console"
+                            choice = res
+                    except PermissionError:
+                        raise
+                    except Exception:
+                        choice = "n"
+            else:
+                # No TTY. Just wait for Discord approval in the DB.
+                res = await poll_db()
+                choice_source = "discord"
+                if res == "approved":
+                    choice = "y"
+                elif res.startswith("denied"):
+                    feedback = res.split(":", 1)[1].strip() if ":" in res else ""
+                    raise PermissionError(f"Permission denied by user. Feedback: {feedback}" if feedback else "Permission denied by user.")
+                else:
+                    choice = "n"
         except (KeyboardInterrupt, EOFError):
             console.print("\n[bold red]Execution denied due to user interrupt.[/bold red]")
             memory.update_active_task_status(task_id, "denied")
@@ -152,14 +237,18 @@ async def run_agent(
             active_status.start()
 
         if choice in ("y", "yes"):
+            if choice_source == "console":
+                memory.update_active_task_status(task_id, "approved")
             return True
         elif choice == "all":
             session_auto_approve = True
             console.print("[bold green]Auto-approving all subsequent tools in this session.[/bold green]")
+            memory.update_active_task_status(task_id, "approved")
             return True
         else:
             console.print("[bold red]Execution denied.[/bold red]")
-            memory.update_active_task_status(task_id, "denied")
+            if choice_source == "console":
+                memory.update_active_task_status(task_id, "denied")
             current_active_task_id = None
             return False
 
@@ -204,10 +293,18 @@ async def run_agent(
         tools.improve_agent_skill,
         tools.list_installed_skills,
         tools.search_past_conversations,
-        tools.list_repository_skills,
-        tools.view_repository_skill_code,
-        tools.install_repository_skill,
+        tools.youtube_to_mp3,
+        tools.schedule_task,
+        tools.list_scheduled_tasks,
+        tools.delete_scheduled_task,
+        tools.run_command,
     ]
+
+    # Resolve global and workspace skill folders
+    workspace_skills = Path(os.getcwd()) / ".agents" / "skills"
+    skills_paths = [str(tools.SKILLS_DIR)]
+    if workspace_skills.exists() and workspace_skills.is_dir():
+        skills_paths.append(str(workspace_skills))
 
     # 8. Build LocalAgentConfig
     config_args = {
@@ -217,8 +314,8 @@ async def run_agent(
         "policies": policies,
         "workspaces": resolved_workspaces,
         "save_dir": save_dir,
-        "skills_paths": [str(tools.SKILLS_DIR)],
-        "hooks": [on_post_tool, on_tool_err],
+        "skills_paths": skills_paths,
+        "hooks": [on_pre_tool, on_post_tool, on_tool_err],
     }
     
     if api_key:

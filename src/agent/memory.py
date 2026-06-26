@@ -87,7 +87,7 @@ def get_fact_summary() -> str:
 
 # --- SQLite Conversation History & FTS5 Search Database ---
 
-DB_FILE_PATH = Path.home() / ".agent" / "history.db"
+DB_FILE_PATH = Path(os.getenv("AGENT_DB_PATH", str(Path.home() / ".agent" / "history.db")))
 
 def init_db() -> None:
     """Initializes the SQLite conversation history and FTS5 search virtual tables."""
@@ -151,6 +151,70 @@ def init_db() -> None:
             next_run TEXT,
             last_run TEXT,
             status TEXT
+        )
+        """)
+        # Roleplay memories
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS roleplay_memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            key TEXT,
+            fact TEXT,
+            timestamp TEXT
+        )
+        """)
+        # Session plans
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS session_plans (
+            id TEXT PRIMARY KEY,
+            session_id TEXT,
+            title TEXT,
+            status TEXT,
+            created_at TEXT
+        )
+        """)
+        # Plan steps
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS plan_steps (
+            id TEXT PRIMARY KEY,
+            plan_id TEXT,
+            step_order INTEGER,
+            description TEXT,
+            status TEXT,
+            assigned_tool TEXT,
+            assigned_args TEXT,
+            error_message TEXT
+        )
+        """)
+        # Token usage telemetry
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS token_telemetry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            model_name TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cost REAL,
+            timestamp TEXT
+        )
+        """)
+        # Subagent messages
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS subagent_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subagent_id TEXT,
+            role TEXT,
+            message TEXT,
+            timestamp TEXT
+        )
+        """)
+        # Model quotas
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS model_quotas (
+            model_family TEXT PRIMARY KEY,
+            pct_5h REAL,
+            pct_weekly REAL,
+            last_updated TEXT
         )
         """)
         conn.commit()
@@ -447,21 +511,111 @@ def delete_scheduled_task(task_id: str) -> None:
     finally:
         conn.close()
 
+active_roleplay_session_id = None
 active_session_id = None
 
+def add_roleplay_memory(session_id: str, key: str, fact: str) -> None:
+    """Adds a new fact to the roleplay memory table."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            """
+            INSERT INTO roleplay_memories (session_id, key, fact, timestamp)
+            VALUES (?, ?, ?, ?)
+            """,
+            (session_id, key, fact, timestamp)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def get_roleplay_memories(session_id: str) -> List[Dict[str, Any]]:
+    """Retrieves all roleplay memories saved for a specific session/channel, including shared rumors and messages."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    results = []
+    seen = set()
+    
+    def add_row(key, fact, timestamp):
+        # normalize and check uniqueness of key-fact pair to prevent duplicates
+        unique_key = (key.strip().lower(), fact.strip().lower())
+        if unique_key not in seen:
+            seen.add(unique_key)
+            results.append({
+                "key": key,
+                "fact": fact,
+                "timestamp": timestamp
+            })
+
+    try:
+        cursor = conn.cursor()
+        
+        # 1. Fetch memories for the specific session_id
+        cursor.execute(
+            """
+            SELECT key, fact, timestamp FROM roleplay_memories 
+            WHERE session_id = ? 
+            ORDER BY id ASC
+            """,
+            (session_id,)
+        )
+        for row in cursor.fetchall():
+            add_row(row[0], row[1], row[2])
+            
+        # 2. Fetch all rumor, message, and Ada's backstory memories from ALL sessions (shared globally)
+        cursor.execute(
+            """
+            SELECT key, fact, timestamp FROM roleplay_memories 
+            WHERE key LIKE '%rumor%' OR key LIKE '%message%' OR key LIKE '%rumour%'
+               OR LOWER(key) LIKE '%ada%past%' OR LOWER(key) LIKE '%ada%history%'
+               OR LOWER(key) LIKE '%ada%backstory%' OR LOWER(key) LIKE '%ada%lore%'
+            ORDER BY id ASC
+            """
+        )
+        for row in cursor.fetchall():
+            add_row(row[0], row[1], row[2])
+            
+        # 3. If this is a DM session or another channel, also pull memories of the main bar
+        main_bar_session = "discord-roleplay-1518087367465111594"
+        if session_id != main_bar_session:
+            cursor.execute(
+                """
+                SELECT key, fact, timestamp FROM roleplay_memories 
+                WHERE session_id = ? 
+                ORDER BY id ASC
+                """,
+                (main_bar_session,)
+            )
+            for row in cursor.fetchall():
+                add_row(row[0], row[1], row[2])
+                
+    except Exception as e:
+        print(f"Error in get_roleplay_memories: {e}")
+    finally:
+        conn.close()
+    return results
+
 def compact_all_memories() -> Dict[str, Any]:
-    """Compacts persistent memories in memory.json and history.db to free up space.
+    """Compacts study/roleplay memories in memory.json and history.db to free up space.
     
     1. Deduplicates memory.json facts (exact matches case-insensitive, and subsets).
-    2. Prunes completed or failed tasks in active_tasks, keeping only the 100 most recent ones.
-    3. Prunes orphaned task_logs whose task_id is no longer kept in active_tasks.
-    4. Runs SQLite VACUUM to reclaim disk space.
+    2. Deduplicates roleplay_memories in SQLite database:
+       - Removes exact duplicate entries of (session_id, key, fact).
+       - Removes redundant non-main-bar session memories which identically exist in the main bar session.
+    3. Prunes completed or failed tasks in active_tasks, keeping only the 100 most recent ones.
+    4. Prunes orphaned task_logs whose task_id is no longer kept in active_tasks.
+    5. Runs SQLite VACUUM to reclaim disk space.
     """
     stats = {
         "memory_json_before_facts": 0,
         "memory_json_after_facts": 0,
         "db_size_before": 0,
         "db_size_after": 0,
+        "roleplay_memories_before": 0,
+        "roleplay_memories_after": 0,
         "active_tasks_before": 0,
         "active_tasks_after": 0,
         "task_logs_deleted": 0,
@@ -487,8 +641,6 @@ def compact_all_memories() -> Dict[str, Any]:
     final_facts = []
     for f in unique_facts:
         norm = f.strip().lower()
-        # If there's another fact in unique_facts that contains this fact entirely and is longer and more descriptive,
-        # we consider this one redundant.
         is_sub = False
         for other in unique_facts:
             other_norm = other.strip().lower()
@@ -511,6 +663,9 @@ def compact_all_memories() -> Dict[str, Any]:
             cursor = conn.cursor()
             
             # --- Get initial counts ---
+            cursor.execute("SELECT count(*) FROM roleplay_memories")
+            stats["roleplay_memories_before"] = cursor.fetchone()[0]
+            
             cursor.execute("SELECT count(*) FROM active_tasks")
             stats["active_tasks_before"] = cursor.fetchone()[0]
             
@@ -538,7 +693,48 @@ def compact_all_memories() -> Dict[str, Any]:
             cursor.execute("DELETE FROM task_logs WHERE task_id NOT IN (SELECT id FROM active_tasks)")
             stats["task_logs_deleted"] = cursor.rowcount
             
-            pass
+            # --- Deduplicate and simplify roleplay_memories ---
+            cursor.execute("SELECT id, session_id, key, fact, timestamp FROM roleplay_memories ORDER BY id ASC")
+            all_rp = cursor.fetchall()
+            
+            # Separate main bar and others
+            main_bar_session = "discord-roleplay-1518087367465111594"
+            main_bar_facts = {} # (normalized_key, normalized_fact) -> id
+            other_facts = []
+            
+            for row_id, sess_id, key, fact, ts in all_rp:
+                norm_key = key.strip().lower()
+                norm_fact = fact.strip().lower()
+                if sess_id == main_bar_session:
+                    main_bar_facts[(norm_key, norm_fact)] = row_id
+                else:
+                    other_facts.append((row_id, sess_id, norm_key, norm_fact))
+                    
+            # Delete redundant other memories that are exactly represented in the main bar session
+            ids_to_delete = set()
+            for row_id, sess_id, norm_key, norm_fact in other_facts:
+                if (norm_key, norm_fact) in main_bar_facts:
+                    ids_to_delete.add(row_id)
+                    
+            # Delete duplicates within the same session (keeps only the latest/highest ID row)
+            seen_session_key_fact = set()
+            for row_id, sess_id, key, fact, ts in reversed(all_rp):
+                if row_id in ids_to_delete:
+                    continue
+                norm_key = key.strip().lower()
+                norm_fact = fact.strip().lower()
+                uniq = (sess_id, norm_key, norm_fact)
+                if uniq in seen_session_key_fact:
+                    ids_to_delete.add(row_id)
+                else:
+                    seen_session_key_fact.add(uniq)
+                    
+            if ids_to_delete:
+                placeholders = ",".join("?" for _ in ids_to_delete)
+                cursor.execute(f"DELETE FROM roleplay_memories WHERE id IN ({placeholders})", list(ids_to_delete))
+                
+            cursor.execute("SELECT count(*) FROM roleplay_memories")
+            stats["roleplay_memories_after"] = cursor.fetchone()[0]
             
             conn.commit()
             cursor.execute("VACUUM")
@@ -549,13 +745,376 @@ def compact_all_memories() -> Dict[str, Any]:
             
         stats["db_size_after"] = DB_FILE_PATH.stat().st_size
         
-    # Record the last compaction completion time in persistent memory
     try:
         update_key_value("last_compaction", datetime.now(timezone.utc).isoformat())
     except Exception:
         pass
         
     return stats
+
+def get_active_task_status(task_id: str) -> Optional[str]:
+    """Retrieves the status of a specific task by ID."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM active_tasks WHERE id = ?", (task_id,))
+        row = cursor.fetchone()
+        if row:
+            return row[0]
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return None
+
+def get_auto_rag_context(prompt: Optional[str]) -> str:
+    """Runs a FTS search on past conversations for the given prompt under the hood,
+    returning a formatted string of the top 3 most relevant historical interactions.
+    """
+    import re
+    if not prompt:
+        return ""
+        
+    clean_query = " OR ".join(re.findall(r"\w+", prompt))
+    if not clean_query:
+        return ""
+
+    results = []
+    try:
+        results = search_conversations(clean_query)
+    except Exception:
+        try:
+            results = search_conversations(prompt)
+        except Exception:
+            pass
+
+    if not results:
+        return ""
+
+    lines = []
+    seen_content = set()
+    count = 0
+    for res in results:
+        content = res["content"].strip()
+        if not content or content in seen_content:
+            continue
+        seen_content.add(content)
+        
+        role = res["role"].upper()
+        tool_desc = f" (Tool Call: {res['tool_name']})" if res["tool_name"] else ""
+        truncated = content
+        if len(truncated) > 300:
+            truncated = truncated[:300] + "... [truncated]"
+            
+        lines.append(f"- **Role:** {role}{tool_desc}\n  **Content:** {truncated}")
+        count += 1
+        if count >= 3:
+            break
+
+    if not lines:
+        return ""
+
+    return "[AUTO-RAG: RELEVANT HISTORICAL INTERACTIONS]\n" + "\n".join(lines) + "\n[END OF AUTO-RAG]"
+
+async def ask_discord_approval(task_id: str, tool_name: str, tool_args: str) -> None:
+    """Posts a tool approval request to the Discord #control-room channel with buttons."""
+    import aiohttp
+    import json
+    
+    token = None
+    env_path = Path(__file__).parent.parent.parent / "discord" / ".env"
+    if env_path.exists():
+        with open(env_path, "r") as f:
+            for line in f:
+                if line.startswith("DISCORD_BOT_TOKEN="):
+                    token = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+
+    if not token:
+        print(f"[APPROVAL] No Discord bot token found at {env_path}.")
+        return
+
+    channel_id = 1518056970538586272
+    config_path = Path(__file__).parent.parent.parent / "discord" / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                for cid, info in config.get("channels", {}).items():
+                    if info.get("channel_name") == "control-room":
+                        channel_id = int(cid)
+                        break
+        except Exception:
+            pass
+
+    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json",
+    }
+    
+    payload = {
+        "embeds": [{
+            "title": "🔔 Tool Confirmation Required",
+            "description": f"The agent is proposing to execute the following tool in a background task:\n\n"
+                           f"**Tool:** `{tool_name}`\n"
+                           f"**Arguments:**\n```json\n{tool_args}\n```",
+            "color": 16776960,  # Yellow
+            "fields": [
+                {"name": "Task ID", "value": f"`{task_id}`", "inline": True}
+            ]
+        }],
+        "components": [
+            {
+                "type": 1,  # Action Row
+                "components": [
+                    {
+                        "type": 2,  # Button
+                        "label": "Approve",
+                        "style": 3,  # Success (green)
+                        "custom_id": f"approve_{task_id}"
+                    },
+                    {
+                        "type": 2,  # Button
+                        "label": "Deny (with feedback)",
+                        "style": 4,  # Danger (red)
+                        "custom_id": f"deny_{task_id}"
+                    }
+                ]
+            }
+        ]
+    }
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    print(f"[APPROVAL] Failed to send approval request: {resp.status} - {text}")
+        except Exception as e:
+            print(f"[APPROVAL] Exception sending approval request: {e}")
+
+# --- Hermes DB Helpers ---
+
+def add_session_plan(plan_id: str, session_id: str, title: str, status: str = "pending") -> None:
+    """Adds a new execution plan for a session."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        created_at = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "INSERT OR REPLACE INTO session_plans (id, session_id, title, status, created_at) VALUES (?, ?, ?, ?, ?)",
+            (plan_id, session_id, title, status, created_at)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def add_plan_step(
+    step_id: str,
+    plan_id: str,
+    step_order: int,
+    description: str,
+    status: str = "pending",
+    assigned_tool: Optional[str] = None,
+    assigned_args: Optional[str] = None
+) -> None:
+    """Adds a step to an existing plan."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO plan_steps 
+            (id, plan_id, step_order, description, status, assigned_tool, assigned_args, error_message) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (step_id, plan_id, step_order, description, status, assigned_tool, assigned_args)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def update_plan_step_status(step_id: str, status: str, error_message: Optional[str] = None) -> None:
+    """Updates the execution status of a plan step."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE plan_steps SET status = ?, error_message = ? WHERE id = ?",
+            (status, error_message, step_id)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def get_session_plan(session_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieves the active plan and its steps for a session."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, title, status, created_at FROM session_plans WHERE session_id = ? ORDER BY created_at DESC LIMIT 1", (session_id,))
+        plan_row = cursor.fetchone()
+        if not plan_row:
+            return None
+        
+        plan_id = plan_row[0]
+        cursor.execute(
+            "SELECT id, step_order, description, status, assigned_tool, assigned_args, error_message FROM plan_steps WHERE plan_id = ? ORDER BY step_order ASC",
+            (plan_id,)
+        )
+        step_rows = cursor.fetchall()
+        
+        steps = []
+        for r in step_rows:
+            steps.append({
+                "id": r[0],
+                "step_order": r[1],
+                "description": r[2],
+                "status": r[3],
+                "assigned_tool": r[4],
+                "assigned_args": r[5],
+                "error_message": r[6]
+            })
+            
+        return {
+            "id": plan_id,
+            "title": plan_row[1],
+            "status": plan_row[2],
+            "created_at": plan_row[3],
+            "steps": steps
+        }
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def log_token_usage(session_id: str, model_name: str, input_tokens: int, output_tokens: int, cost: float) -> None:
+    """Records token usage and cost calculation in the telemetry logs."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "INSERT INTO token_telemetry (session_id, model_name, input_tokens, output_tokens, cost, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, model_name, input_tokens, output_tokens, cost, timestamp)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def get_token_usage_telemetry(session_id: str) -> List[Dict[str, Any]]:
+    """Retrieves token usage telemetry records for a session."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    results = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, model_name, input_tokens, output_tokens, cost, timestamp FROM token_telemetry WHERE session_id = ? ORDER BY timestamp ASC",
+            (session_id,)
+        )
+        rows = cursor.fetchall()
+        for r in rows:
+            results.append({
+                "id": r[0],
+                "model_name": r[1],
+                "input_tokens": r[2],
+                "output_tokens": r[3],
+                "cost": r[4],
+                "timestamp": r[5]
+            })
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return results
+
+def log_subagent_message(subagent_id: str, role: str, message: str) -> None:
+    """Records a messaging communication log between parent and subagent."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "INSERT INTO subagent_messages (subagent_id, role, message, timestamp) VALUES (?, ?, ?, ?)",
+            (subagent_id, role, message, timestamp)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def get_subagent_messages(subagent_id: str) -> List[Dict[str, Any]]:
+    """Retrieves all coordination logs for a subagent."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    results = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT role, message, timestamp FROM subagent_messages WHERE subagent_id = ? ORDER BY timestamp ASC",
+            (subagent_id,)
+        )
+        rows = cursor.fetchall()
+        for r in rows:
+            results.append({
+                "role": r[0],
+                "message": r[1],
+                "timestamp": r[2]
+            })
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return results
+
+def update_model_quotas(model_family: str, pct_5h: float, pct_weekly: float) -> None:
+    """Updates or inserts the quota usage percentages for a model family."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        last_updated = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO model_quotas (model_family, pct_5h, pct_weekly, last_updated)
+            VALUES (?, ?, ?, ?)
+            """,
+            (model_family, pct_5h, pct_weekly, last_updated)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def get_model_quotas() -> List[Dict[str, Any]]:
+    """Retrieves all current model quota records."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    results = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT model_family, pct_5h, pct_weekly, last_updated FROM model_quotas")
+        rows = cursor.fetchall()
+        for r in rows:
+            results.append({
+                "model_family": r[0],
+                "pct_5h": r[1],
+                "pct_weekly": r[2],
+                "last_updated": r[3]
+            })
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return results
 
 # Initialize database on module load
 try:

@@ -30,6 +30,10 @@
                     <span class="pulse-dot"></span>
                     <span id="connection-status">Online</span>
                 </div>
+                <div class="grace-indicator" id="grace-status" title="Grace (Timekeeper) monitoring status">
+                    <span class="grace-dot"></span>
+                    <span>Grace: <span id="grace-state-text">Idle</span></span>
+                </div>
                 <div class="session-badge" id="header-session-id" title="Click to copy Session ID">
                     <i class="fa-regular fa-copy"></i> <span class="id-val">Loading...</span>
                 </div>
@@ -94,6 +98,94 @@
                         <div class="workspace-info">
                             <span class="info-label">Active Workspace:</span>
                             <span class="info-val" id="workspace-path" title="Loading...">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Plan & Execution Steps Widget -->
+                <div class="widget-card glass-card" id="plan-card">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-list-check"></i> Plan &amp; Execution Steps</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="plan-steps-container" class="plan-steps-container">
+                            <div class="plan-empty-state" id="plan-empty-state">
+                                <p>No execution plan generated for this session yet.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Resource Consumption Widget -->
+                <div class="widget-card glass-card" id="telemetry-card">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-chart-line"></i> Resource Consumption</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="telemetry-stats">
+                            <div class="telemetry-stat">
+                                <span class="stat-label">Total Input Tokens:</span>
+                                <span class="stat-val" id="telemetry-input-tokens">0</span>
+                            </div>
+                            <div class="telemetry-stat">
+                                <span class="stat-label">Total Output Tokens:</span>
+                                <span class="stat-val" id="telemetry-output-tokens">0</span>
+                            </div>
+                            <div class="telemetry-stat highlight">
+                                <span class="stat-label">Estimated Cost:</span>
+                                <span class="stat-val" id="telemetry-cost">$0.000000</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Model Quotas Widget -->
+                <div class="widget-card glass-card" id="quotas-card">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-gauge-high"></i> Model Quotas</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="quota-group">
+                            <h3 class="quota-group-title">Gemini Models</h3>
+                            <div class="quota-metric">
+                                <div class="quota-meta">
+                                    <span class="quota-label">5-Hour Limit</span>
+                                    <span class="quota-percentage" id="gemini-5h-val">Loading...</span>
+                                </div>
+                                <div class="quota-progress-bar-container">
+                                    <div class="quota-progress-bar" id="gemini-5h-bar" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                            <div class="quota-metric">
+                                <div class="quota-meta">
+                                    <span class="quota-label">Weekly Limit</span>
+                                    <span class="quota-percentage" id="gemini-weekly-val">Loading...</span>
+                                </div>
+                                <div class="quota-progress-bar-container">
+                                    <div class="quota-progress-bar" id="gemini-weekly-bar" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="quota-group" style="margin-top: 15px;">
+                            <h3 class="quota-group-title">Claude &amp; GPT Models</h3>
+                            <div class="quota-metric">
+                                <div class="quota-meta">
+                                    <span class="quota-label">5-Hour Limit</span>
+                                    <span class="quota-percentage" id="claude-5h-val">Loading...</span>
+                                </div>
+                                <div class="quota-progress-bar-container">
+                                    <div class="quota-progress-bar" id="claude-5h-bar" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                            <div class="quota-metric">
+                                <div class="quota-meta">
+                                    <span class="quota-label">Weekly Limit</span>
+                                    <span class="quota-percentage" id="claude-weekly-val">Loading...</span>
+                                </div>
+                                <div class="quota-progress-bar-container">
+                                    <div class="quota-progress-bar" id="claude-weekly-bar" style="width: 0%;"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

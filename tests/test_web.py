@@ -209,3 +209,19 @@ def test_compaction_logic():
         assert rows[-1][1] == "Step Content 64"
     finally:
         conn.close()
+
+def teardown_module():
+    try:
+        os.remove(tmp_db_path)
+    except OSError:
+        pass
+
+def test_conditional_tool_registration():
+    """Verify that backup_discord_channel is conditionally registered in get_or_create_agent."""
+    import inspect
+    from agent import web
+    
+    source = inspect.getsource(web.get_or_create_agent)
+    assert "tools.backup_discord_channel" in source
+    assert "if not is_discord:" in source or "if not is_discord" in source
+

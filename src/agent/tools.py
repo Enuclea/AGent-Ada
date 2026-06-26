@@ -1,3 +1,4 @@
+import os
 import re
 import json
 from pathlib import Path
@@ -6,6 +7,7 @@ from typing import List, Optional
 from agent import memory
 
 SKILLS_DIR = Path.home() / ".agent" / "skills"
+WORKSPACE_SKILLS_DIR = Path(os.getcwd()) / ".agents" / "skills"
 OPENCLAW_EXTS_DIR = Path.home() / ".openclaw" / "extensions"
 OPENCLAW_SKILLS_DIR = Path.home() / ".openclaw" / "skills"
 HERMES_SKILLS_DIR = Path.home() / ".hermes" / "skills"
@@ -430,6 +432,356 @@ def install_repository_skill(skill_name: str) -> str:
         )
     except Exception as e:
         return f"Error installing skill: {e}"
+
+def get_relevant_skills(prompt: Optional[str] = None) -> str:
+    """Dynamically retrieves and formats only the custom skills relevant to the prompt.
+    
+    Uses FTS-like keyword matching on skill names, descriptions, and categories.
+    """
+    if not prompt:
+        return list_installed_skills()
+
+    # Tokenize prompt to lower-case words
+    words = set(re.findall(r"\w+", prompt.lower()))
+    # Filter out common stop words
+    stop_words = {"the", "a", "an", "and", "or", "but", "if", "then", "else", "when", "at", "by", "for", "with", "about", "to", "in", "on", "of", "from", "is", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "please", "run", "use", "make", "find", "check"}
+    query_words = {w for w in words if len(w) > 2 and w not in stop_words}
+
+    skills = {}
+    
+    # Scan all directories
+    paths = []
+    if SKILLS_DIR.exists() and SKILLS_DIR.is_dir():
+        paths.extend([p for p in SKILLS_DIR.iterdir() if p.is_dir()])
+    if WORKSPACE_SKILLS_DIR.exists() and WORKSPACE_SKILLS_DIR.is_dir():
+        paths.extend([p for p in WORKSPACE_SKILLS_DIR.iterdir() if p.is_dir()])
+
+    for folder in paths:
+        skill_md = folder / "SKILL.md"
+        if skill_md.exists() and skill_md.is_file():
+            try:
+                with open(skill_md, "r", encoding="utf-8") as f:
+                    content = f.read()
+                fm = _parse_frontmatter(content)
+                name = fm.get("name", folder.name)
+                desc = fm.get("description", "")
+                category = fm.get("category", "")
+                
+                # Check for matches
+                search_text = f"{name} {desc} {category} {content}".lower()
+                
+                # Calculate match score
+                score = 0
+                for qw in query_words:
+                    if qw in search_text:
+                        score += 1
+                        # Give extra weight if it matches name or category
+                        if qw in name.lower() or qw in category.lower():
+                            score += 2
+                
+                if score > 0:
+                    skills[name] = (desc, score)
+            except Exception:
+                continue
+
+    if not skills:
+        return "No relevant custom skills found for this request."
+
+    # Sort by score descending
+    sorted_skills = sorted(skills.items(), key=lambda x: x[1][1], reverse=True)
+    
+    # Format list
+    skills_list = [f"- {name}: {info[0]}" for name, info in sorted_skills]
+    return "Relevant custom skills for this request:\n" + "\n".join(skills_list)
+
+def record_roleplay_memory(key: str, fact: str) -> str:
+    """Saves an important FFXIV roleplay fact, detail, or memory about a person, place, or event in the current session.
+    
+    Use this to help Ada remember things users tell her, their preferences, debts, or historical events in the bar.
+    
+    Args:
+        key: The person, subject, or topic of the memory (e.g. 'The Lady', 'Gilgamesh', 'Mead', 'Bar Rules').
+        fact: The specific detail to remember (e.g. 'Enjoys chamomile tea and hates ale', 'Owes 100 gil').
+    """
+    session_id = getattr(memory, "active_roleplay_session_id", None) or "global-roleplay"
+    memory.add_roleplay_memory(session_id, key, fact)
+    return f"Ada has noted and remembered that {key}: {fact}"
+
+
+async def backup_discord_channel(channel_id: str) -> str:
+    """Backs up all messages from a given Discord channel to a text file.
+    
+    This tool is only available on the web-side dashboard and cannot be triggered from Discord.
+    
+    Args:
+        channel_id: The ID of the Discord channel to back up (must be a numeric string or integer).
+    """
+    import os
+    import asyncio
+    from pathlib import Path
+    from datetime import datetime, timezone
+    import discord
+    from dotenv import load_dotenv
+
+    # 1. Validate channel_id to prevent any directory traversal or injection
+    channel_id_str = str(channel_id).strip()
+    if not channel_id_str.isdigit():
+        return "Error: channel_id must be a numeric string or integer containing only digits."
+
+    # 2. Determine file paths and apply strict path containment checks
+    project_root = Path(__file__).resolve().parent.parent.parent
+    backup_dir = project_root / "discord" / "channel_backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    backup_file_path = backup_dir / f"discord_channel_{channel_id_str}_backup.txt"
+    
+    # Resolve paths for absolute verification
+    abs_backup_file = backup_file_path.resolve()
+    abs_backup_dir = backup_dir.resolve()
+    if not str(abs_backup_file).startswith(str(abs_backup_dir) + os.path.sep):
+        return "Error: Directory traversal attempt detected."
+
+    # 3. Load Discord Bot Token
+    discord_env_path = project_root / "discord" / ".env"
+    if discord_env_path.exists():
+        load_dotenv(discord_env_path)
+    else:
+        load_dotenv(Path.home() / ".agent" / ".env")
+        load_dotenv()
+
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    if not token:
+        return "Error: DISCORD_BOT_TOKEN is not configured in the environment or .env file."
+
+    # 4. Initialize Discord Client
+    intents = discord.Intents.default()
+    intents.message_content = True
+
+    class BackupClient(discord.Client):
+        def __init__(self, target_channel_id: int, file_path: Path, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.target_channel_id = target_channel_id
+            self.file_path = file_path
+            self.result_message = ""
+            self.error = None
+
+        async def on_ready(self):
+            try:
+                # Fetch channel
+                channel = self.get_channel(self.target_channel_id)
+                if not channel:
+                    channel = await self.fetch_channel(self.target_channel_id)
+
+                if not channel:
+                    raise ValueError(f"Channel with ID {self.target_channel_id} not found.")
+
+                if not isinstance(channel, (discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel)):
+                    raise ValueError(f"Channel with ID {self.target_channel_id} is not a messageable text channel.")
+
+                messages_count = 0
+                with open(self.file_path, "w", encoding="utf-8") as f:
+                    f.write(f"--- Backup of Channel: {channel.name} (ID: {channel.id}) ---\n")
+                    f.write(f"--- Generated at: {datetime.now(timezone.utc).isoformat()} UTC ---\n\n")
+
+                    # Fetch messages recursively
+                    async for message in channel.history(limit=None, oldest_first=True):
+                        timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                        display_name = getattr(message.author, "display_name", "")
+                        username = getattr(message.author, "name", "")
+                        if display_name and username and display_name != username:
+                            author = f"{display_name} ({username})"
+                        else:
+                            author = display_name or username or str(message.author)
+                        content = message.content or ""
+                        f.write(f"[{timestamp}] {author}: {content}\n")
+
+                        if message.attachments:
+                            attachment_urls = ", ".join([att.url for att in message.attachments])
+                            f.write(f"  Attachments: {attachment_urls}\n")
+
+                        if message.embeds:
+                            for embed in message.embeds:
+                                embed_parts = []
+                                if embed.title:
+                                    embed_parts.append(f"Title: {embed.title}")
+                                if embed.description:
+                                    embed_parts.append(f"Description: {embed.description}")
+                                if embed.url:
+                                    embed_parts.append(f"URL: {embed.url}")
+                                for field in embed.fields:
+                                    embed_parts.append(f"Field {field.name}: {field.value}")
+                                if embed_parts:
+                                    f.write(f"  Embed: {'; '.join(embed_parts)}\n")
+                        messages_count += 1
+
+                self.result_message = f"Successfully backed up {messages_count} messages from channel #{channel.name} to {self.file_path}"
+            except Exception as e:
+                self.error = e
+            finally:
+                await self.close()
+
+    client = BackupClient(target_channel_id=int(channel_id_str), file_path=abs_backup_file, intents=intents)
+    try:
+        await asyncio.wait_for(client.start(token), timeout=60.0)
+    except asyncio.TimeoutError:
+        await client.close()
+        return "Error: Discord connection timed out after 60 seconds."
+    except Exception as e:
+        return f"Error: Failed to connect to Discord: {e}"
+
+    if client.error:
+        return f"Error: Failed to backup channel: {client.error}"
+
+    return client.result_message
+
+
+def youtube_to_mp3(url: str) -> str:
+    """Downloads audio from a YouTube URL, converts it to MP3, and saves it in the shared folder under mp3.
+    
+    Args:
+        url: The YouTube video URL (e.g. 'https://www.youtube.com/watch?v=...').
+    
+    Returns:
+        A success message containing the direct download URL, or an error message.
+    """
+    import os
+    import urllib.parse
+    import yt_dlp
+
+    target_dir = Path("/home/dan/AGent/share/data/mp3")
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return f"Error: Failed to create directories: {e}"
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': str(target_dir / '%(title)s.%(ext)s'),
+        'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            mp3_path = Path(os.path.splitext(filename)[0] + '.mp3')
+            
+            if not mp3_path.exists():
+                return f"Error: Conversion to MP3 failed. Output file '{mp3_path}' not found."
+            
+            host_ip = "10.250.1.200"
+            port = 8443
+            quoted_filename = urllib.parse.quote(mp3_path.name)
+            download_url = f"https://{host_ip}:{port}/files/mp3/{quoted_filename}"
+            
+            return f"Successfully downloaded and converted video to MP3:\n" \
+                   f"🎵 **Song Title**: {info.get('title')}\n" \
+                   f"📁 **Location**: `{mp3_path}`\n" \
+                   f"🔗 **Download URL**: {download_url}"
+    except Exception as e:
+        return f"Error: yt-dlp download/conversion failed: {e}"
+
+
+def schedule_task(name: str, prompt: str, cron_expr: str) -> str:
+    """Schedules a persistent, recurring background task to run instructions.
+    
+    The task will be executed periodically by the persistent scheduler daemon.
+    
+    Args:
+        name: A unique, descriptive name for the task (e.g. 'Daily Stock Check').
+        prompt: The instruction prompt the agent will execute when the schedule triggers.
+        cron_expr: Cron expression (e.g. '0 14 * * 1-5' for weekdays at 14:00) or an interval in seconds.
+    """
+    import uuid
+    from datetime import datetime, timezone
+    from agent import memory
+    
+    try:
+        from agent.web import get_next_cron_run
+    except ImportError:
+        from datetime import timedelta
+        def get_next_cron_run(expr, from_dt):
+            return from_dt + timedelta(seconds=60)
+            
+    schedule_id = str(uuid.uuid4())
+    try:
+        next_run_dt = get_next_cron_run(cron_expr, datetime.now(timezone.utc))
+        next_run = next_run_dt.isoformat()
+    except Exception as e:
+        return f"Error: Invalid cron expression or interval: {e}"
+        
+    try:
+        memory.add_scheduled_task(schedule_id, name, prompt, cron_expr, next_run)
+        return f"Successfully scheduled task '{name}':\n" \
+               f"🆔 **Task ID**: `{schedule_id}`\n" \
+               f"🕒 **Next Run**: {next_run} UTC\n" \
+               f"🔁 **Schedule**: `{cron_expr}`"
+    except Exception as e:
+        return f"Error: Failed to register schedule in database: {e}"
+
+
+def list_scheduled_tasks() -> str:
+    """Lists all active and configured persistent scheduled tasks."""
+    from agent import memory
+    try:
+        tasks = memory.get_scheduled_tasks()
+        if not tasks:
+            return "No scheduled tasks configured."
+        res = ["Active scheduled tasks:"]
+        for t in tasks:
+            if isinstance(t, dict):
+                res.append(f"- **{t['name']}** (ID: `{t['id']}`): Cron: `{t['cron_expr']}`, Next Run: {t['next_run']}")
+            else:
+                res.append(f"- **{t[1]}** (ID: `{t[0]}`): Cron: `{t[3]}`, Next Run: {t[4]}")
+        return "\n".join(res)
+    except Exception as e:
+        return f"Error listing scheduled tasks: {e}"
+
+
+def delete_scheduled_task(task_id: str) -> str:
+    """Deletes/cancels a persistent scheduled task by its ID.
+    
+    Args:
+        task_id: The unique ID of the scheduled task.
+    """
+    from agent import memory
+    try:
+        memory.delete_scheduled_task(task_id)
+        return f"Successfully deleted scheduled task `{task_id}`."
+    except Exception as e:
+        return f"Error deleting scheduled task: {e}"
+
+
+async def run_command(command: str) -> str:
+    """Runs a shell command in the workspace with a timeout limit of 60 seconds.
+    
+    Args:
+        command: The command to execute in the shell.
+    """
+    import asyncio
+    proc = await asyncio.create_subprocess_shell(
+        command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+        output = stdout.decode(errors="replace") + stderr.decode(errors="replace")
+        return output
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        raise TimeoutError(f"Command '{command}' timed out after 60 seconds.")
 
 
 

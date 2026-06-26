@@ -866,6 +866,41 @@ select:focus {
     }
 }
 
+/* Grace Timekeeper Indicator */
+.grace-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.03);
+    padding: 0.35rem 0.75rem;
+    border-radius: 20px;
+    border: 1px solid var(--card-border);
+    transition: all 0.3s ease;
+}
+
+.grace-indicator.active {
+    color: var(--accent-orchid);
+    background: rgba(217, 70, 239, 0.05);
+    border-color: hsla(295, 83%, 60%, 0.2);
+}
+
+.grace-dot {
+    width: 8px;
+    height: 8px;
+    background-color: var(--text-muted);
+    border-radius: 50%;
+    transition: all 0.3s ease;
+}
+
+.grace-indicator.active .grace-dot {
+    background-color: var(--accent-orchid);
+    box-shadow: 0 0 8px var(--accent-orchid);
+    animation: pulse 2s infinite;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
     .app-layout {
@@ -881,4 +916,228 @@ select:focus {
     .dashboard-sidebar {
         overflow-y: visible;
     }
+}
+
+/* Plan & Execution Steps Widget Styling */
+.plan-steps-container {
+    max-height: 250px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.plan-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--text-muted);
+    padding: 1.5rem 1rem;
+}
+
+.plan-empty-state p {
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.plan-step-item {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--card-border);
+    padding: 0.65rem;
+    border-radius: 8px;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    transition: all 0.25s ease;
+}
+
+.plan-step-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.plan-step-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-top: 0.3rem;
+    flex-shrink: 0;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.plan-step-status-dot.pending {
+    background-color: var(--text-muted);
+    box-shadow: 0 0 4px rgba(255, 255, 255, 0.1);
+}
+
+.plan-step-status-dot.running {
+    background-color: var(--status-running);
+    box-shadow: 0 0 8px var(--status-running);
+    animation: pulse 1.5s infinite alternate;
+}
+
+.plan-step-status-dot.completed {
+    background-color: var(--status-completed);
+    box-shadow: 0 0 8px var(--status-completed);
+}
+
+.plan-step-status-dot.failed {
+    background-color: var(--status-failed);
+    box-shadow: 0 0 8px var(--status-failed);
+}
+
+.plan-step-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+}
+
+.plan-step-desc {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.plan-step-meta {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.plan-step-meta i {
+    font-size: 0.65rem;
+}
+
+.plan-step-meta .tool-badge {
+    background: rgba(0, 242, 254, 0.1);
+    color: var(--accent-cyan);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-family: monospace;
+    font-weight: 600;
+}
+
+.plan-step-error {
+    font-size: 0.7rem;
+    color: var(--status-failed);
+    background: rgba(255, 0, 0, 0.05);
+    padding: 0.25rem 0.45rem;
+    border-radius: 4px;
+    margin-top: 0.25rem;
+    font-family: monospace;
+    word-break: break-all;
+}
+
+/* Telemetry Widget Styling */
+.telemetry-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.telemetry-stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.01);
+    border: 1px solid var(--card-border);
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.8rem;
+}
+
+.telemetry-stat .stat-label {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.telemetry-stat .stat-val {
+    color: var(--text-primary);
+    font-family: monospace;
+    font-weight: 600;
+}
+
+.telemetry-stat.highlight {
+    background: rgba(186, 100, 255, 0.05);
+    border-color: rgba(186, 100, 255, 0.15);
+}
+
+.telemetry-stat.highlight .stat-label {
+    color: var(--text-primary);
+}
+
+.telemetry-stat.highlight .stat-val {
+    color: var(--accent-orchid);
+    font-size: 0.9rem;
+    text-shadow: 0 0 8px var(--accent-orchid-glow);
+}
+
+/* Quotas Card CSS */
+.quota-group {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--card-border);
+    padding: 0.75rem;
+    border-radius: 12px;
+}
+
+.quota-group-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+    font-family: var(--font-heading);
+}
+
+.quota-metric {
+    margin-bottom: 0.65rem;
+}
+
+.quota-metric:last-child {
+    margin-bottom: 0;
+}
+
+.quota-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+}
+
+.quota-percentage {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.quota-progress-bar-container {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.quota-progress-bar {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.quota-progress-bar.high {
+    background: linear-gradient(90deg, var(--accent-cyan), #00ff88);
+}
+
+.quota-progress-bar.medium {
+    background: linear-gradient(90deg, #ffaa00, #ffdd00);
+}
+
+.quota-progress-bar.low {
+    background: linear-gradient(90deg, #ff3344, #ff6688);
 }

@@ -76,8 +76,10 @@ sessionSelect.addEventListener('change', async (e) => {
             </div>
         `;
         headerSessionId.querySelector('.id-val').textContent = 'New Session';
+        await pollPlanAndTelemetry();
     } else {
         await resumeSession(sessionId);
+        await pollPlanAndTelemetry();
     }
 });
 
@@ -180,6 +182,7 @@ chatForm.addEventListener('submit', async (e) => {
         // Refresh tasks and status
         await pollTasks();
         await loadStatus();
+        await pollPlanAndTelemetry();
     }
 });
 
@@ -342,20 +345,22 @@ async function resumeSession(sessionId) {
 // Load session history
 async function loadHistory() {
     try {
-        const res = await fetch('/api/history');
+        const url = currentSessionId ? `/api/history?session_id=${encodeURIComponent(currentSessionId)}` : '/api/history';
+        const res = await fetch(url);
         if (res.ok) {
             const data = await res.json();
-            chatMessages.innerHTML = '';
+            chatMessages.replaceChildren();
             
             if (data.history.length === 0) {
-                chatMessages.innerHTML = `
+                const doc = new DOMParser().parseFromString(`
                     <div class="message system-message">
                         <div class="message-avatar">🌸</div>
                         <div class="message-content">
                             <p>This session has no recorded history yet. How can I help you?</p>
                         </div>
                     </div>
-                `;
+                `, 'text/html');
+                chatMessages.appendChild(doc.body.firstElementChild);
                 return;
             }
 
@@ -537,7 +542,28 @@ async function pollTasks() {
         const res = await fetch('/api/tasks');
         if (res.ok) {
             const data = await res.json();
-            const tasks = data.tasks;
+            const tasks = data.tasks || [];
+            
+            // Check if Grace is active
+            const isGraceActive = tasks.some(t => 
+                t.status === 'running' && 
+                (
+                    t.name.toLowerCase().includes('grace') || 
+                    t.details.toLowerCase().includes('grace')
+                )
+            );
+            
+            const graceStatusEl = document.getElementById('grace-status');
+            const graceStateText = document.getElementById('grace-state-text');
+            if (graceStatusEl && graceStateText) {
+                if (isGraceActive) {
+                    graceStatusEl.classList.add('active');
+                    graceStateText.textContent = 'Active';
+                } else {
+                    graceStatusEl.classList.remove('active');
+                    graceStateText.textContent = 'Idle';
+                }
+            }
             
             const runningCount = tasks.filter(t => t.status === 'running').length;
             activeTasksCount.textContent = `${runningCount} active`;
@@ -714,17 +740,176 @@ async function updateCardLogs(taskId, cardEl) {
     }
 }
 
+async function pollPlanAndTelemetry() {
+    if (!currentSessionId) {
+        const container = document.getElementById('plan-steps-container');
+        if (container) {
+            container.replaceChildren();
+            const empty = document.createElement('div');
+            empty.className = 'plan-empty-state';
+            empty.id = 'plan-empty-state';
+            const p = document.createElement('p');
+            p.textContent = 'No execution plan generated for this session yet.';
+            empty.appendChild(p);
+            container.appendChild(empty);
+        }
+        const inTok = document.getElementById('telemetry-input-tokens');
+        if (inTok) inTok.textContent = '0';
+        const outTok = document.getElementById('telemetry-output-tokens');
+        if (outTok) outTok.textContent = '0';
+        const costVal = document.getElementById('telemetry-cost');
+        if (costVal) costVal.textContent = '$0.000000';
+        return;
+    }
+    
+    // 1. Fetch Plan
+    try {
+        const res = await fetch(`/api/sessions/${currentSessionId}/plan`);
+        if (res.ok) {
+            const data = await res.json();
+            const container = document.getElementById('plan-steps-container');
+            if (container) {
+                if (data.plan && data.plan.steps && data.plan.steps.length > 0) {
+                    container.replaceChildren();
+                    data.plan.steps.forEach(step => {
+                        const stepItem = document.createElement('div');
+                        stepItem.className = 'plan-step-item';
+                        
+                        const dot = document.createElement('span');
+                        dot.className = `plan-step-status-dot ${step.status}`;
+                        stepItem.appendChild(dot);
+                        
+                        const details = document.createElement('div');
+                        details.className = 'plan-step-details';
+                        
+                        const desc = document.createElement('span');
+                        desc.className = 'plan-step-desc';
+                        desc.textContent = step.description;
+                        details.appendChild(desc);
+                        
+                        const meta = document.createElement('div');
+                        meta.className = 'plan-step-meta';
+                        
+                        const statusText = document.createElement('span');
+                        statusText.textContent = step.status.charAt(0).toUpperCase() + step.status.slice(1);
+                        meta.appendChild(statusText);
+                        
+                        if (step.assigned_tool) {
+                            const badge = document.createElement('span');
+                            badge.className = 'tool-badge';
+                            badge.textContent = step.assigned_tool;
+                            meta.appendChild(badge);
+                        }
+                        details.appendChild(meta);
+                        
+                        if (step.error_message) {
+                            const err = document.createElement('div');
+                            err.className = 'plan-step-error';
+                            err.textContent = step.error_message;
+                            details.appendChild(err);
+                        }
+                        
+                        stepItem.appendChild(details);
+                        container.appendChild(stepItem);
+                    });
+                } else {
+                    if (!document.getElementById('plan-empty-state')) {
+                        container.replaceChildren();
+                        const empty = document.createElement('div');
+                        empty.className = 'plan-empty-state';
+                        empty.id = 'plan-empty-state';
+                        const p = document.createElement('p');
+                        p.textContent = 'No execution plan generated for this session yet.';
+                        empty.appendChild(p);
+                        container.appendChild(empty);
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Error polling plan:', err);
+    }
+    
+    // 2. Fetch Telemetry
+    try {
+        const res = await fetch(`/api/sessions/${currentSessionId}/telemetry`);
+        if (res.ok) {
+            const data = await res.json();
+            let totalInput = 0;
+            let totalOutput = 0;
+            let totalCost = 0.0;
+            if (data.telemetry && data.telemetry.length > 0) {
+                data.telemetry.forEach(record => {
+                    totalInput += record.input_tokens || 0;
+                    totalOutput += record.output_tokens || 0;
+                    totalCost += record.cost || 0.0;
+                });
+            }
+            const inTok = document.getElementById('telemetry-input-tokens');
+            if (inTok) inTok.textContent = totalInput.toLocaleString();
+            const outTok = document.getElementById('telemetry-output-tokens');
+            if (outTok) outTok.textContent = totalOutput.toLocaleString();
+            const costVal = document.getElementById('telemetry-cost');
+            if (costVal) costVal.textContent = `$${totalCost.toFixed(6)}`;
+        }
+    } catch (err) {
+        console.error('Error polling telemetry:', err);
+    }
+}
+
+// Poll Model Quotas
+async function pollQuotas() {
+    try {
+        const res = await fetch('/api/quotas');
+        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+        const data = await res.json();
+        if (Array.isArray(data)) {
+            data.forEach(q => {
+                const family = q.model_family;
+                const pct_5h = q.pct_5h;
+                const pct_weekly = q.pct_weekly;
+                
+                const prefix = (family === 'gemini') ? 'gemini' : 'claude';
+                
+                const val5h = document.getElementById(`${prefix}-5h-val`);
+                const valWeekly = document.getElementById(`${prefix}-weekly-val`);
+                const bar5h = document.getElementById(`${prefix}-5h-bar`);
+                const barWeekly = document.getElementById(`${prefix}-weekly-bar`);
+                
+                if (val5h) val5h.textContent = `${pct_5h.toFixed(1)}%`;
+                if (valWeekly) valWeekly.textContent = `${pct_weekly.toFixed(1)}%`;
+                
+                if (bar5h) {
+                    bar5h.style.width = `${pct_5h}%`;
+                    bar5h.className = 'quota-progress-bar ' + (pct_5h >= 50.0 ? 'high' : (pct_5h >= 20.0 ? 'medium' : 'low'));
+                }
+                if (barWeekly) {
+                    barWeekly.style.width = `${pct_weekly}%`;
+                    barWeekly.className = 'quota-progress-bar ' + (pct_weekly >= 50.0 ? 'high' : (pct_weekly >= 20.0 ? 'medium' : 'low'));
+                }
+            });
+        }
+    } catch (err) {
+        console.error('Error polling quotas:', err);
+    }
+}
+
 // Init Setup
 async function init() {
     await loadStatus();
     await loadSessions();
+    await loadHistory();
     await loadSchedules();
     await pollTasks();
+    await pollPlanAndTelemetry();
+    await pollQuotas();
     
     // Polling schedules and active tasks
     setInterval(pollTasks, 2000);
     setInterval(loadSchedules, 5000);
     setInterval(loadSessions, 10000);
+    setInterval(pollPlanAndTelemetry, 3000);
+    setInterval(pollQuotas, 30000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
