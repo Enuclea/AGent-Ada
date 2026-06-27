@@ -894,6 +894,57 @@ async function pollQuotas() {
     }
 }
 
+// Poll Subagents Status
+async function pollSubagents() {
+    try {
+        const response = await fetch('/api/subagents');
+        if (!response.ok) return;
+        const data = await response.json();
+        const subagents = data.subagents || [];
+        
+        const container = document.getElementById('subagents-container');
+        const countBadge = document.getElementById('subagents-count');
+        
+        if (!container) return;
+        
+        // Count active subagents
+        const activeCount = subagents.filter(s => s.status === 'active').length;
+        if (countBadge) {
+            countBadge.textContent = `${activeCount} active`;
+            countBadge.className = 'active-count-badge' + (activeCount > 0 ? ' pulse' : '');
+        }
+        
+        if (subagents.length === 0) {
+            container.innerHTML = `
+                <div class="subagent-empty-state" id="subagent-empty-state">
+                    <p>No subagents spawned yet.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        let html = '';
+        subagents.forEach(s => {
+            const timeStr = new Date(s.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            html += `
+                <div class="subagent-item">
+                    <div class="subagent-status-dot ${s.status}"></div>
+                    <div class="subagent-details">
+                        <div class="subagent-prompt" title="${s.prompt}">${s.prompt}</div>
+                        <div class="subagent-meta">
+                            <span class="subagent-id-badge" title="${s.subagent_id}">${s.subagent_id}</span>
+                            <span class="subagent-time">${timeStr}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        container.innerHTML = html;
+    } catch (err) {
+        console.error('Error polling subagents:', err);
+    }
+}
+
 // Init Setup
 async function init() {
     await loadStatus();
@@ -903,6 +954,7 @@ async function init() {
     await pollTasks();
     await pollPlanAndTelemetry();
     await pollQuotas();
+    await pollSubagents();
     
     // Polling schedules and active tasks
     setInterval(pollTasks, 2000);
@@ -910,6 +962,7 @@ async function init() {
     setInterval(loadSessions, 10000);
     setInterval(pollPlanAndTelemetry, 3000);
     setInterval(pollQuotas, 30000);
+    setInterval(pollSubagents, 3000);
 }
 
 document.addEventListener('DOMContentLoaded', init);

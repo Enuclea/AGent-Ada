@@ -836,6 +836,11 @@ async def get_subagent_messages_endpoint(subagent_id: str):
     messages = memory.get_subagent_messages(subagent_id)
     return {"messages": messages}
 
+@app.get("/api/subagents")
+async def list_subagents_endpoint():
+    subagents = memory.get_subagents_status()
+    return {"subagents": subagents}
+
 
 @app.get("/api/history")
 async def history_endpoint(session_id: Optional[str] = None):

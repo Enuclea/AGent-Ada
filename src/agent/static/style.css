@@ -1646,3 +1646,126 @@ select:focus {
     transform: translateY(-1px);
 }
 
+/* Subagents Widget Styles */
+.subagents-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: 250px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.subagents-container::-webkit-scrollbar {
+    width: 4px;
+}
+
+.subagents-container::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 2px;
+}
+
+.subagent-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: var(--input-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.subagent-item:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+    background: hsla(224, 25%, 6%, 0.8);
+    transform: translateX(2px);
+}
+
+.subagent-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-top: 0.35rem;
+    flex-shrink: 0;
+}
+
+.subagent-status-dot.active {
+    background-color: var(--status-running);
+    box-shadow: 0 0 8px var(--status-running);
+    animation: subagent-pulse 1.5s infinite alternate;
+}
+
+.subagent-status-dot.completed {
+    background-color: var(--status-completed);
+    box-shadow: 0 0 6px var(--status-completed);
+}
+
+.subagent-status-dot.failed {
+    background-color: var(--status-failed);
+    box-shadow: 0 0 6px var(--status-failed);
+}
+
+.subagent-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+    flex-grow: 1;
+}
+
+.subagent-prompt {
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    line-height: 1.25;
+    font-weight: 500;
+    word-break: break-word;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.subagent-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+.subagent-id-badge {
+    font-family: monospace;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.subagent-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem 1rem;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-align: center;
+}
+
+@keyframes subagent-pulse {
+    0% {
+        opacity: 0.4;
+        transform: scale(0.9);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1.1);
+    }
+}
+

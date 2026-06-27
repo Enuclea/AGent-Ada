@@ -1163,6 +1163,65 @@ def get_subagent_messages(subagent_id: str) -> List[Dict[str, Any]]:
         conn.close()
     return results
 
+def get_subagents_status() -> List[Dict[str, Any]]:
+    """Retrieves status and metadata for all spawned subagents."""
+    conn = sqlite3.connect(DB_FILE_PATH)
+    results = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT subagent_id FROM subagent_messages")
+        subagent_ids = [row[0] for row in cursor.fetchall()]
+        
+        for sid in subagent_ids:
+            cursor.execute(
+                "SELECT role, message, timestamp FROM subagent_messages WHERE subagent_id = ? ORDER BY timestamp ASC",
+                (sid,)
+            )
+            msgs = cursor.fetchall()
+            if not msgs:
+                continue
+            
+            parent_msg = next((m for m in msgs if m[0] == "parent"), None)
+            subagent_msgs = [m for m in msgs if m[0] == "subagent"]
+            last_sub_msg = subagent_msgs[-1] if subagent_msgs else None
+            
+            prompt = ""
+            if parent_msg:
+                m_text = parent_msg[1]
+                idx = m_text.find("with prompt: ")
+                if idx != -1:
+                    prompt = m_text[idx + 13:]
+                else:
+                    prompt = m_text
+                started_at = parent_msg[2]
+            else:
+                started_at = msgs[0][2]
+                
+            status = "active"
+            completed_at = None
+            
+            if last_sub_msg:
+                completed_at = last_sub_msg[2]
+                m_text = last_sub_msg[1]
+                if "failed" in m_text.lower() or "error" in m_text.lower():
+                    status = "failed"
+                else:
+                    status = "completed"
+                    
+            results.append({
+                "subagent_id": sid,
+                "prompt": prompt,
+                "status": status,
+                "started_at": started_at,
+                "completed_at": completed_at
+            })
+        results.sort(key=lambda x: x["started_at"], reverse=True)
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return results
+
 def update_model_quotas(model_family: str, pct_5h: float, pct_weekly: float) -> None:
     """Updates or inserts the quota usage percentages for a model family."""
     conn = sqlite3.connect(DB_FILE_PATH)
