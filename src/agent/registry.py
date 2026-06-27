@@ -31,6 +31,8 @@ class ToolRegistry:
             tools.list_scheduled_tasks,
             tools.delete_scheduled_task,
             tools.run_command,
+            tools.generate_interface_stub,
+            tools.spawn_subagent,
         ]
         for t in builtins:
             if t not in registered:

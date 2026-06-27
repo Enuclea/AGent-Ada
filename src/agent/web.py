@@ -750,6 +750,8 @@ class SpawnSubagentRequest(BaseModel):
     parent_session_id: str
     subagent_id: str
     prompt: str
+    target_files: Optional[List[str]] = None
+    stub_files: Optional[List[str]] = None
 
 @app.post("/api/subagents/spawn")
 async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
@@ -761,19 +763,51 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
     sandbox_dir = Path("/tmp") / f"subagent_sandbox_{sandbox_id}"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
     
-    # Clone current workspace files into sandbox
     current_workspace = os.getcwd()
-    for item in Path(current_workspace).iterdir():
-        if item.name in (".git", ".venv", "__pycache__", ".agents", ".pytest_cache"):
-            continue
-        try:
-            if item.is_dir():
-                shutil.copytree(item, sandbox_dir / item.name, symlinks=True)
-            else:
-                shutil.copy2(item, sandbox_dir / item.name)
-        except Exception:
-            pass
-            
+    
+    # 1. Clone target files/directories if specified
+    if req.target_files:
+        for rel_path in req.target_files:
+            src = Path(current_workspace) / rel_path
+            dest = sandbox_dir / rel_path
+            if src.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    if src.is_dir():
+                        shutil.copytree(src, dest, symlinks=True)
+                    else:
+                        shutil.copy2(src, dest)
+                except Exception:
+                    pass
+                    
+    # 2. Generate and copy stubs if specified
+    if req.stub_files:
+        from agent.tools import generate_interface_stub
+        for rel_path in req.stub_files:
+            src = Path(current_workspace) / rel_path
+            dest = sandbox_dir / rel_path
+            if src.exists() and src.is_file():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    stub_content = generate_interface_stub(str(src))
+                    with open(dest, "w", encoding="utf-8") as f:
+                        f.write(stub_content)
+                except Exception:
+                    pass
+                    
+    # 3. Fallback: If neither target_files nor stub_files are specified, copy entire workspace (backward compatibility)
+    if not req.target_files and not req.stub_files:
+        for item in Path(current_workspace).iterdir():
+            if item.name in (".git", ".venv", "__pycache__", ".agents", ".pytest_cache"):
+                continue
+            try:
+                if item.is_dir():
+                    shutil.copytree(item, sandbox_dir / item.name, symlinks=True)
+                else:
+                    shutil.copy2(item, sandbox_dir / item.name)
+            except Exception:
+                pass
+                
     memory.log_subagent_message(req.subagent_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {req.prompt}")
     
     async def run_subagent_background():

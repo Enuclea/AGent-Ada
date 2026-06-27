@@ -59,7 +59,15 @@ class OrchestrationService:
             "- Never use interactive prompts or tail commands that block indefinitely (e.g. `tail -f`). Always ensure your commands exit immediately.\n\n"
             "WORKSPACE SAFETY & DIRECTORY STRUCTURE:\n"
             "- When writing, testing, or editing code to complete user requests, you must write files to the appropriate project directories (e.g. `src/` or `scratch/`).\n"
-            "- You must NEVER write, modify, or create project code files inside the `discord/` directory unless you are specifically asked to edit the Discord bot code itself. Keep the `discord/` folder isolated strictly for the bot's system files."
+            "- You must NEVER write, modify, or create project code files inside the `discord/` directory unless you are specifically asked to edit the Discord bot code itself. Keep the `discord/` folder isolated strictly for the bot's system files.\n\n"
+            "DELEGATION & CONTEXT SAFETY PROTOCOL:\n"
+            "1. When resolving complex or multi-file requests, you must ACT as a Project Manager.\n"
+            "2. Generate a structured list of tasks (e.g. task.md) before executing.\n"
+            "3. For each coding task, DO NOT modify the file yourself. Instead:\n"
+            "   - Identify the files that must be modified.\n"
+            "   - Identify dependent modules and generate their interface stubs using `generate_interface_stub`.\n"
+            "   - Call `spawn_subagent` with a narrow, targeted prompt, passing the list of target files and/or stub files.\n"
+            "4. Once the subagent returns, inspect its changes, run local validation tests, and update the task list."
         )
 
         # 3. Construct system instructions with SQLite persistent memory and RAG

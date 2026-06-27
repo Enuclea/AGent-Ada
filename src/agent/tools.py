@@ -794,4 +794,238 @@ async def run_command(command: str) -> str:
         raise TimeoutError(f"Command '{command}' timed out after 60 seconds.")
 
 
+def generate_interface_stub(file_path: str) -> str:
+    """Extracts only classes, functions, method signatures, and docstrings from a Python file, discarding function bodies.
+    
+    Args:
+        file_path: Absolute or relative path to the Python script.
+    """
+    import ast
+    from pathlib import Path
+    try:
+        path = Path(file_path)
+        if not path.exists():
+            return f"Error: File not found: {file_path}"
+        
+        # If it's not a Python file, return first 50 lines as fallback stub
+        if not file_path.endswith(".py"):
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = [f.readline() for _ in range(50)]
+            content = "".join([l for l in lines if l])
+            return f"# Non-Python File Interface Summary of {path.name}:\n{content}\n... [truncated]"
+
+        with open(path, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        tree = ast.parse(code, filename=file_path)
+        lines = []
+        
+        class StubVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.indent = 0
+                
+            def visit_Module(self, node):
+                doc = ast.get_docstring(node)
+                if doc:
+                    lines.append(f'"""\n{doc}\n"""\n')
+                self.generic_visit(node)
+                
+            def visit_ClassDef(self, node):
+                indent_str = "    " * self.indent
+                base_names = []
+                for base in node.bases:
+                    if isinstance(base, ast.Name):
+                        base_names.append(base.id)
+                    elif isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
+                        base_names.append(f"{base.value.id}.{base.attr}")
+                    else:
+                        base_names.append("object")
+                bases_str = f"({', '.join(base_names)})" if base_names else ""
+                lines.append(f"{indent_str}class {node.name}{bases_str}:")
+                
+                doc = ast.get_docstring(node)
+                if doc:
+                    lines.append(f'{indent_str}    """\n{indent_str}    {doc}\n{indent_str}    """')
+                
+                self.indent += 1
+                orig_len = len(lines)
+                for child in node.body:
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        self.visit(child)
+                
+                if len(lines) == orig_len:
+                    lines.append(f"{indent_str}    pass")
+                self.indent -= 1
+                lines.append("")
+                
+            def visit_FunctionDef(self, node):
+                self._visit_func(node, is_async=False)
+                
+            def visit_AsyncFunctionDef(self, node):
+                self._visit_func(node, is_async=True)
+                
+            def _visit_func(self, node, is_async: bool):
+                indent_str = "    " * self.indent
+                prefix = "async def" if is_async else "def"
+                args_list = []
+                
+                if hasattr(node.args, "posonlyargs"):
+                    for arg in node.args.posonlyargs:
+                        annotation = f": {ast.unparse(arg.annotation)}" if arg.annotation else ""
+                        args_list.append(f"{arg.arg}{annotation}")
+                    if node.args.posonlyargs:
+                        args_list.append("/")
+                        
+                for arg in node.args.args:
+                    annotation = f": {ast.unparse(arg.annotation)}" if arg.annotation else ""
+                    args_list.append(f"{arg.arg}{annotation}")
+                    
+                if node.args.vararg:
+                    annotation = f": {ast.unparse(node.args.vararg.annotation)}" if node.args.vararg.annotation else ""
+                    args_list.append(f"*{node.args.vararg.arg}{annotation}")
+                    
+                if node.args.kwonlyargs:
+                    if not node.args.vararg:
+                        args_list.append("*")
+                    for arg in node.args.kwonlyargs:
+                        annotation = f": {ast.unparse(arg.annotation)}" if arg.annotation else ""
+                        args_list.append(f"{arg.arg}{annotation}")
+                        
+                if node.args.kwarg:
+                    annotation = f": {ast.unparse(node.args.kwarg.annotation)}" if node.args.kwarg.annotation else ""
+                    args_list.append(f"**{node.args.kwarg.arg}{annotation}")
+                    
+                returns = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+                lines.append(f"{indent_str}{prefix} {node.name}({', '.join(args_list)}){returns}:")
+                
+                doc = ast.get_docstring(node)
+                if doc:
+                    lines.append(f'{indent_str}    """\n{indent_str}    {doc}\n{indent_str}    """')
+                lines.append(f"{indent_str}    ...")
+                
+        StubVisitor().visit(tree)
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error generating interface stub: {e}"
+
+
+async def spawn_subagent(
+    prompt: str,
+    target_files: Optional[List[str]] = None,
+    stub_files: Optional[List[str]] = None
+) -> str:
+    """Spawns an isolated subagent inside a sandbox to perform a coding task.
+    The tool waits for the subagent to complete and returns its summary report.
+    
+    Args:
+        prompt: Detailed instructions for the subagent's task.
+        target_files: Relative paths of files the subagent needs to modify or read.
+        stub_files: Relative paths of files whose signatures/interfaces are needed as context.
+    """
+    import uuid
+    import shutil
+    from agent.keyless import KeylessAgyAgent
+    
+    sandbox_id = str(uuid.uuid4())
+    sandbox_dir = Path("/tmp") / f"subagent_sandbox_{sandbox_id}"
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    
+    current_workspace = os.getcwd()
+    
+    # 1. Copy target files/folders fully
+    if target_files:
+        for rel_path in target_files:
+            src = Path(current_workspace) / rel_path
+            dest = sandbox_dir / rel_path
+            if src.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    if src.is_dir():
+                        shutil.copytree(src, dest, symlinks=True)
+                    else:
+                        shutil.copy2(src, dest)
+                except Exception as e:
+                    print(f"[SPAWN_SUBAGENT] Error copying target {rel_path}: {e}")
+                    
+    # 2. Copy stubs
+    if stub_files:
+        for rel_path in stub_files:
+            src = Path(current_workspace) / rel_path
+            dest = sandbox_dir / rel_path
+            if src.exists() and src.is_file():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    stub_content = generate_interface_stub(str(src))
+                    with open(dest, "w", encoding="utf-8") as f:
+                        f.write(stub_content)
+                except Exception as e:
+                    print(f"[SPAWN_SUBAGENT] Error stubbing {rel_path}: {e}")
+                    
+    # 3. Log start
+    memory.log_subagent_message(sandbox_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {prompt}")
+    
+    # 4. Instantiate KeylessAgyAgent with the sandbox cwd
+    subagent_system_instructions = (
+        "You are a subagent working in an isolated sandbox. Complete the requested task.\n"
+        "CONTRACT: You MUST return your final response ONLY as a raw JSON object matching the following structure:\n"
+        "{\n"
+        '  "status": "success" | "failed",\n'
+        '  "files_modified": ["list of modified files"],\n'
+        '  "summary_of_changes": "short description of changes",\n'
+        '  "validation_result": "output of run tests/validation"\n'
+        "}\n"
+        "Do not wrap your response in markdown code blocks. Output ONLY raw JSON."
+    )
+    
+    agent = KeylessAgyAgent(
+        model="gemini-1.5-flash",
+        system_instructions=subagent_system_instructions,
+        conversation_id=sandbox_id,
+        cwd=str(sandbox_dir)
+    )
+    
+    try:
+        async with agent as sub_conn:
+            response = await sub_conn.chat(prompt)
+            output = ""
+            async for chunk in response:
+                output += chunk
+            memory.log_subagent_message(sandbox_id, "subagent", f"Subagent completed: {output}")
+            
+            # Copy modified files back to the main workspace on success
+            try:
+                cleaned_output = output.strip()
+                if cleaned_output.startswith("```"):
+                    lines = cleaned_output.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    cleaned_output = "\n".join(lines).strip()
+                
+                res_data = json.loads(cleaned_output)
+                if res_data.get("status") == "success":
+                    files_to_copy = res_data.get("files_modified", [])
+                    for rel_path in files_to_copy:
+                        sandbox_file = sandbox_dir / rel_path
+                        workspace_file = Path(current_workspace) / rel_path
+                        if sandbox_file.exists() and sandbox_file.is_file():
+                            workspace_file.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(sandbox_file, workspace_file)
+                            print(f"[SPAWN_SUBAGENT] Copied modified file back to workspace: {rel_path}")
+            except Exception as e:
+                print(f"[SPAWN_SUBAGENT] Warning: failed to copy back modified files: {e}")
+                
+            return output
+    except Exception as e:
+        err_msg = f"Subagent execution failed: {e}"
+        memory.log_subagent_message(sandbox_id, "subagent", err_msg)
+        return json.dumps({
+            "status": "failed",
+            "files_modified": [],
+            "summary_of_changes": "",
+            "validation_result": err_msg
+        })
+
+
 
