@@ -945,6 +945,44 @@ async function pollSubagents() {
     }
 }
 
+// Setup Collapsible Widgets
+function setupCollapsibleWidgets() {
+    const headers = document.querySelectorAll('.collapsible-header');
+    
+    // Load saved states
+    let states = {};
+    try {
+        states = JSON.parse(localStorage.getItem('dashboard_collapsed_states')) || {};
+    } catch (e) {
+        console.error('Error parsing collapsed states:', e);
+    }
+    
+    // Apply saved states
+    Object.keys(states).forEach(id => {
+        const card = document.getElementById(id);
+        if (card && states[id]) {
+            card.classList.add('collapsed');
+        }
+    });
+    
+    // Bind click events
+    headers.forEach(header => {
+        header.addEventListener('click', () => {
+            const card = header.closest('.widget-card');
+            if (!card) return;
+            
+            const isCollapsed = card.classList.toggle('collapsed');
+            
+            // Save state
+            const id = card.id;
+            if (id) {
+                states[id] = isCollapsed;
+                localStorage.setItem('dashboard_collapsed_states', JSON.stringify(states));
+            }
+        });
+    });
+}
+
 // Init Setup
 async function init() {
     await loadStatus();
@@ -955,6 +993,7 @@ async function init() {
     await pollPlanAndTelemetry();
     await pollQuotas();
     await pollSubagents();
+    setupCollapsibleWidgets();
     
     // Polling schedules and active tasks
     setInterval(pollTasks, 2000);

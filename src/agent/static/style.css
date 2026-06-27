@@ -1769,3 +1769,42 @@ select:focus {
     }
 }
 
+/* Collapsible Widget Card Styles */
+.collapsible-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.collapsible-header:hover h2 {
+    color: var(--accent-orchid) !important;
+}
+
+.collapse-chevron {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), color 0.2s ease;
+}
+
+.collapsible-header:hover .collapse-chevron {
+    color: var(--text-primary);
+}
+
+.card-content-wrapper {
+    max-height: 1000px;
+    opacity: 1;
+    transition: max-height 0.3s ease, opacity 0.2s ease;
+}
+
+.widget-card.collapsed .card-content-wrapper {
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.widget-card.collapsed .collapse-chevron i {
+    transform: rotate(-90deg);
+}
+

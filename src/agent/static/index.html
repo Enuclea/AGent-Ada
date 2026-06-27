@@ -73,67 +73,60 @@
             </section>
 
             <!-- Right Panel: Dashboard Widgets -->
+            <!-- Right Panel: Dashboard Widgets -->
             <aside class="dashboard-sidebar">
-                <!-- Session/Control Widget -->
-                <div class="widget-card glass-card" id="settings-card">
-                    <div class="card-header">
-                        <h2><i class="fa-solid fa-gear"></i> Session Settings</h2>
+                <!-- Activity Feed Widget -->
+                <div class="widget-card glass-card feed-card-container" id="feed-card">
+                    <div class="card-header collapsible-header">
+                        <h2><i class="fa-solid fa-bolt"></i> Activity Feed</h2>
+                        <div class="header-right" style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="active-count-badge" id="active-tasks-count">0 active</span>
+                            <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <div class="form-group">
-                            <label for="model-select">Active Model</label>
-                            <select id="model-select">
-                                <option value="gemini-3.5-flash" selected>Gemini 3.5 Flash</option>
-                                <option value="gemini-3.5-pro">Gemini 3.5 Pro</option>
-                                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-                            </select>
+                    <div class="card-content-wrapper">
+                        <div class="activity-feed" id="activity-feed">
+                            <!-- Default empty state -->
+                            <div class="feed-empty-state" id="feed-empty-state">
+                                <i class="fa-solid fa-champagne-glasses"></i>
+                                <p>No active tasks or tool executions running right now.</p>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label for="session-select">Saved Sessions</label>
-                            <select id="session-select">
-                                <option value="">Start New Session</option>
-                            </select>
+                    </div>
+                </div>
+
+                <!-- Subagents Status Widget -->
+                <div class="widget-card glass-card" id="subagents-card">
+                    <div class="card-header collapsible-header">
+                        <h2><i class="fa-solid fa-robot"></i> Subagents</h2>
+                        <div class="header-right" style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="active-count-badge" id="subagents-count">0 active</span>
+                            <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                         </div>
-                        <div class="workspace-info">
-                            <span class="info-label">Active Workspace:</span>
-                            <span class="info-val" id="workspace-path" title="Loading...">Loading...</span>
+                    </div>
+                    <div class="card-content-wrapper">
+                        <div class="card-body">
+                            <div id="subagents-container" class="subagents-container">
+                                <div class="subagent-empty-state" id="subagent-empty-state">
+                                    <p>No subagents spawned yet.</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- Plan & Execution Steps Widget -->
                 <div class="widget-card glass-card" id="plan-card">
-                    <div class="card-header">
+                    <div class="card-header collapsible-header">
                         <h2><i class="fa-solid fa-list-check"></i> Plan &amp; Execution Steps</h2>
+                        <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                     </div>
-                    <div class="card-body">
-                        <div id="plan-steps-container" class="plan-steps-container">
-                            <div class="plan-empty-state" id="plan-empty-state">
-                                <p>No execution plan generated for this session yet.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Resource Consumption Widget -->
-                <div class="widget-card glass-card" id="telemetry-card">
-                    <div class="card-header">
-                        <h2><i class="fa-solid fa-chart-line"></i> Resource Consumption</h2>
-                    </div>
-                    <div class="card-body">
-                        <div class="telemetry-stats">
-                            <div class="telemetry-stat">
-                                <span class="stat-label">Total Input Tokens:</span>
-                                <span class="stat-val" id="telemetry-input-tokens">0</span>
-                            </div>
-                            <div class="telemetry-stat">
-                                <span class="stat-label">Total Output Tokens:</span>
-                                <span class="stat-val" id="telemetry-output-tokens">0</span>
-                            </div>
-                            <div class="telemetry-stat highlight">
-                                <span class="stat-label">Estimated Cost:</span>
-                                <span class="stat-val" id="telemetry-cost">$0.000000</span>
+                    <div class="card-content-wrapper">
+                        <div class="card-body">
+                            <div id="plan-steps-container" class="plan-steps-container">
+                                <div class="plan-empty-state" id="plan-empty-state">
+                                    <p>No execution plan generated for this session yet.</p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -141,115 +134,154 @@
 
                 <!-- Model Quotas Widget -->
                 <div class="widget-card glass-card" id="quotas-card">
-                    <div class="card-header">
+                    <div class="card-header collapsible-header">
                         <h2><i class="fa-solid fa-gauge-high"></i> Model Quotas</h2>
+                        <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                     </div>
-                    <div class="card-body">
-                        <div class="quota-group">
-                            <h3 class="quota-group-title">Gemini Models</h3>
-                            <div class="quota-metric">
-                                <div class="quota-meta">
-                                    <span class="quota-label">5-Hour Limit</span>
-                                    <span class="quota-percentage" id="gemini-5h-val">Loading...</span>
+                    <div class="card-content-wrapper">
+                        <div class="card-body">
+                            <div class="quota-group">
+                                <h3 class="quota-group-title">Gemini Models</h3>
+                                <div class="quota-metric">
+                                    <div class="quota-meta">
+                                        <span class="quota-label">5-Hour Limit</span>
+                                        <span class="quota-percentage" id="gemini-5h-val">Loading...</span>
+                                    </div>
+                                    <div class="quota-progress-bar-container">
+                                        <div class="quota-progress-bar" id="gemini-5h-bar" style="width: 0%;"></div>
+                                    </div>
                                 </div>
-                                <div class="quota-progress-bar-container">
-                                    <div class="quota-progress-bar" id="gemini-5h-bar" style="width: 0%;"></div>
-                                </div>
-                            </div>
-                            <div class="quota-metric">
-                                <div class="quota-meta">
-                                    <span class="quota-label">Weekly Limit</span>
-                                    <span class="quota-percentage" id="gemini-weekly-val">Loading...</span>
-                                </div>
-                                <div class="quota-progress-bar-container">
-                                    <div class="quota-progress-bar" id="gemini-weekly-bar" style="width: 0%;"></div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="quota-group" style="margin-top: 15px;">
-                            <h3 class="quota-group-title">Claude &amp; GPT Models</h3>
-                            <div class="quota-metric">
-                                <div class="quota-meta">
-                                    <span class="quota-label">5-Hour Limit</span>
-                                    <span class="quota-percentage" id="claude-5h-val">Loading...</span>
-                                </div>
-                                <div class="quota-progress-bar-container">
-                                    <div class="quota-progress-bar" id="claude-5h-bar" style="width: 0%;"></div>
+                                <div class="quota-metric">
+                                    <div class="quota-meta">
+                                        <span class="quota-label">Weekly Limit</span>
+                                        <span class="quota-percentage" id="gemini-weekly-val">Loading...</span>
+                                    </div>
+                                    <div class="quota-progress-bar-container">
+                                        <div class="quota-progress-bar" id="gemini-weekly-bar" style="width: 0%;"></div>
+                                    </div>
                                 </div>
                             </div>
-                            <div class="quota-metric">
-                                <div class="quota-meta">
-                                    <span class="quota-label">Weekly Limit</span>
-                                    <span class="quota-percentage" id="claude-weekly-val">Loading...</span>
+                            <div class="quota-group" style="margin-top: 15px;">
+                                <h3 class="quota-group-title">Claude &amp; GPT Models</h3>
+                                <div class="quota-metric">
+                                    <div class="quota-meta">
+                                        <span class="quota-label">5-Hour Limit</span>
+                                        <span class="quota-percentage" id="claude-5h-val">Loading...</span>
+                                    </div>
+                                    <div class="quota-progress-bar-container">
+                                        <div class="quota-progress-bar" id="claude-5h-bar" style="width: 0%;"></div>
+                                    </div>
                                 </div>
-                                <div class="quota-progress-bar-container">
-                                    <div class="quota-progress-bar" id="claude-weekly-bar" style="width: 0%;"></div>
+                                <div class="quota-metric">
+                                    <div class="quota-meta">
+                                        <span class="quota-label">Weekly Limit</span>
+                                        <span class="quota-percentage" id="claude-weekly-val">Loading...</span>
+                                    </div>
+                                    <div class="quota-progress-bar-container">
+                                        <div class="quota-progress-bar" id="claude-weekly-bar" style="width: 0%;"></div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Running Tasks & Subagents (Twitter-Style cards) -->
-                <div class="widget-card glass-card feed-card-container">
-                    <div class="card-header">
-                        <h2><i class="fa-solid fa-bolt"></i> Activity Feed</h2>
-                        <span class="active-count-badge" id="active-tasks-count">0 active</span>
+                <!-- Session Settings Widget -->
+                <div class="widget-card glass-card" id="settings-card">
+                    <div class="card-header collapsible-header">
+                        <h2><i class="fa-solid fa-gear"></i> Session Settings</h2>
+                        <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                     </div>
-                    <div class="activity-feed" id="activity-feed">
-                        <!-- Default empty state -->
-                        <div class="feed-empty-state" id="feed-empty-state">
-                            <i class="fa-solid fa-champagne-glasses"></i>
-                            <p>No active tasks or tool executions running right now.</p>
+                    <div class="card-content-wrapper">
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="model-select">Active Model</label>
+                                <select id="model-select">
+                                    <option value="gemini-3.5-flash" selected>Gemini 3.5 Flash</option>
+                                    <option value="gemini-3.5-pro">Gemini 3.5 Pro</option>
+                                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                    <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="session-select">Saved Sessions</label>
+                                <select id="session-select">
+                                    <option value="">Start New Session</option>
+                                </select>
+                            </div>
+                            <div class="workspace-info">
+                                <span class="info-label">Active Workspace:</span>
+                                <span class="info-val" id="workspace-path" title="Loading...">Loading...</span>
+                            </div>
                         </div>
+                    </div>
                 </div>
 
-                <!-- Subagents Status Widget -->
-                <div class="widget-card glass-card" id="subagents-card">
-                    <div class="card-header">
-                        <h2><i class="fa-solid fa-robot"></i> Subagents</h2>
-                        <span class="active-count-badge" id="subagents-count">0 active</span>
+                <!-- Resource Consumption Widget -->
+                <div class="widget-card glass-card" id="telemetry-card">
+                    <div class="card-header collapsible-header">
+                        <h2><i class="fa-solid fa-chart-line"></i> Resource Consumption</h2>
+                        <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                     </div>
-                    <div class="card-body">
-                        <div id="subagents-container" class="subagents-container">
-                            <div class="subagent-empty-state" id="subagent-empty-state">
-                                <p>No subagents spawned yet.</p>
+                    <div class="card-content-wrapper">
+                        <div class="card-body">
+                            <div class="telemetry-stats">
+                                <div class="telemetry-stat">
+                                    <span class="stat-label">Total Input Tokens:</span>
+                                    <span class="stat-val" id="telemetry-input-tokens">0</span>
+                                </div>
+                                <div class="telemetry-stat">
+                                    <span class="stat-label">Total Output Tokens:</span>
+                                    <span class="stat-val" id="telemetry-output-tokens">0</span>
+                                </div>
+                                <div class="telemetry-stat highlight">
+                                    <span class="stat-label">Estimated Cost:</span>
+                                    <span class="stat-val" id="telemetry-cost">$0.000000</span>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- Automation Schedules -->
-                <div class="widget-card glass-card">
-                    <div class="card-header">
+                <div class="widget-card glass-card" id="schedules-card">
+                    <div class="card-header collapsible-header">
                         <h2><i class="fa-solid fa-clock"></i> Automation Schedules</h2>
+                        <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                     </div>
-                    <div class="card-body">
-                        <div id="schedules-container" class="schedules-container">
-                            <!-- Schedules list will be rendered here -->
+                    <div class="card-content-wrapper">
+                        <div class="card-body">
+                            <div id="schedules-container" class="schedules-container">
+                                <!-- Schedules list will be rendered here -->
+                            </div>
+                            <form id="schedule-form" class="schedule-creator-form">
+                                <input type="text" id="schedule-name" placeholder="Schedule Name (e.g. Daily Review)" required>
+                                <input type="text" id="schedule-prompt" placeholder="Prompt (e.g. Run git status)" required>
+                                <input type="text" id="schedule-cron" placeholder="Interval (seconds e.g. 60) or Cron (* * * * *)" required>
+                                <button type="submit">Add Schedule</button>
+                            </form>
                         </div>
-                        <form id="schedule-form" class="schedule-creator-form">
-                            <input type="text" id="schedule-name" placeholder="Schedule Name (e.g. Daily Review)" required>
-                            <input type="text" id="schedule-prompt" placeholder="Prompt (e.g. Run git status)" required>
-                            <input type="text" id="schedule-cron" placeholder="Interval (seconds e.g. 60) or Cron (* * * * *)" required>
-                            <button type="submit">Add Schedule</button>
-                        </form>
                     </div>
                 </div>
 
                 <!-- Custom Skills Inventory -->
-                <div class="widget-card glass-card">
-                    <div class="card-header">
+                <div class="widget-card glass-card" id="skills-card">
+                    <div class="card-header collapsible-header">
                         <h2><i class="fa-solid fa-graduation-cap"></i> Learned Skills</h2>
-                        <button class="card-action-btn" id="open-skills-store-btn" title="Open Skill Store">
-                            <i class="fa-solid fa-store"></i> Browse Store
-                        </button>
+                        <div class="header-right" style="display: flex; align-items: center; gap: 0.5rem;">
+                            <button class="card-action-btn" id="open-skills-store-btn" title="Open Skill Store">
+                                <i class="fa-solid fa-store"></i> Browse Store
+                            </button>
+                            <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                        </div>
                     </div>
-                    <div class="skills-list" id="skills-list">
-                        <!-- Default empty state -->
-                        <div class="skills-empty-state" id="skills-empty-state">
-                            <p>No custom skills learned yet.</p>
-                            <span class="tip-text">Prompt Ada to save a workflow or tool to build a custom skill.</span>
+                    <div class="card-content-wrapper">
+                        <div class="skills-list" id="skills-list">
+                            <!-- Default empty state -->
+                            <div class="skills-empty-state" id="skills-empty-state">
+                                <p>No custom skills learned yet.</p>
+                                <span class="tip-text">Prompt Ada to save a workflow or tool to build a custom skill.</span>
+                            </div>
                         </div>
                     </div>
                 </div>
