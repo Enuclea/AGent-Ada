@@ -273,26 +273,14 @@ class OrchestrationService:
                 custom_approval_handler=custom_approval_handler
             )
 
-            # 2. Instantiate connection
-            api_key = os.environ.get("GEMINI_API_KEY")
-            if api_key:
-                config_args["api_key"] = api_key
-                config_args["model"] = model_name
-                if session_id and not session_id.startswith("discord-"):
-                    config_args["conversation_id"] = session_id
-                
-                config = LocalAgentConfig(**config_args)
-                agent_conn = Agent(config)
-                agent = await agent_conn.__aenter__()
-            else:
-                # Keyless setups utilize KeylessAgyAgent
-                agent = KeylessAgyAgent(
-                    model=model_name,
-                    system_instructions=config_args["system_instructions"],
-                    conversation_id=session_id if session_id and not session_id.startswith("discord-") else None,
-                    timeout=600.0
-                )
-                agent = await agent.__aenter__()
+            # 2. Instantiate connection: We are intentionally using agy and wrapping around it.
+            agent = KeylessAgyAgent(
+                model=model_name,
+                system_instructions=config_args["system_instructions"],
+                conversation_id=session_id if session_id and not session_id.startswith("discord-") else None,
+                timeout=600.0
+            )
+            agent = await agent.__aenter__()
 
             self.active_agents[lookup_id] = {
                 "agent": agent,
