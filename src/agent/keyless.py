@@ -322,6 +322,7 @@ class KeylessAgyAgent:
         db_path: Optional[str] = None,
         timeout: Optional[float] = None,
         task_priority: TaskPriority = TaskPriority.INTERACTIVE,
+        cwd: Optional[str] = None,
     ):
         self.model = model
         self.system_instructions = system_instructions
@@ -330,6 +331,7 @@ class KeylessAgyAgent:
         self.db_path = db_path
         self.timeout = timeout
         self.task_priority = task_priority
+        self.cwd = cwd
         self._conversations_dir = str(Path.home() / ".gemini" / "antigravity-cli" / "conversations")
 
     async def __aenter__(self):
@@ -537,7 +539,8 @@ class KeylessAgyAgent:
                         *cmd,
                         stdin=asyncio.subprocess.DEVNULL,
                         stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=self.cwd
                     )
                     _circuit_breaker.record_success(current_model)
                     return KeylessAgyResponse(proc, timeout_val, agent=self, prev_newest=self._get_newest_conversation_id())
@@ -558,7 +561,8 @@ class KeylessAgyAgent:
                         *cmd,
                         stdin=asyncio.subprocess.DEVNULL,
                         stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=self.cwd
                     )
                     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
                     response_text = stdout.decode("utf-8", errors="replace")
@@ -605,7 +609,8 @@ class KeylessAgyAgent:
                             *grok_cmd,
                             stdin=asyncio.subprocess.DEVNULL,
                             stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE
+                            stderr=asyncio.subprocess.PIPE,
+                            cwd=self.cwd
                         )
                         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
                         response_text = stdout.decode("utf-8", errors="replace")

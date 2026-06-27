@@ -23,6 +23,7 @@ class PriorityLock:
     def __init__(self) -> None:
         self._waiters = []  # list of (priority, asyncio.Future)
         self._locked = False
+        self._active_fut = None
 
     async def acquire(self, priority: int) -> None:
         if not self._locked:
@@ -38,18 +39,22 @@ class PriorityLock:
             await fut
         except asyncio.CancelledError:
             self._waiters = [w for w in self._waiters if w[1] != fut]
-            if not self._locked:
+            if self._active_fut == fut:
+                self._active_fut = None
+                self._locked = False
                 self._release_next()
             raise
 
     def release(self) -> None:
         self._locked = False
+        self._active_fut = None
         self._release_next()
 
     def _release_next(self) -> None:
         if self._waiters:
             self._locked = True
             priority, fut = self._waiters.pop(0)
+            self._active_fut = fut
             if not fut.done():
                 fut.set_result(None)
 
@@ -327,13 +332,17 @@ async def get_or_create_agent(
     if not is_discord:
         _ = tools.backup_discord_channel
 
+    # Auto-approve local dashboard sessions, while requiring approvals for Discord/external channels
+    auto_approve = not is_discord
+
     return await orchestration_service.get_or_create_agent(
         model=model_name,
         session_id=session_id,
         custom_instructions=system_instructions,
         disable_tools=disable_tools,
         roleplay=roleplay,
-        prompt=prompt
+        prompt=prompt,
+        auto_approve=auto_approve
     )
 
 @app.post("/api/chat")
@@ -773,19 +782,15 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
             agent = KeylessAgyAgent(
                 model="gemini-1.5-flash",
                 system_instructions="You are a subagent working in an isolated sandbox. Complete the requested task.",
-                conversation_id=req.subagent_id
+                conversation_id=req.subagent_id,
+                cwd=str(sandbox_dir)
             )
-            old_cwd = os.getcwd()
-            os.chdir(sandbox_dir)
-            try:
-                async with agent as sub_conn:
-                    response = await sub_conn.chat(req.prompt)
-                    output = ""
-                    async for chunk in response:
-                        output += chunk
-                    memory.log_subagent_message(req.subagent_id, "subagent", f"Subagent completed: {output}")
-            finally:
-                os.chdir(old_cwd)
+            async with agent as sub_conn:
+                response = await sub_conn.chat(req.prompt)
+                output = ""
+                async for chunk in response:
+                    output += chunk
+                memory.log_subagent_message(req.subagent_id, "subagent", f"Subagent completed: {output}")
         except Exception as e:
             memory.log_subagent_message(req.subagent_id, "subagent", f"Subagent failed: {e}")
             
@@ -1276,6 +1281,17 @@ async def fork_session_endpoint(req: ForkRequest):
     finally:
         conn.close()
         
+    # Copy the actual agent conversation DB file on disk
+    import shutil
+    from pathlib import Path
+    old_agent_db = Path.home() / ".gemini" / "antigravity-cli" / "conversations" / f"{resolved_id}.db"
+    new_agent_db = Path.home() / ".gemini" / "antigravity-cli" / "conversations" / f"{new_session_id}.db"
+    if old_agent_db.exists():
+        try:
+            shutil.copy2(old_agent_db, new_agent_db)
+        except Exception as e:
+            print(f"[FORK] Warning: failed to copy agent DB file: {e}")
+
     return {"status": "success", "new_session_id": new_session_id}
 
 # Background scheduler execution

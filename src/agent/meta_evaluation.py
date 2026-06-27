@@ -141,6 +141,14 @@ async def run_meta_evaluation(days: int = 1):
             if not skill_name:
                 continue
 
+            # Safety check: Validate python script syntax before applying action
+            if script and filename and filename.endswith(".py"):
+                try:
+                    compile(script, filename, "exec")
+                except Exception as syntax_err:
+                    print(f"[META-EVAL] Aborted action for {skill_name}: Script contains syntax errors: {syntax_err}")
+                    continue
+
             if action_type == "improve_skill":
                 print(f"[META-EVAL] Executing action plan: improve_skill '{skill_name}'")
                 res = tools.improve_agent_skill(

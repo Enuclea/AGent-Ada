@@ -1,6 +1,19 @@
 import json
 import os
 import sqlite3
+
+# Globally monkeypatch sqlite3.connect to set 10s timeout and enable WAL mode for concurrency
+_orig_sqlite3_connect = sqlite3.connect
+def custom_sqlite3_connect(database, *args, **kwargs):
+    kwargs.setdefault("timeout", 10.0)
+    conn = _orig_sqlite3_connect(database, *args, **kwargs)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    return conn
+sqlite3.connect = custom_sqlite3_connect
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -873,43 +886,7 @@ async def get_auto_rag_context(prompt: Optional[str]) -> str:
     if not candidates:
         return ""
 
-    # Perform semantic ranking if we have multiple candidates
-    if len(candidates) > 3:
-        try:
-            from agent.keyless import KeylessAgyAgent
-            # Format candidates for ranking
-            candidates_formatted = []
-            for idx, c in enumerate(candidates):
-                content_truncated = c["content"][:200]
-                candidates_formatted.append(f"[{idx}]: (Role: {c['role']}, Tool: {c['tool_name'] or 'None'}) {content_truncated}")
-            
-            candidates_text = "\n".join(candidates_formatted)
-            ranking_prompt = (
-                f"You are a semantic retrieval ranker. Given the user query: \"{prompt}\", "
-                f"select up to 3 most semantically relevant snippets from the candidates list below.\n\n"
-                f"Candidates list:\n{candidates_text}\n\n"
-                f"Return ONLY a JSON list of integers corresponding to the indices of the selected snippets. "
-                f"E.g., [2, 0, 5]. Output no extra text."
-            )
-            
-            agent = KeylessAgyAgent(
-                model="gemini-1.5-flash",
-                system_instructions="You are a passive RAG ranker. Output ONLY valid JSON list of integers."
-            )
-            async with agent as a:
-                resp = await a.chat(ranking_prompt)
-                resp_text = resp.text.strip().strip("`").strip("json").strip()
-                indices = json.loads(resp_text)
-                if isinstance(indices, list):
-                    selected = []
-                    for idx in indices:
-                        if isinstance(idx, int) and 0 <= idx < len(candidates):
-                            selected.append(candidates[idx])
-                    if selected:
-                        candidates = selected[:3]
-        except Exception:
-            # Fall back to top 3 FTS5 results on error
-            pass
+    candidates = candidates[:3]
 
     lines = []
     for res in candidates[:3]:

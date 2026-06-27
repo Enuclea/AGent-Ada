@@ -29,3 +29,6 @@ ENV/
 .DS_Store
 Thumbs.db
 src/agent_ada.egg-info/
+
+# Handover / Process Documentation
+.oob-docs/
