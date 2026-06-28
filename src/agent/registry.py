@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Callable, Any
 from agent import tools
-from agent.types import SkillInfo
+from agent.agent_types import SkillInfo
 
 class ToolRegistry:
     def __init__(self) -> None:
