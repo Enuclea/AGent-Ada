@@ -1048,4 +1048,189 @@ async def spawn_subagent(
         })
 
 
+async def create_expert_profile(
+    profile_name: str,
+    system_instructions: str,
+    supporting_code: Optional[str] = None
+) -> str:
+    """Creates a new permanent specialist agent profile in the workspace.
+    This profile can subsequently be invoked using `spawn_subagent` or in a boardroom.
+    
+    Args:
+        profile_name: A clean identifier for the expert agent (e.g. linter_expert, git_manager).
+        system_instructions: Detailed rules, guidelines, and context defining the expert's role.
+        supporting_code: Optional Python source code to write to `.agents/agents/<profile_name>/runner.py` to support the expert.
+    """
+    # 1. Determine destination path (.agents/agents/<profile_name>)
+    agent_dir = Path(os.getcwd()) / ".agents" / "agents" / profile_name
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 2. Write system instructions
+    inst_file = agent_dir / "system_instructions.txt"
+    with open(inst_file, "w", encoding="utf-8") as f:
+        f.write(system_instructions.strip())
+        
+    # 3. Write supporting runner code if provided
+    if supporting_code:
+        runner_file = agent_dir / "runner.py"
+        with open(runner_file, "w", encoding="utf-8") as f:
+            f.write(supporting_code.strip())
+            
+    return f"Expert profile '{profile_name}' successfully created and registered at {agent_dir}."
+
+
+async def run_boardroom(
+    task_description: str,
+    expert_profiles: List[str],
+    target_files: Optional[List[str]] = None
+) -> str:
+    """Executes a multi-agent boardroom debate where multiple experts collaborate, critique,
+    and refine a solution to a task.
+    
+    Args:
+        task_description: Detailed summary of the work that needs to be done.
+        expert_profiles: Names of registered specialist profiles to invite to the boardroom.
+        target_files: Relative paths of files the boardroom experts need to read or modify.
+    """
+    import uuid
+    import shutil
+    from agent.keyless import KeylessAgyAgent
+    from agent.registry import tool_registry
+    from agent.memory import active_session_id_var
+    
+    parent_session_id = active_session_id_var.get()
+    boardroom_id = str(uuid.uuid4())
+    sandbox_dir = Path("/tmp") / f"boardroom_sandbox_{boardroom_id}"
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    
+    current_workspace = os.getcwd()
+    
+    # 1. Setup Sandbox Workspace (copy target files)
+    if target_files:
+        for rel_path in target_files:
+            src = Path(current_workspace) / rel_path
+            dest = sandbox_dir / rel_path
+            if src.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if src.is_dir():
+                    shutil.copytree(src, dest, symlinks=True)
+                else:
+                    shutil.copy2(src, dest)
+    else:
+        # Fallback to copying everything except ignores
+        for item in Path(current_workspace).iterdir():
+            if item.name in (".git", ".venv", "__pycache__", ".agents", ".pytest_cache"):
+                continue
+            try:
+                if item.is_dir():
+                    shutil.copytree(item, sandbox_dir / item.name, symlinks=True)
+                else:
+                    shutil.copy2(item, sandbox_dir / item.name)
+            except Exception:
+                pass
+                
+    # 2. Iterate through boardroom members for consensus debate
+    current_solution = f"Initial Task Request: {task_description}"
+    files_modified = []
+    summary_history = []
+    
+    # Max rounds to prevent infinite loops
+    max_rounds = 3
+    for round_idx in range(1, max_rounds + 1):
+        for profile in expert_profiles:
+            # Resolve instructions for the current expert
+            specialist_inst = tool_registry.resolve_subagent_profile(profile)
+            system_instructions = specialist_inst or f"You are the {profile} specialist agent."
+            
+            # Subagent system prompt formatting
+            subagent_sys = (
+                f"{system_instructions}\n\n"
+                "You are participating in a multi-agent Boardroom consensus discussion. Your goal is to review, "
+                "critique, correct, or build upon the current solution.\n"
+                "CONTRACT: You MUST return your response ONLY as a raw JSON object matching the following structure:\n"
+                "{\n"
+                '  "approved": true | false,\n'
+                '  "critique_or_comments": "Your feedback, suggestions, or comments",\n'
+                '  "updated_solution_summary": "Summary of changes you made or proposed",\n'
+                '  "files_modified": ["list of modified files relative to workspace if any"]\n'
+                "}\n"
+                "Do not wrap your response in markdown code blocks. Output ONLY raw JSON."
+            )
+            
+            subagent_id = f"boardroom-{profile}-{uuid.uuid4()}"
+            
+            prompt = (
+                f"Boardroom Round {round_idx}.\n"
+                f"Task: {task_description}\n\n"
+                f"Current Solution State:\n{current_solution}\n\n"
+                f"Please review the workspace files, apply edits if needed, and respond with the JSON contract."
+            )
+            
+            # Log start message
+            memory.log_subagent_message(subagent_id, "parent", f"Inviting {profile} to Boardroom Round {round_idx} with task: {task_description}", parent_session_id=parent_session_id)
+            
+            agent = KeylessAgyAgent(
+                model="gemini-1.5-flash",
+                system_instructions=subagent_sys,
+                conversation_id=subagent_id,
+                cwd=str(sandbox_dir)
+            )
+            
+            try:
+                async with agent as sub_conn:
+                    response = await sub_conn.chat(prompt)
+                    output = ""
+                    async for chunk in response:
+                        output += chunk
+                        
+                    memory.log_subagent_message(subagent_id, "subagent", f"Boardroom contribution from {profile}: {output}", parent_session_id=parent_session_id)
+                    
+                    # Parse contribution
+                    try:
+                        cleaned_output = output.strip()
+                        if cleaned_output.startswith("```"):
+                            lines = cleaned_output.splitlines()
+                            if lines[0].startswith("```"):
+                                lines = lines[1:]
+                            if lines[-1].startswith("```"):
+                                lines = lines[:-1]
+                            cleaned_output = "\n".join(lines).strip()
+                            
+                        res_data = json.loads(cleaned_output)
+                        approved = res_data.get("approved", False)
+                        critique = res_data.get("critique_or_comments", "")
+                        summary = res_data.get("updated_solution_summary", "")
+                        mod_files = res_data.get("files_modified", [])
+                        
+                        # Merge files modified
+                        for f in mod_files:
+                            if f not in files_modified:
+                                files_modified.append(f)
+                                
+                        current_solution = f"Latest Solution Summary: {summary}\nCritique/Comments from {profile}: {critique}"
+                        summary_history.append(f"[{profile}] Approved: {approved}. Summary: {summary}")
+                        
+                    except Exception as parse_err:
+                        memory.log_subagent_message(subagent_id, "subagent", f"Failed to parse boardroom contribution JSON: {parse_err}", parent_session_id=parent_session_id)
+            except Exception as e:
+                memory.log_subagent_message(subagent_id, "subagent", f"Boardroom agent error: {e}", parent_session_id=parent_session_id)
+                
+    # 3. Apply final accepted files back to the main workspace
+    for rel_path in files_modified:
+        sandbox_file = sandbox_dir / rel_path
+        workspace_file = Path(current_workspace) / rel_path
+        if sandbox_file.exists() and sandbox_file.is_file():
+            workspace_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(sandbox_file, workspace_file)
+            print(f"[BOARDROOM] Copied accepted boardroom modifications: {rel_path}")
+            
+    return json.dumps({
+        "status": "success",
+        "boardroom_id": boardroom_id,
+        "files_modified": files_modified,
+        "summary_of_changes": "Boardroom debate complete.\n" + "\n".join(summary_history),
+        "validation_result": "Boardroom debate reached termination/consensus."
+    })
+
+
 

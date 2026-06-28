@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List, Dict, Callable, Any
+from typing import List, Dict, Callable, Any, Optional
 from agent import tools
 from agent.agent_types import SkillInfo
 
@@ -33,6 +33,8 @@ class ToolRegistry:
             tools.run_command,
             tools.generate_interface_stub,
             tools.spawn_subagent,
+            tools.create_expert_profile,
+            tools.run_boardroom,
         ]
         for t in builtins:
             if t not in registered:
@@ -85,5 +87,55 @@ class ToolRegistry:
                             except Exception:
                                 continue
         return discovered
+
+    def resolve_subagent_profile(self, agent_profile: Optional[str]) -> Optional[str]:
+        """Resolves system instructions for a specialist subagent profile from the database or workspace files."""
+        if not agent_profile:
+            return None
+
+        # 1. Check workspace customizations root (.agents/agents/<profile_name>/system_instructions.txt)
+        workspace_agent_dir = Path(os.getcwd()) / ".agents" / "agents" / agent_profile
+        inst_file = workspace_agent_dir / "system_instructions.txt"
+        if inst_file.exists() and inst_file.is_file():
+            try:
+                with open(inst_file, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+
+        # 2. Check built-in profiles
+        builtins = {
+            "grace_timekeeper": (
+                "You are the Grace Timekeeper Specialist agent. Your primary role is to run the timekeeper health check.\n"
+                "The monitor script is located at 'src/agent/grace_monitor.py' in the workspace.\n"
+                "Directly execute this script using python to check background task health. Do not perform generic searches.\n"
+                "Report any stalled or delayed tasks back to the parent agent."
+            ),
+            "gmail_sync": (
+                "You are the Gmail & Morgen Sync Specialist agent. Your primary role is to sync incoming Gmail messages and update Morgen tasks.\n"
+                "The sync script is located at 'scratch/run_gmail_sync.py' in the workspace.\n"
+                "Directly execute this script using python to run the synchronization. Do not perform generic searches.\n"
+                "Report a concise summary of synced emails back to the parent agent."
+            ),
+            "quiet_observer": (
+                "You are the Quiet Observer Specialist agent. Your primary role is to analyze conversation logs, user commands, and tool calls to discover patterns and opportunities.\n"
+                "The observer script is located at 'scratch/quiet_observer.py' in the workspace.\n"
+                "Directly execute this script using python to perform the analysis. Do not perform generic searches.\n"
+                "Report suggestions and memory facts back to the parent agent."
+            ),
+            "meta_evaluator": (
+                "You are the Meta-Evaluation Specialist agent. Your primary role is to analyze recent errors and log metrics.\n"
+                "The evaluation script is located at 'src/agent/meta_evaluation.py' in the workspace.\n"
+                "Directly execute this script using python to perform the post-mortem analysis. Do not perform generic searches.\n"
+                "Report the post-mortem summary back to the parent agent."
+            ),
+            "stock_trader": (
+                "You are the Stock Game Trading Specialist agent. Your primary role is to check stock portfolios and rebalance holdings.\n"
+                "The trading script is located at 'stock_game/strategy.py' in the workspace.\n"
+                "Directly execute this script using python. Do not perform generic searches.\n"
+                "Report the trade completion and portfolio balance status back to the parent agent."
+            )
+        }
+        return builtins.get(agent_profile)
 
 tool_registry = ToolRegistry()

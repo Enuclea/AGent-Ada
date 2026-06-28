@@ -66,8 +66,12 @@ class OrchestrationService:
             "3. For each coding task, DO NOT modify the file yourself. Instead:\n"
             "   - Identify the files that must be modified.\n"
             "   - Identify dependent modules and generate their interface stubs using `generate_interface_stub`.\n"
-            "   - Call `spawn_subagent` with a narrow, targeted prompt, passing the list of target files and/or stub files.\n"
-            "4. Once the subagent returns, inspect its changes, run local validation tests, and update the task list."
+            "   - If the task is repetitive, complex, or requires a dedicated persona (e.g. QA, Security, Linting), "
+            "first use `create_expert_profile` to register a permanent specialist agent, then spawn it using `spawn_subagent`.\n"
+            "   - For high-impact, refactoring, or safety-critical modifications, invite multiple experts to collaborate "
+            "and debate a solution using `run_boardroom`.\n"
+            "   - Otherwise, call `spawn_subagent` with a narrow, targeted prompt, passing the list of target files and/or stub files.\n"
+            "4. Once the subagents/boardroom completes, inspect the changes, run local validation tests, and update the task list."
         )
 
         # 3. Construct system instructions with SQLite persistent memory and RAG
@@ -278,7 +282,8 @@ class OrchestrationService:
                 model=model_name,
                 system_instructions=config_args["system_instructions"],
                 conversation_id=session_id if session_id and not session_id.startswith("discord-") else None,
-                timeout=600.0
+                timeout=600.0,
+                roleplay=roleplay
             )
             agent = await agent.__aenter__()
 
