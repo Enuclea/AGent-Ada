@@ -323,6 +323,7 @@ class KeylessAgyAgent:
         timeout: Optional[float] = None,
         task_priority: TaskPriority = TaskPriority.INTERACTIVE,
         cwd: Optional[str] = None,
+        roleplay: bool = False,
     ):
         self.model = model
         self.system_instructions = system_instructions
@@ -332,6 +333,7 @@ class KeylessAgyAgent:
         self.timeout = timeout
         self.task_priority = task_priority
         self.cwd = cwd
+        self.roleplay = roleplay
         self._conversations_dir = str(Path.home() / ".gemini" / "antigravity-cli" / "conversations")
 
     async def __aenter__(self):
@@ -483,50 +485,72 @@ class KeylessAgyAgent:
 
         # --- Build failover sequence based on task priority and pools ---
         failover_sequence = []
+        if self.roleplay:
+            failover_sequence = [primary_model, "ollama/gemma4:12b"]
+        else:
+            # Determine which pool the primary model belongs to
+            is_primary_gemini = any(primary_model.lower().startswith(g.lower().split("-")[0]) for g in GEMINI_POOL) or primary_model.lower().startswith("gemini")
 
-        # Determine which pool the primary model belongs to
-        is_primary_gemini = any(primary_model.lower().startswith(g.lower().split("-")[0]) for g in GEMINI_POOL) or primary_model.lower().startswith("gemini")
-
-        if is_primary_gemini:
-            # Start with Gemini pool, then fall to 3P pool
-            for m in GEMINI_POOL:
-                if m not in failover_sequence:
-                    failover_sequence.append(m)
-            if self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+            if is_primary_gemini:
+                # Start with Gemini pool, then fall to 3P pool
+                for m in GEMINI_POOL:
+                    if m not in failover_sequence:
+                        failover_sequence.append(m)
+                if self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+                    for m in THREE_P_POOL:
+                        if m not in failover_sequence:
+                            failover_sequence.append(m)
+            else:
+                # Primary is 3P — try it first, then Gemini, then rest of 3P
+                failover_sequence.append(primary_model)
+                for m in GEMINI_POOL:
+                    if m not in failover_sequence:
+                        failover_sequence.append(m)
                 for m in THREE_P_POOL:
                     if m not in failover_sequence:
                         failover_sequence.append(m)
-        else:
-            # Primary is 3P — try it first, then Gemini, then rest of 3P
-            failover_sequence.append(primary_model)
-            for m in GEMINI_POOL:
-                if m not in failover_sequence:
-                    failover_sequence.append(m)
-            for m in THREE_P_POOL:
-                if m not in failover_sequence:
-                    failover_sequence.append(m)
 
-        # For BACKGROUND priority, only try the primary model — no failover
-        if self.task_priority >= TaskPriority.BACKGROUND:
-            failover_sequence = [primary_model]
-        # For SCHEDULED_ROUTINE, only try models in the primary pool
-        elif self.task_priority >= TaskPriority.SCHEDULED_ROUTINE:
-            if is_primary_gemini:
-                failover_sequence = [m for m in failover_sequence if m in GEMINI_POOL]
-            else:
+            # For BACKGROUND priority, only try the primary model — no failover
+            if self.task_priority >= TaskPriority.BACKGROUND:
                 failover_sequence = [primary_model]
+            # For SCHEDULED_ROUTINE, only try models in the primary pool
+            elif self.task_priority >= TaskPriority.SCHEDULED_ROUTINE:
+                if is_primary_gemini:
+                    failover_sequence = [m for m in failover_sequence if m in GEMINI_POOL]
+                else:
+                    failover_sequence = [primary_model]
 
-        # Filter out models with open circuits
-        failover_sequence = [m for m in failover_sequence if not _circuit_breaker.is_open(m)]
-        if not failover_sequence:
-            # All circuits open — force-try primary model anyway
-            failover_sequence = [primary_model]
+            # Filter out models with open circuits
+            failover_sequence = [m for m in failover_sequence if not _circuit_breaker.is_open(m)]
+            if not failover_sequence:
+                # All circuits open — force-try primary model anyway
+                failover_sequence = [primary_model]
 
         timeout_val = self.timeout if self.timeout is not None else 30.0
         harness_path = get_harness_path() or "agy"
         last_error = "All agy execution attempts failed."
 
         for current_model in failover_sequence:
+            if current_model.startswith("ollama/"):
+                import aiohttp
+                url = "http://10.200.0.4:11434/api/generate"
+                payload = {
+                    "model": current_model.replace("ollama/", ""),
+                    "prompt": full_prompt,
+                    "stream": False
+                }
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(url, json=payload, timeout=self.timeout or 60.0) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                return KeylessAgyResponse(data["response"])
+                            else:
+                                raise RuntimeError(f"Ollama Mac Mini returned status {resp.status}")
+                except Exception as e:
+                    print(f"[FAILOVER] Ollama Mac Mini call failed: {e}")
+                    continue
+
             cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions"]
             if self.conversation_id:
                 cmd.extend(["--conversation", self.conversation_id])
@@ -598,7 +622,7 @@ class KeylessAgyAgent:
             print(f"[FAILOVER] Model {current_model} failed. Trying next model...")
 
         # --- Grok fallback (only for INTERACTIVE and SCHEDULED_CRITICAL priority) ---
-        if self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+        if not self.roleplay and self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
             grok_path = get_grok_path()
             if grok_path:
                 if check_and_record_grok_usage(db_path=self.db_path):

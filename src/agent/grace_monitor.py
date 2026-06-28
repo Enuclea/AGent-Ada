@@ -16,7 +16,7 @@ except ImportError:
         print(f"[GRACE] Discord notification not available (standalone mode): {text[:100]}...")
         return False
 
-def check_tasks(inactivity_threshold_mins=10):
+def check_tasks(inactivity_threshold_mins=20):
     if not DB_PATH.exists():
         print(json.dumps({"error": "Database does not exist."}))
         return
@@ -25,32 +25,14 @@ def check_tasks(inactivity_threshold_mins=10):
     cursor = conn.cursor()
     
     try:
-        # Find running tasks
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        
+        # --- 1. Check Active Tasks ---
         cursor.execute("SELECT id, name, details, started_at FROM active_tasks WHERE status = 'running'")
         running_tasks = cursor.fetchall()
         
-        if not running_tasks:
-            # Output clean JSON or simple text
-            print(json.dumps({
-                "status": "ok",
-                "running_count": 0,
-                "stalled_count": 0,
-                "report": "No active tasks are currently running."
-            }))
-            return
-            
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        report_entries = []
-        stalled_count = 0
         stalled_tasks = []
-        
-        markdown_lines = [
-            "# Grace's Timekeeper Report",
-            f"Generated at: {now.isoformat()} UTC\n"
-        ]
-        
-        stalled_section = []
-        running_section = []
+        running_tasks_list = []
         
         for task_id, name, details, started_at in running_tasks:
             # Find the last log entry for this task
@@ -73,23 +55,19 @@ def check_tasks(inactivity_threshold_mins=10):
                 try:
                     log_dt = datetime.fromisoformat(log_time.replace("Z", "+00:00")).replace(tzinfo=None)
                     inactive = now - log_dt
-                    inactive_minutes = inactive.seconds // 60
+                    inactive_minutes = inactive.seconds // 60 + (inactive.days * 24 * 60)
                     last_update_str = f"{inactive_minutes}m ago: {log_msg}"
                 except Exception:
                     pass
             else:
-                # If no log yet, inactivity is based on started_at
                 try:
                     start_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00")).replace(tzinfo=None)
                     inactive = now - start_dt
-                    inactive_minutes = inactive.seconds // 60
+                    inactive_minutes = inactive.seconds // 60 + (inactive.days * 24 * 60)
                 except Exception:
                     pass
             
             is_stalled = inactive_minutes > inactivity_threshold_mins
-            if is_stalled:
-                stalled_count += 1
-                
             task_info = {
                 "id": task_id,
                 "name": name,
@@ -99,59 +77,173 @@ def check_tasks(inactivity_threshold_mins=10):
                 "is_stalled": is_stalled,
                 "inactive_minutes": inactive_minutes
             }
-            report_entries.append(task_info)
+            
             if is_stalled:
                 stalled_tasks.append(task_info)
-            
-            # Build sections for MD report
-            status_tag = "⚠️ STALLED" if is_stalled else "🟢 RUNNING"
-            task_md = (
-                f"- **{name}** [{status_tag}]\n"
-                f"  - *ID*: `{task_id}`\n"
-                f"  - *Details*: `{details}`\n"
-                f"  - *Elapsed Time*: {elapsed_str}\n"
-                f"  - *Last Update*: {last_update_str}"
-            )
-            if is_stalled:
-                stalled_section.append(task_md)
             else:
-                running_section.append(task_md)
+                running_tasks_list.append(task_info)
+                
+        # --- 2. Check Subagents ---
+        cursor.execute("SELECT DISTINCT subagent_id FROM subagent_messages")
+        subagent_ids = [row[0] for row in cursor.fetchall()]
         
-        if stalled_section:
-            markdown_lines.append("## ⚠️ WARNING: Potential Halted/Delayed Tasks Detected")
-            markdown_lines.extend(stalled_section)
+        stalled_subagents = []
+        running_subagents_list = []
+        
+        for sid in subagent_ids:
+            cursor.execute(
+                "SELECT role, message, timestamp, parent_session_id FROM subagent_messages WHERE subagent_id = ? ORDER BY timestamp ASC",
+                (sid,)
+            )
+            msgs = cursor.fetchall()
+            if not msgs:
+                continue
+            
+            parent_msg = next((m for m in msgs if m[0] == "parent"), None)
+            subagent_msgs = [m for m in msgs if m[0] == "subagent"]
+            last_sub_msg = subagent_msgs[-1] if subagent_msgs else None
+            parent_session_id = next((m[3] for m in msgs if m[3]), None)
+            
+            prompt = ""
+            if parent_msg:
+                m_text = parent_msg[1]
+                idx = m_text.find("with prompt: ")
+                if idx != -1:
+                    prompt = m_text[idx + 13:]
+                else:
+                    prompt = m_text
+                started_at = parent_msg[2]
+            else:
+                started_at = msgs[0][2]
+                
+            status = "active"
+            completed_at = None
+            
+            if last_sub_msg:
+                completed_at = last_sub_msg[2]
+                m_text = last_sub_msg[1]
+                # Check for explicit completion/failure messages
+                is_finished = False
+                for indicator in ["failed", "error", "completed", "terminated"]:
+                    if indicator in m_text.lower():
+                        is_finished = True
+                        break
+                if is_finished:
+                    status = "failed" if ("failed" in m_text.lower() or "error" in m_text.lower() or "terminated" in m_text.lower()) else "completed"
+            
+            if status == "active":
+                try:
+                    start_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                    elapsed = now - start_dt
+                    inactive_minutes = elapsed.seconds // 60 + (elapsed.days * 24 * 60)
+                    elapsed_str = f"{elapsed.seconds // 60}m {elapsed.seconds % 60}s"
+                except Exception:
+                    inactive_minutes = 9999
+                    elapsed_str = "Unknown"
+                
+                sub_info = {
+                    "subagent_id": sid,
+                    "parent_session_id": parent_session_id,
+                    "prompt": prompt,
+                    "started_at": started_at,
+                    "elapsed": elapsed_str,
+                    "inactive_minutes": inactive_minutes
+                }
+                
+                if inactive_minutes > inactivity_threshold_mins:
+                    stalled_subagents.append(sub_info)
+                else:
+                    running_subagents_list.append(sub_info)
+
+        # --- 3. Auto-termination / Cleanup ---
+        cleaned_tasks = []
+        cleaned_subagents = []
+        
+        if stalled_tasks:
+            for task in stalled_tasks:
+                cursor.execute(
+                    "UPDATE active_tasks SET status = 'failed', completed_at = ? WHERE id = ?",
+                    (now.isoformat(), task["id"])
+                )
+                cursor.execute(
+                    "INSERT INTO task_logs (task_id, timestamp, message) VALUES (?, ?, ?)",
+                    (task["id"], now.isoformat(), "Task automatically terminated by Grace Monitor due to inactivity timeout.")
+                )
+                cleaned_tasks.append(task)
+                
+        if stalled_subagents:
+            for sub in stalled_subagents:
+                cursor.execute(
+                    "INSERT INTO subagent_messages (subagent_id, role, message, timestamp) VALUES (?, ?, ?, ?)",
+                    (sub["subagent_id"], "subagent", "Subagent failed: Terminated automatically by Grace Monitor due to inactivity timeout (stalled).", now.isoformat())
+                )
+                cleaned_subagents.append(sub)
+                
+        if stalled_tasks or stalled_subagents:
+            conn.commit()
+            
+        # --- 4. Discord Alerts ---
+        if cleaned_tasks or cleaned_subagents:
+            alert_lines = [
+                "🚨 **Ada Timekeeper: Auto-Cleaned Stalled Tasks/Subagents**",
+                "The following items exceeded inactivity thresholds and were auto-terminated to prevent resource leaks:"
+            ]
+            for t in cleaned_tasks:
+                alert_lines.append(f"• **Task**: `{t['name']}` (ID: `{t['id']}` - inactive for {t['inactive_minutes']}m)")
+            for s in cleaned_subagents:
+                prompt_snippet = s['prompt'][:60] + "..." if len(s['prompt']) > 60 else s['prompt']
+                alert_lines.append(f"• **Subagent**: `{prompt_snippet}` (ID: `{s['subagent_id']}` - inactive for {s['inactive_minutes']}m)")
+            
+            send_discord_alert("\n".join(alert_lines))
+            
+        # --- 5. Generate Markdown Report ---
+        markdown_lines = [
+            "# Grace's Timekeeper Report",
+            f"Generated at: {now.isoformat()} UTC\n"
+        ]
+        
+        if cleaned_tasks or cleaned_subagents:
+            markdown_lines.append("## ♻️ Auto-Cleaned Stalled Items (Terminated)")
+            for t in cleaned_tasks:
+                markdown_lines.append(f"- **Task**: `{t['name']}` (ID: `{t['id']}`) - Inactivity: {t['inactive_minutes']}m")
+            for s in cleaned_subagents:
+                markdown_lines.append(f"- **Subagent**: `{s['prompt']}` (ID: `{s['subagent_id']}`) - Inactivity: {s['inactive_minutes']}m")
             markdown_lines.append("")
             
-        markdown_lines.append("## Running Tasks Overview")
-        if running_section:
-            markdown_lines.extend(running_section)
+        markdown_lines.append("## Active Running Tasks")
+        if running_tasks_list:
+            for t in running_tasks_list:
+                markdown_lines.append(
+                    f"- **{t['name']}**\n"
+                    f"  - *ID*: `{t['id']}`\n"
+                    f"  - *Details*: `{t['details']}`\n"
+                    f"  - *Elapsed Time*: {t['elapsed']}\n"
+                    f"  - *Last Update*: {t['last_update']}"
+                )
         else:
-            markdown_lines.append("- No non-stalled active tasks running.")
+            markdown_lines.append("- No running active tasks.")
+            
+        markdown_lines.append("\n## Active Running Subagents")
+        if running_subagents_list:
+            for s in running_subagents_list:
+                markdown_lines.append(
+                    f"- **Subagent (Prompt: {s['prompt']})**\n"
+                    f"  - *ID*: `{s['subagent_id']}`\n"
+                    f"  - *Elapsed Time*: {s['elapsed']}\n"
+                    f"  - *Inactivity*: {s['inactive_minutes']}m"
+                )
+        else:
+            markdown_lines.append("- No running active subagents.")
             
         report_md = "\n".join(markdown_lines)
         
-        # If there are stalled tasks, send a direct alert to Discord
-        if stalled_tasks:
-            alert_lines = [
-                "🚨 **Ada Timekeeper Warning: Hung Task Detected!**",
-                "The following active task(s) appear to be delayed or stalled:"
-            ]
-            for t in stalled_tasks:
-                alert_lines.append(
-                    f"• **Task**: `{t['name']}`\n"
-                    f"  - **ID**: `{t['id']}`\n"
-                    f"  - **Inactivity**: {t['inactive_minutes']} minutes without progress\n"
-                    f"  - **Last Log**: {t['last_update']}"
-                )
-            alert_lines.append("\n_Action required. Please direct mention me or use the appropriate prefix to check logs/terminate._")
-            send_discord_alert("\n".join(alert_lines))
-            
-        # Output clean JSON containing both structure and pre-rendered markdown
+        # Output clean JSON
         print(json.dumps({
-            "status": "warning" if stalled_count > 0 else "ok",
-            "running_count": len(running_tasks),
-            "stalled_count": stalled_count,
-            "tasks": report_entries,
+            "status": "cleanup" if (cleaned_tasks or cleaned_subagents) else "ok",
+            "running_tasks_count": len(running_tasks_list),
+            "cleaned_tasks_count": len(cleaned_tasks),
+            "running_subagents_count": len(running_subagents_list),
+            "cleaned_subagents_count": len(cleaned_subagents),
             "report": report_md
         }, indent=2))
         

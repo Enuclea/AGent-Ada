@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 import tempfile
 import os
 import pytest
@@ -11,7 +15,8 @@ from agent import memory
 def temp_db_file():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / "history.db"
-        with mock.patch("agent.memory.DB_FILE_PATH", tmp_path):
+        with mock.patch("agent.memory.DB_FILE_PATH", tmp_path), \
+             mock.patch("enuclea.db.DEFAULT_DB_PATH", "/nonexistent/path.db"):
             memory.init_db()
             yield tmp_path
 
