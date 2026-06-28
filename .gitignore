@@ -11,6 +11,8 @@ ENV/
 
 # Databases
 *.db
+*.db-shm
+*.db-wal
 
 # Logs
 *.log
