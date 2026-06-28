@@ -1258,10 +1258,15 @@ def get_subagents_status() -> List[Dict[str, Any]]:
             if last_sub_msg:
                 completed_at = last_sub_msg[2]
                 m_text = last_sub_msg[1]
-                if "failed" in m_text.lower() or "error" in m_text.lower():
+                if m_text.startswith("[FAILED]"):
                     status = "failed"
-                else:
+                elif m_text.startswith("[SUCCESS]"):
                     status = "completed"
+                else:
+                    if "failed" in m_text.lower() or "error" in m_text.lower():
+                        status = "failed"
+                    else:
+                        status = "completed"
                     
             results.append({
                 "subagent_id": sid,

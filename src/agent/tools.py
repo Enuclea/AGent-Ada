@@ -1010,7 +1010,7 @@ async def spawn_subagent(
             output = ""
             async for chunk in response:
                 output += chunk
-            memory.log_subagent_message(sandbox_id, "subagent", f"Subagent completed: {output}")
+            memory.log_subagent_message(sandbox_id, "subagent", f"[SUCCESS] Subagent completed: {output}")
             
             # Copy modified files back to the main workspace on success
             try:
@@ -1038,7 +1038,7 @@ async def spawn_subagent(
                 
             return output
     except Exception as e:
-        err_msg = f"Subagent execution failed: {e}"
+        err_msg = f"[FAILED] Subagent execution failed: {e}"
         memory.log_subagent_message(sandbox_id, "subagent", err_msg)
         return json.dumps({
             "status": "failed",
@@ -1137,6 +1137,7 @@ async def run_boardroom(
     # Max rounds to prevent infinite loops
     max_rounds = 3
     for round_idx in range(1, max_rounds + 1):
+        round_approvals = 0
         for profile in expert_profiles:
             # Resolve instructions for the current expert
             specialist_inst = tool_registry.resolve_subagent_profile(profile)
@@ -1183,7 +1184,7 @@ async def run_boardroom(
                     async for chunk in response:
                         output += chunk
                         
-                    memory.log_subagent_message(subagent_id, "subagent", f"Boardroom contribution from {profile}: {output}", parent_session_id=parent_session_id)
+                    memory.log_subagent_message(subagent_id, "subagent", f"[SUCCESS] Boardroom contribution from {profile}: {output}", parent_session_id=parent_session_id)
                     
                     # Parse contribution
                     try:
@@ -1198,6 +1199,8 @@ async def run_boardroom(
                             
                         res_data = json.loads(cleaned_output)
                         approved = res_data.get("approved", False)
+                        if approved:
+                            round_approvals += 1
                         critique = res_data.get("critique_or_comments", "")
                         summary = res_data.get("updated_solution_summary", "")
                         mod_files = res_data.get("files_modified", [])
@@ -1211,9 +1214,14 @@ async def run_boardroom(
                         summary_history.append(f"[{profile}] Approved: {approved}. Summary: {summary}")
                         
                     except Exception as parse_err:
-                        memory.log_subagent_message(subagent_id, "subagent", f"Failed to parse boardroom contribution JSON: {parse_err}", parent_session_id=parent_session_id)
+                        memory.log_subagent_message(subagent_id, "subagent", f"[FAILED] Failed to parse boardroom contribution JSON: {parse_err}", parent_session_id=parent_session_id)
             except Exception as e:
-                memory.log_subagent_message(subagent_id, "subagent", f"Boardroom agent error: {e}", parent_session_id=parent_session_id)
+                memory.log_subagent_message(subagent_id, "subagent", f"[FAILED] Boardroom agent error: {e}", parent_session_id=parent_session_id)
+                
+        # If all experts approved in this round, consensus reached!
+        if round_approvals == len(expert_profiles):
+            print(f"[BOARDROOM] Consensus reached at round {round_idx}!")
+            break
                 
     # 3. Apply final accepted files back to the main workspace
     for rel_path in files_modified:
