@@ -17,6 +17,9 @@ sqlite3.connect = custom_sqlite3_connect
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import contextvars
+
+active_session_id_var = contextvars.ContextVar("active_session_id", default=None)
 
 MEMORY_FILE_PATH = Path.home() / ".agent" / "memory.json"
 
@@ -237,6 +240,18 @@ def init_db() -> None:
             created_at TEXT
         )
         """)
+        try:
+            cursor.execute("ALTER TABLE session_plans ADD COLUMN goal TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE session_plans ADD COLUMN acceptance_criteria TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE session_plans ADD COLUMN non_goals TEXT")
+        except sqlite3.OperationalError:
+            pass
         # Plan steps
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS plan_steps (
@@ -272,6 +287,10 @@ def init_db() -> None:
             timestamp TEXT
         )
         """)
+        try:
+            cursor.execute("ALTER TABLE subagent_messages ADD COLUMN parent_session_id TEXT")
+        except sqlite3.OperationalError:
+            pass
         # Model quotas
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS model_quotas (
@@ -983,15 +1002,27 @@ async def ask_discord_approval(task_id: str, tool_name: str, tool_args: str) -> 
 
 # --- Hermes DB Helpers ---
 
-def add_session_plan(plan_id: str, session_id: str, title: str, status: str = "pending") -> None:
+def add_session_plan(
+    plan_id: str,
+    session_id: str,
+    title: str,
+    status: str = "pending",
+    goal: Optional[str] = None,
+    acceptance_criteria: Optional[str] = None,
+    non_goals: Optional[str] = None
+) -> None:
     """Adds a new execution plan for a session."""
     conn = sqlite3.connect(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         created_at = datetime.now(timezone.utc).isoformat()
         cursor.execute(
-            "INSERT OR REPLACE INTO session_plans (id, session_id, title, status, created_at) VALUES (?, ?, ?, ?, ?)",
-            (plan_id, session_id, title, status, created_at)
+            """
+            INSERT OR REPLACE INTO session_plans 
+            (id, session_id, title, status, created_at, goal, acceptance_criteria, non_goals) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (plan_id, session_id, title, status, created_at, goal, acceptance_criteria, non_goals)
         )
         conn.commit()
     except Exception:
@@ -1046,7 +1077,7 @@ def get_session_plan(session_id: str) -> Optional[Dict[str, Any]]:
     conn = sqlite3.connect(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, title, status, created_at FROM session_plans WHERE session_id = ? ORDER BY created_at DESC LIMIT 1", (session_id,))
+        cursor.execute("SELECT id, title, status, created_at, goal, acceptance_criteria, non_goals FROM session_plans WHERE session_id = ? ORDER BY created_at DESC LIMIT 1", (session_id,))
         plan_row = cursor.fetchone()
         if not plan_row:
             return None
@@ -1075,6 +1106,9 @@ def get_session_plan(session_id: str) -> Optional[Dict[str, Any]]:
             "title": plan_row[1],
             "status": plan_row[2],
             "created_at": plan_row[3],
+            "goal": plan_row[4],
+            "acceptance_criteria": plan_row[5],
+            "non_goals": plan_row[6],
             "steps": steps
         }
     except Exception:
@@ -1124,16 +1158,36 @@ def get_token_usage_telemetry(session_id: str) -> List[Dict[str, Any]]:
         conn.close()
     return results
 
-def log_subagent_message(subagent_id: str, role: str, message: str) -> None:
+def log_subagent_message(subagent_id: str, role: str, message: str, parent_session_id: Optional[str] = None) -> None:
     """Records a messaging communication log between parent and subagent."""
     conn = sqlite3.connect(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         timestamp = datetime.now(timezone.utc).isoformat()
-        cursor.execute(
-            "INSERT INTO subagent_messages (subagent_id, role, message, timestamp) VALUES (?, ?, ?, ?)",
-            (subagent_id, role, message, timestamp)
-        )
+        
+        # Auto-resolve parent_session_id from context var if not provided
+        if not parent_session_id:
+            parent_session_id = active_session_id_var.get()
+            
+        # If parent_session_id is provided, save it and backfill
+        if parent_session_id:
+            cursor.execute(
+                "INSERT INTO subagent_messages (subagent_id, role, message, timestamp, parent_session_id) VALUES (?, ?, ?, ?, ?)",
+                (subagent_id, role, message, timestamp, parent_session_id)
+            )
+            cursor.execute(
+                "UPDATE subagent_messages SET parent_session_id = ? WHERE subagent_id = ? AND parent_session_id IS NULL",
+                (parent_session_id, subagent_id)
+            )
+        else:
+            # Try to lookup existing parent_session_id for this subagent_id
+            cursor.execute("SELECT parent_session_id FROM subagent_messages WHERE subagent_id = ? AND parent_session_id IS NOT NULL LIMIT 1", (subagent_id,))
+            row = cursor.fetchone()
+            resolved_parent = row[0] if row else None
+            cursor.execute(
+                "INSERT INTO subagent_messages (subagent_id, role, message, timestamp, parent_session_id) VALUES (?, ?, ?, ?, ?)",
+                (subagent_id, role, message, timestamp, resolved_parent)
+            )
         conn.commit()
     except Exception:
         pass
@@ -1174,7 +1228,7 @@ def get_subagents_status() -> List[Dict[str, Any]]:
         
         for sid in subagent_ids:
             cursor.execute(
-                "SELECT role, message, timestamp FROM subagent_messages WHERE subagent_id = ? ORDER BY timestamp ASC",
+                "SELECT role, message, timestamp, parent_session_id FROM subagent_messages WHERE subagent_id = ? ORDER BY timestamp ASC",
                 (sid,)
             )
             msgs = cursor.fetchall()
@@ -1184,6 +1238,7 @@ def get_subagents_status() -> List[Dict[str, Any]]:
             parent_msg = next((m for m in msgs if m[0] == "parent"), None)
             subagent_msgs = [m for m in msgs if m[0] == "subagent"]
             last_sub_msg = subagent_msgs[-1] if subagent_msgs else None
+            parent_session_id = next((m[3] for m in msgs if m[3]), None)
             
             prompt = ""
             if parent_msg:
@@ -1210,6 +1265,7 @@ def get_subagents_status() -> List[Dict[str, Any]]:
                     
             results.append({
                 "subagent_id": sid,
+                "parent_session_id": parent_session_id,
                 "prompt": prompt,
                 "status": status,
                 "started_at": started_at,

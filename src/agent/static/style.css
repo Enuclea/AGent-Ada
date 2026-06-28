@@ -921,11 +921,11 @@ select:focus {
 
 /* Plan & Execution Steps Widget Styling */
 .plan-steps-container {
-    max-height: 250px;
+    max-height: 450px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 0.8rem;
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
@@ -945,6 +945,31 @@ select:focus {
     font-weight: 500;
 }
 
+.plan-section-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0.6rem 0 0.3rem 0;
+    font-weight: 700;
+}
+
+.plan-goal-desc {
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    line-height: 1.35;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 6px;
+    padding: 0.5rem;
+    border: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.plan-steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
 .plan-step-item {
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid var(--card-border);
@@ -952,8 +977,18 @@ select:focus {
     border-radius: 8px;
     display: flex;
     align-items: flex-start;
-    gap: 0.6rem;
+    gap: 0.75rem;
     transition: all 0.25s ease;
+}
+
+.step-left {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-top: 0.15rem;
+    font-size: 0.95rem;
 }
 
 .plan-step-item:hover {
@@ -1724,6 +1759,7 @@ select:focus {
     text-overflow: ellipsis;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
 }
 

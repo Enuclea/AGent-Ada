@@ -912,7 +912,8 @@ def generate_interface_stub(file_path: str) -> str:
 async def spawn_subagent(
     prompt: str,
     target_files: Optional[List[str]] = None,
-    stub_files: Optional[List[str]] = None
+    stub_files: Optional[List[str]] = None,
+    agent_profile: Optional[str] = None
 ) -> str:
     """Spawns an isolated subagent inside a sandbox to perform a coding task.
     The tool waits for the subagent to complete and returns its summary report.
@@ -921,12 +922,15 @@ async def spawn_subagent(
         prompt: Detailed instructions for the subagent's task.
         target_files: Relative paths of files the subagent needs to modify or read.
         stub_files: Relative paths of files whose signatures/interfaces are needed as context.
+        agent_profile: Optional profile name (e.g. grace_timekeeper) to load specialized instructions.
     """
     import uuid
     import shutil
     from agent.keyless import KeylessAgyAgent
+    from agent.registry import tool_registry
     
-    sandbox_id = str(uuid.uuid4())
+    profile_prefix = f"{agent_profile}-" if agent_profile else ""
+    sandbox_id = f"{profile_prefix}{uuid.uuid4()}"
     sandbox_dir = Path("/tmp") / f"subagent_sandbox_{sandbox_id}"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
     
@@ -962,20 +966,36 @@ async def spawn_subagent(
                     print(f"[SPAWN_SUBAGENT] Error stubbing {rel_path}: {e}")
                     
     # 3. Log start
-    memory.log_subagent_message(sandbox_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {prompt}")
+    from agent.memory import active_session_id_var
+    parent_session_id = active_session_id_var.get()
+    memory.log_subagent_message(sandbox_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {prompt}", parent_session_id=parent_session_id)
     
-    # 4. Instantiate KeylessAgyAgent with the sandbox cwd
-    subagent_system_instructions = (
-        "You are a subagent working in an isolated sandbox. Complete the requested task.\n"
-        "CONTRACT: You MUST return your final response ONLY as a raw JSON object matching the following structure:\n"
-        "{\n"
-        '  "status": "success" | "failed",\n'
-        '  "files_modified": ["list of modified files"],\n'
-        '  "summary_of_changes": "short description of changes",\n'
-        '  "validation_result": "output of run tests/validation"\n'
-        "}\n"
-        "Do not wrap your response in markdown code blocks. Output ONLY raw JSON."
-    )
+    # 4. Resolve system instructions based on agent_profile
+    specialist_inst = tool_registry.resolve_subagent_profile(agent_profile)
+    if specialist_inst:
+        subagent_system_instructions = (
+            f"{specialist_inst}\n\n"
+            "CONTRACT: You MUST return your final response ONLY as a raw JSON object matching the following structure:\n"
+            "{\n"
+            '  "status": "success" | "failed",\n'
+            '  "files_modified": ["list of modified files"],\n'
+            '  "summary_of_changes": "short description of changes",\n'
+            '  "validation_result": "output of run tests/validation"\n'
+            "}\n"
+            "Do not wrap your response in markdown code blocks. Output ONLY raw JSON."
+        )
+    else:
+        subagent_system_instructions = (
+            "You are a subagent working in an isolated sandbox. Complete the requested task.\n"
+            "CONTRACT: You MUST return your final response ONLY as a raw JSON object matching the following structure:\n"
+            "{\n"
+            '  "status": "success" | "failed",\n'
+            '  "files_modified": ["list of modified files"],\n'
+            '  "summary_of_changes": "short description of changes",\n'
+            '  "validation_result": "output of run tests/validation"\n'
+            "}\n"
+            "Do not wrap your response in markdown code blocks. Output ONLY raw JSON."
+        )
     
     agent = KeylessAgyAgent(
         model="gemini-1.5-flash",

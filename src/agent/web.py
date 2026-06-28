@@ -87,7 +87,7 @@ def ensure_default_scheduled_tasks(conn=None):
                 "stock-check-task-id",
                 "Stock Game Auto Check",
                 "Please check the stock game portfolio status using stock_game/portfolio.py status. Run the scan using stock_game/scan.py to identify new signals. If the 3-day cool-off has expired, make the necessary rebalancing adjustments (sell down heavy holdings to keep them under 33% and buy into strong buy tickers like JPM or IWM). Then commit the trades.",
-                "0 14 * * *",
+                "0 15 * * 1-5",
             ),
             (
                 "grace-check-task-id",
@@ -110,14 +110,22 @@ def ensure_default_scheduled_tasks(conn=None):
         ]
         
         for task_id, name, prompt, cron_expr in default_tasks:
-            cursor.execute("SELECT count(*) FROM scheduled_tasks WHERE id = ?", (task_id,))
-            if cursor.fetchone()[0] == 0:
+            cursor.execute("SELECT cron_expr FROM scheduled_tasks WHERE id = ?", (task_id,))
+            row = cursor.fetchone()
+            if row is None:
                 next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
                 cursor.execute(
                     "INSERT INTO scheduled_tasks (id, name, prompt, cron_expr, next_run, last_run, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (task_id, name, prompt, cron_expr, next_run, None, "active")
                 )
                 print(f"[STARTUP] Registered {name} background task.")
+            elif row[0] != cron_expr:
+                next_run = get_next_cron_run(cron_expr, datetime.now(timezone.utc)).isoformat()
+                cursor.execute(
+                    "UPDATE scheduled_tasks SET cron_expr = ?, next_run = ? WHERE id = ?",
+                    (cron_expr, next_run, task_id)
+                )
+                print(f"[STARTUP] Updated {name} background task cron expression to {cron_expr}.")
         
         conn.commit()
     except Exception as e:
@@ -289,7 +297,29 @@ async def lifespan(app: FastAPI):
     # Startup
     scheduler_task = asyncio.create_task(run_scheduler())
     quota_task = asyncio.create_task(run_quota_refresh_loop())
+
+    # Run any registered startup event handlers from plugins
+    for handler in app.router.on_startup:
+        try:
+            if asyncio.iscoroutinefunction(handler):
+                await handler()
+            else:
+                handler()
+        except Exception as e:
+            print(f"[LIFESPAN] Error in plugin startup handler: {e}")
+
     yield
+
+    # Run any registered shutdown event handlers from plugins
+    for handler in app.router.on_shutdown:
+        try:
+            if asyncio.iscoroutinefunction(handler):
+                await handler()
+            else:
+                handler()
+        except Exception as e:
+            print(f"[LIFESPAN] Error in plugin shutdown handler: {e}")
+
     # Shutdown
     scheduler_task.cancel()
     quota_task.cancel()
@@ -408,17 +438,35 @@ async def chat_endpoint(req: ChatRequest):
         lookup_id = req.session_id or "default"
         lock = get_session_lock(lookup_id)
         await lock.acquire(priority)
+        from agent.memory import active_session_id_var
+        token = active_session_id_var.set(agent.conversation_id)
         try:
             # 1. Decompose plan steps if enabled and prompt is complex enough
-            enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "").lower() == "true"
+            enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "true").lower() == "true"
             existing_plan = memory.get_session_plan(agent.conversation_id)
             if enable_planning and not existing_plan and len(req.prompt.strip()) > 200:
                 import uuid
                 plan_id = str(uuid.uuid4())
                 plan_prompt = (
-                    f"Given the user request: '{req.prompt}', decompose it into 3-5 sequential execution plan steps. "
-                    "Return ONLY a JSON list of objects, each with 'description' and 'assigned_tool' fields. "
-                    "Example format: [{\"description\": \"Run lint checks\", \"assigned_tool\": \"run_command\"}]"
+                    f"Given the user request: '{req.prompt}', decompose it into 3-5 sequential execution plan steps, "
+                    "identifying the overall goal, tasks, acceptance criteria, and non-goals.\n"
+                    "Return ONLY a JSON object with the following structure:\n"
+                    "{\n"
+                    '  "title": "Short title of the task (e.g. Create hello world web page)",\n'
+                    '  "goal": "Clear explanation of the overall goal (e.g. Create a simple, nicely styled Hello World page.)",\n'
+                    '  "tasks": [\n'
+                    '    {"description": "Description of step 1", "assigned_tool": "assigned_tool (e.g. run_command or write_to_file or spawn_subagent)"},\n'
+                    '    {"description": "Description of step 2", "assigned_tool": "..."}\n'
+                    '  ],\n'
+                    '  "acceptance_criteria": [\n'
+                    '    "Acceptance criteria 1",\n'
+                    '    "Acceptance criteria 2"\n'
+                    '  ],\n'
+                    '  "non_goals": [\n'
+                    '    "Non-goal 1 (optional)",\n'
+                    '    "Non-goal 2 (optional)"\n'
+                    '  ]\n'
+                    "}"
                 )
                 try:
                     from agent.keyless import KeylessAgyAgent as PlanAgent, TaskPriority
@@ -429,10 +477,16 @@ async def chat_endpoint(req: ChatRequest):
                     )
                     async with plan_agent as pa:
                         plan_resp = await pa.chat(plan_prompt)
-                        steps_data = json.loads(plan_resp.text.strip().strip("`").strip("json").strip())
-                        if isinstance(steps_data, list):
-                            memory.add_session_plan(plan_id, agent.conversation_id, f"Plan: {req.prompt[:50]}...")
-                            for idx, step in enumerate(steps_data):
+                        plan_data = json.loads(plan_resp.text.strip().strip("`").strip("json").strip())
+                        if isinstance(plan_data, dict):
+                            title = plan_data.get("title") or f"Plan: {req.prompt[:50]}..."
+                            goal = plan_data.get("goal")
+                            ac = json.dumps(plan_data.get("acceptance_criteria") or [])
+                            ng = json.dumps(plan_data.get("non_goals") or [])
+                            tasks = plan_data.get("tasks") or []
+                            
+                            memory.add_session_plan(plan_id, agent.conversation_id, title, "pending", goal, ac, ng)
+                            for idx, step in enumerate(tasks):
                                 step_id = f"step-{plan_id}-{idx}"
                                 memory.add_plan_step(
                                     step_id=step_id,
@@ -601,6 +655,7 @@ async def chat_endpoint(req: ChatRequest):
             yield f"data: {json.dumps({'type': 'error', 'content': f'Agent connection error: {e}'})}\n\n"
             yield "data: [DONE]\n\n"
         finally:
+            active_session_id_var.reset(token)
             lock.release()
 
     return StreamingResponse(
@@ -752,6 +807,7 @@ class SpawnSubagentRequest(BaseModel):
     prompt: str
     target_files: Optional[List[str]] = None
     stub_files: Optional[List[str]] = None
+    agent_profile: Optional[str] = None
 
 @app.post("/api/subagents/spawn")
 async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
@@ -808,14 +864,20 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
             except Exception:
                 pass
                 
-    memory.log_subagent_message(req.subagent_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {req.prompt}")
+    memory.log_subagent_message(req.subagent_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {req.prompt}", parent_session_id=req.parent_session_id)
     
     async def run_subagent_background():
         try:
             from agent.keyless import KeylessAgyAgent
+            from agent.registry import tool_registry
+            
+            # Resolve specialist system instructions if agent_profile is specified
+            specialist_inst = tool_registry.resolve_subagent_profile(req.agent_profile)
+            system_instructions = specialist_inst or "You are a subagent working in an isolated sandbox. Complete the requested task."
+            
             agent = KeylessAgyAgent(
                 model="gemini-1.5-flash",
-                system_instructions="You are a subagent working in an isolated sandbox. Complete the requested task.",
+                system_instructions=system_instructions,
                 conversation_id=req.subagent_id,
                 cwd=str(sandbox_dir)
             )
@@ -1420,6 +1482,33 @@ async def execute_scheduled_task(name: str, prompt: str):
             memory.log_conversation_step(conversation_id, "assistant", err_msg)
             return
 
+    if name == "Stock Game Auto Check":
+        conversation_id = f"sched-stock-check-{datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")}"
+        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "/home/dan/AGent/.venv/bin/python", "stock_game/strategy.py",
+                cwd="/home/dan/AGent",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+            stdout_str = stdout.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            
+            output = stdout_str
+            if stderr_str:
+                output += f"\n\nStderr Errors:\n{stderr_str}"
+            
+            memory.log_conversation_step(conversation_id, "assistant", output or "Stock game auto-check completed with no output.")
+            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
+            return
+        except Exception as e:
+            err_msg = f"Failed to execute Stock Game Auto Check script: {e}"
+            print(f"[Scheduled Task: {name}] Error: {err_msg}")
+            memory.log_conversation_step(conversation_id, "assistant", err_msg)
+            return
+
     # Generic scheduled tasks: use a dedicated, isolated KeylessAgyAgent
     # This prevents cross-contamination of conversation context between background tasks
     from agent.keyless import KeylessAgyAgent, TaskPriority
@@ -1429,9 +1518,17 @@ async def execute_scheduled_task(name: str, prompt: str):
 
     conversation_id = f"sched-{name.lower().replace(' ', '-')}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     try:
+        from agent.registry import tool_registry
+        profile_name = name.lower().replace(" ", "_").replace("-", "_")
+        specialist_inst = tool_registry.resolve_subagent_profile(profile_name)
+        if not specialist_inst:
+            specialist_inst = tool_registry.resolve_subagent_profile(name)
+            
+        system_instructions = specialist_inst or f"You are executing the scheduled background task: {name}. Complete it and report results concisely."
+
         agent = KeylessAgyAgent(
             model="gemini-3.5-flash",
-            system_instructions=f"You are executing the scheduled background task: {name}. Complete it and report results concisely.",
+            system_instructions=system_instructions,
             conversation_id=conversation_id,
             timeout=120.0,
             task_priority=priority

@@ -771,13 +771,48 @@ async function pollPlanAndTelemetry() {
             if (container) {
                 if (data.plan && data.plan.steps && data.plan.steps.length > 0) {
                     container.replaceChildren();
+                    
+                    // Render Goal if present
+                    if (data.plan.goal) {
+                        const goalSec = document.createElement('div');
+                        goalSec.className = 'plan-goal-section';
+                        goalSec.innerHTML = `
+                            <h3 class="plan-section-title">Goal</h3>
+                            <p class="plan-goal-desc">${data.plan.goal}</p>
+                        `;
+                        container.appendChild(goalSec);
+                    }
+                    
+                    // Render Tasks header & steps list
+                    const tasksSec = document.createElement('div');
+                    tasksSec.className = 'plan-tasks-section';
+                    const tasksTitle = document.createElement('h3');
+                    tasksTitle.className = 'plan-section-title';
+                    tasksTitle.textContent = 'Tasks';
+                    tasksSec.appendChild(tasksTitle);
+                    
+                    const stepsList = document.createElement('div');
+                    stepsList.className = 'plan-steps-list';
+                    
                     data.plan.steps.forEach(step => {
                         const stepItem = document.createElement('div');
                         stepItem.className = 'plan-step-item';
                         
-                        const dot = document.createElement('span');
-                        dot.className = `plan-step-status-dot ${step.status}`;
-                        stepItem.appendChild(dot);
+                        let iconHtml = '';
+                        if (step.status === 'completed') {
+                            iconHtml = '<i class="fa-solid fa-circle-check" style="color: var(--accent-mint);"></i>';
+                        } else if (step.status === 'running') {
+                            iconHtml = '<i class="fa-solid fa-circle-notch fa-spin" style="color: var(--accent-orchid);"></i>';
+                        } else if (step.status === 'failed') {
+                            iconHtml = '<i class="fa-solid fa-circle-xmark" style="color: #ef4444;"></i>';
+                        } else {
+                            iconHtml = '<i class="fa-regular fa-circle" style="color: var(--text-muted);"></i>';
+                        }
+                        
+                        const left = document.createElement('div');
+                        left.className = 'step-left';
+                        left.innerHTML = iconHtml;
+                        stepItem.appendChild(left);
                         
                         const details = document.createElement('div');
                         details.className = 'plan-step-details';
@@ -810,8 +845,88 @@ async function pollPlanAndTelemetry() {
                         }
                         
                         stepItem.appendChild(details);
-                        container.appendChild(stepItem);
+                        stepsList.appendChild(stepItem);
                     });
+                    
+                    tasksSec.appendChild(stepsList);
+                    container.appendChild(tasksSec);
+                    
+                    // Render Acceptance Criteria if present
+                    if (data.plan.acceptance_criteria) {
+                        try {
+                            const criteria = JSON.parse(data.plan.acceptance_criteria);
+                            if (criteria && criteria.length > 0) {
+                                const acSec = document.createElement('div');
+                                acSec.className = 'plan-ac-section';
+                                acSec.style.marginTop = '1rem';
+                                
+                                const acTitle = document.createElement('h3');
+                                acTitle.className = 'plan-section-title';
+                                acTitle.textContent = 'Acceptance Criteria';
+                                acSec.appendChild(acTitle);
+                                
+                                const acList = document.createElement('ul');
+                                acList.className = 'plan-ac-list';
+                                acList.style.listStyle = 'none';
+                                acList.style.padding = '0';
+                                acList.style.margin = '0.5rem 0 0 0';
+                                
+                                criteria.forEach(item => {
+                                    const li = document.createElement('li');
+                                    li.style.display = 'flex';
+                                    li.style.alignItems = 'center';
+                                    li.style.gap = '0.5rem';
+                                    li.style.fontSize = '0.85rem';
+                                    li.style.marginBottom = '0.4rem';
+                                    
+                                    const allDone = data.plan.steps.every(s => s.status === 'completed');
+                                    const boxIcon = allDone ? '<i class="fa-solid fa-square-check" style="color: var(--accent-mint);"></i>' : '<i class="fa-regular fa-square" style="color: var(--text-muted);"></i>';
+                                    
+                                    li.innerHTML = `${boxIcon} <span>${item}</span>`;
+                                    acList.appendChild(li);
+                                });
+                                acSec.appendChild(acList);
+                                container.appendChild(acSec);
+                            }
+                        } catch (e) {
+                            console.error("Error parsing AC:", e);
+                        }
+                    }
+                    
+                    // Render Non-goals if present
+                    if (data.plan.non_goals) {
+                        try {
+                            const nonGoals = JSON.parse(data.plan.non_goals);
+                            if (nonGoals && nonGoals.length > 0) {
+                                const ngSec = document.createElement('div');
+                                ngSec.className = 'plan-ng-section';
+                                ngSec.style.marginTop = '1rem';
+                                
+                                const ngTitle = document.createElement('h3');
+                                ngTitle.className = 'plan-section-title';
+                                ngTitle.textContent = 'Non-goals';
+                                ngSec.appendChild(ngTitle);
+                                
+                                const ngList = document.createElement('ul');
+                                ngList.className = 'plan-ng-list';
+                                ngList.style.paddingLeft = '1.2rem';
+                                ngList.style.margin = '0.5rem 0 0 0';
+                                
+                                nonGoals.forEach(item => {
+                                    const li = document.createElement('li');
+                                    li.style.fontSize = '0.85rem';
+                                    li.style.color = 'var(--text-muted)';
+                                    li.style.marginBottom = '0.3rem';
+                                    li.textContent = item;
+                                    ngList.appendChild(li);
+                                });
+                                ngSec.appendChild(ngList);
+                                container.appendChild(ngSec);
+                            }
+                        } catch (e) {
+                            console.error("Error parsing non-goals:", e);
+                        }
+                    }
                 } else {
                     if (!document.getElementById('plan-empty-state')) {
                         container.replaceChildren();
@@ -923,21 +1038,78 @@ async function pollSubagents() {
             return;
         }
         
-        let html = '';
+        // Build hierarchy map
+        const childrenMap = new Map();
         subagents.forEach(s => {
-            const timeStr = new Date(s.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            html += `
-                <div class="subagent-item">
-                    <div class="subagent-status-dot ${s.status}"></div>
-                    <div class="subagent-details">
-                        <div class="subagent-prompt" title="${s.prompt}">${s.prompt}</div>
-                        <div class="subagent-meta">
-                            <span class="subagent-id-badge" title="${s.subagent_id}">${s.subagent_id}</span>
-                            <span class="subagent-time">${timeStr}</span>
+            if (s.parent_session_id) {
+                if (!childrenMap.has(s.parent_session_id)) {
+                    childrenMap.set(s.parent_session_id, []);
+                }
+                childrenMap.get(s.parent_session_id).push(s);
+            }
+        });
+
+        // Find root nodes for the current active session
+        const allIds = new Set(subagents.map(s => s.subagent_id));
+        const rootSubagents = subagents.filter(s => {
+            return s.parent_session_id === currentSessionId || (!allIds.has(s.parent_session_id) && s.parent_session_id !== currentSessionId);
+        });
+
+        function renderSubagentTree(node, depth = 0) {
+            const timeStr = new Date(node.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            
+            let displayName = node.subagent_id;
+            const hyphenIdx = node.subagent_id.indexOf('-');
+            if (hyphenIdx !== -1) {
+                const prefix = node.subagent_id.substring(0, hyphenIdx);
+                const isUUIDPrefix = /^[0-9a-f]{8}$/i.test(prefix);
+                if (!isUUIDPrefix) {
+                    displayName = prefix;
+                }
+            }
+            if (node.subagent_id.startsWith('grace-timekeeper-subagent')) {
+                displayName = 'grace_timekeeper';
+            }
+
+            const children = childrenMap.get(node.subagent_id) || [];
+            let childrenHtml = '';
+            if (children.length > 0) {
+                childrenHtml = `
+                    <div class="subagent-children" style="margin-left: 1.25rem; border-left: 1px dashed rgba(255, 255, 255, 0.15); padding-left: 0.75rem;">
+                        ${children.map(child => renderSubagentTree(child, depth + 1)).join('')}
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="subagent-node" style="position: relative; margin-bottom: 0.75rem;">
+                    <div class="subagent-item" style="display: flex; gap: 0.75rem; align-items: flex-start;">
+                        <div class="subagent-status-dot ${node.status}" style="margin-top: 0.25rem;"></div>
+                        <div class="subagent-details" style="flex: 1; min-width: 0;">
+                            <div class="subagent-prompt" title="${node.prompt}" style="font-size: 0.85rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary);">${node.prompt}</div>
+                            <div class="subagent-meta" style="display: flex; gap: 0.5rem; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem;">
+                                <span class="subagent-id-badge" title="${node.subagent_id}">${displayName}</span>
+                                <span class="subagent-time">${timeStr}</span>
+                            </div>
                         </div>
                     </div>
+                    ${childrenHtml}
                 </div>
             `;
+        }
+
+        let html = '';
+        if (rootSubagents.length === 0) {
+            container.innerHTML = `
+                <div class="subagent-empty-state" id="subagent-empty-state">
+                    <p>No subagents spawned for this session yet.</p>
+                </div>
+            `;
+            return;
+        }
+
+        rootSubagents.forEach(root => {
+            html += renderSubagentTree(root);
         });
         container.innerHTML = html;
     } catch (err) {
