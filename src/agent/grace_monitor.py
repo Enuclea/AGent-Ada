@@ -124,12 +124,20 @@ def check_tasks(inactivity_threshold_mins=20):
                 m_text = last_sub_msg[1]
                 # Check for explicit completion/failure messages
                 is_finished = False
-                for indicator in ["failed", "error", "completed", "terminated"]:
-                    if indicator in m_text.lower():
-                        is_finished = True
-                        break
+                if m_text.startswith("[FAILED]") or m_text.startswith("[SUCCESS]"):
+                    is_finished = True
+                else:
+                    for indicator in ["failed", "error", "completed", "terminated"]:
+                        if indicator in m_text.lower():
+                            is_finished = True
+                            break
                 if is_finished:
-                    status = "failed" if ("failed" in m_text.lower() or "error" in m_text.lower() or "terminated" in m_text.lower()) else "completed"
+                    if m_text.startswith("[FAILED]"):
+                        status = "failed"
+                    elif m_text.startswith("[SUCCESS]"):
+                        status = "completed"
+                    else:
+                        status = "failed" if ("failed" in m_text.lower() or "error" in m_text.lower() or "terminated" in m_text.lower()) else "completed"
             
             if status == "active":
                 try:

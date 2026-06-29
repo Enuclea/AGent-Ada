@@ -277,11 +277,30 @@ class OrchestrationService:
                 custom_approval_handler=custom_approval_handler
             )
 
-            # 2. Instantiate connection: We are intentionally using agy and wrapping around it.
+            # 2. Resolve mapped conversation_id for Discord sessions to avoid lock collisions and isolate history
+            resolved_conv_id = None
+            if session_id:
+                if session_id.startswith("discord-"):
+                    from agent import memory
+                    mem = memory.load_memory()
+                    session_mappings = mem.setdefault("key_value", {}).get("session_mappings", {})
+                    if not isinstance(session_mappings, dict):
+                        session_mappings = {}
+                        mem.setdefault("key_value", {})["session_mappings"] = session_mappings
+                    
+                    if session_id not in session_mappings:
+                        import uuid
+                        new_uuid = str(uuid.uuid4())
+                        session_mappings[session_id] = new_uuid
+                        memory.update_key_value("session_mappings", session_mappings)
+                    resolved_conv_id = session_mappings[session_id]
+                else:
+                    resolved_conv_id = session_id
+
             agent = KeylessAgyAgent(
                 model=model_name,
                 system_instructions=config_args["system_instructions"],
-                conversation_id=session_id if session_id and not session_id.startswith("discord-") else None,
+                conversation_id=resolved_conv_id,
                 timeout=600.0,
                 roleplay=roleplay
             )

@@ -909,6 +909,24 @@ def generate_interface_stub(file_path: str) -> str:
         return f"Error generating interface stub: {e}"
 
 
+def _extract_json_block(text: str) -> Optional[dict]:
+    """Helper to robustly extract and parse a JSON object from text, ignoring leading/trailing noise."""
+    import json
+    try:
+        start_idx = text.find('{')
+        end_idx = text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+            json_str = text[start_idx:end_idx + 1]
+            return json.loads(json_str)
+    except Exception:
+        pass
+    
+    try:
+        return json.loads(text.strip())
+    except Exception:
+        return None
+
+
 async def spawn_subagent(
     prompt: str,
     target_files: Optional[List[str]] = None,
@@ -1014,17 +1032,8 @@ async def spawn_subagent(
             
             # Copy modified files back to the main workspace on success
             try:
-                cleaned_output = output.strip()
-                if cleaned_output.startswith("```"):
-                    lines = cleaned_output.splitlines()
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines[-1].startswith("```"):
-                        lines = lines[:-1]
-                    cleaned_output = "\n".join(lines).strip()
-                
-                res_data = json.loads(cleaned_output)
-                if res_data.get("status") == "success":
+                res_data = _extract_json_block(output)
+                if res_data and res_data.get("status") == "success":
                     files_to_copy = res_data.get("files_modified", [])
                     for rel_path in files_to_copy:
                         sandbox_file = sandbox_dir / rel_path
@@ -1133,6 +1142,7 @@ async def run_boardroom(
     current_solution = f"Initial Task Request: {task_description}"
     files_modified = []
     summary_history = []
+    consensus_reached = False
     
     # Max rounds to prevent infinite loops
     max_rounds = 3
@@ -1188,16 +1198,9 @@ async def run_boardroom(
                     
                     # Parse contribution
                     try:
-                        cleaned_output = output.strip()
-                        if cleaned_output.startswith("```"):
-                            lines = cleaned_output.splitlines()
-                            if lines[0].startswith("```"):
-                                lines = lines[1:]
-                            if lines[-1].startswith("```"):
-                                lines = lines[:-1]
-                            cleaned_output = "\n".join(lines).strip()
-                            
-                        res_data = json.loads(cleaned_output)
+                        res_data = _extract_json_block(output)
+                        if not res_data:
+                            raise ValueError("No valid JSON block found in output.")
                         approved = res_data.get("approved", False)
                         if approved:
                             round_approvals += 1
@@ -1221,7 +1224,22 @@ async def run_boardroom(
         # If all experts approved in this round, consensus reached!
         if round_approvals == len(expert_profiles):
             print(f"[BOARDROOM] Consensus reached at round {round_idx}!")
+            consensus_reached = True
             break
+            
+    if not consensus_reached:
+        print(f"[BOARDROOM] Consensus not reached after {max_rounds} rounds. Aborting changes.")
+        try:
+            shutil.rmtree(sandbox_dir)
+        except Exception:
+            pass
+        return json.dumps({
+            "status": "failure",
+            "boardroom_id": boardroom_id,
+            "files_modified": [],
+            "summary_of_changes": "Boardroom debate ended without consensus after exceeding max rounds.\n" + "\n".join(summary_history),
+            "validation_result": "Boardroom debate exceeded max rounds without consensus."
+        })
                 
     # 3. Apply final accepted files back to the main workspace
     for rel_path in files_modified:

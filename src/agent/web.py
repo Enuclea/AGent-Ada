@@ -258,7 +258,14 @@ async def run_quota_refresh_loop():
 
 def load_plugins(app: FastAPI) -> None:
     """Dynamically loads core integrations and web routes from the plugins directory."""
+    import sys
     import importlib.util
+    
+    # Ensure project root is in sys.path for plugin imports (e.g. enuclea)
+    _root = str(Path(__file__).resolve().parent.parent.parent)
+    if _root not in sys.path:
+        sys.path.append(_root)
+
     plugins_dir = Path(__file__).parent / "plugins"
     if not plugins_dir.exists() or not plugins_dir.is_dir():
         return
@@ -1613,9 +1620,9 @@ async def run_scheduler():
                 if int(_time.time()) % 60 < 6:  # Runs roughly once per minute
                     workers = memory.get_registered_workers()
                     for w in workers:
-                        if w.get("status") == "online":
-                            from agent.remote_worker import check_worker_health
-                            await check_worker_health(w)
+                        # Periodically check health of all registered workers to allow recovery
+                        from agent.remote_worker import check_worker_health
+                        await check_worker_health(w)
             except Exception as we:
                 print(f"[WORKERS] Health check error: {we}")
 
