@@ -183,6 +183,22 @@ class OrchestrationService:
             import uuid
             from google.antigravity.hooks.hooks import HookResult
             
+            # Run registered pre-tool hooks (e.g. server-scoped isolation guards)
+            for hook_fn in self._pre_tool_hooks:
+                try:
+                    hook_fn(session_id, tool_call.name, tool_call.args)
+                except PermissionError as e:
+                    return HookResult(allow=False, message=str(e))
+            
+            # STUCK PREVENTION: Auto-delegate blocking/persistent commands to prevent hanging the session
+            if tool_call.name == "run_command" and "CommandLine" in tool_call.args:
+                cmd = tool_call.args["CommandLine"]
+                blocking_keywords = ["bot.py", "server.py", "http.server", "npm run", "npm start", "tail -f", "watch "]
+                if any(kw in cmd for kw in blocking_keywords) and not (cmd.strip().endswith("&") or "nohup" in cmd):
+                    # Rewrite CommandLine to execute safely in background
+                    tool_call.args["CommandLine"] = f"PYTHONPATH=src nohup {cmd} > daemon.log 2>&1 &"
+                    memory.log_conversation_step(session_id or "New Session", "system_notice", f"Auto-delegated blocking process to background: {cmd}")
+            
             task_id = str(uuid.uuid4())
             current_active_task_id = task_id
             memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
@@ -235,6 +251,40 @@ class OrchestrationService:
                     feedback = status.split(":", 1)[1].strip() if ":" in status else ""
                     raise PermissionError(f"Permission denied by user. Feedback: {feedback}" if feedback else "Permission denied by user.")
         return my_approval_handler
+
+    def verify_agent_outputs(self, session_id: Optional[str]) -> Optional[str]:
+        """Runs validation and compile checks on workspace code modified during the session."""
+        import subprocess
+        try:
+            # Get list of modified files in the git workspace
+            res = subprocess.run(
+                ["git", "diff", "--name-only"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            modified_files = res.stdout.strip().split("\n")
+            for filename in modified_files:
+                if not filename:
+                    continue
+                path = Path(os.getcwd()) / filename
+                if path.exists() and path.suffix == ".py":
+                    import py_compile
+                    try:
+                        py_compile.compile(str(path), doraise=True)
+                    except py_compile.PyCompileError as e:
+                        return f"Syntax error in {filename}: {e.msg}"
+                elif path.exists() and path.suffix == ".json":
+                    import json
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            json.load(f)
+                    except Exception as e:
+                        return f"JSON syntax error in {filename}: {str(e)}"
+        except Exception as e:
+            # Fallback if git is not present/configured or fails
+            pass
+        return None
 
     async def get_or_create_agent(
         self,

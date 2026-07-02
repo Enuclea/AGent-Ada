@@ -706,6 +706,11 @@ async function pollTasks() {
                 card.appendChild(logsDiv);
                 card.appendChild(bottom);
                 
+                card.style.cursor = 'pointer';
+                card.addEventListener('click', () => {
+                    showTaskDetails(task);
+                });
+                
                 // Add to top of feed
                 activityFeed.insertBefore(card, activityFeed.firstChild);
                 activeTasksMap.set(task.id, card);
@@ -752,6 +757,9 @@ async function pollPlanAndTelemetry() {
             p.textContent = 'No execution plan generated for this session yet.';
             empty.appendChild(p);
             container.appendChild(empty);
+            
+            const progressContainer = document.getElementById('plan-progress-container');
+            if (progressContainer) progressContainer.style.display = 'none';
         }
         const inTok = document.getElementById('telemetry-input-tokens');
         if (inTok) inTok.textContent = '0';
@@ -771,6 +779,21 @@ async function pollPlanAndTelemetry() {
             if (container) {
                 if (data.plan && data.plan.steps && data.plan.steps.length > 0) {
                     container.replaceChildren();
+                    
+                    // Update progress bar
+                    const totalSteps = data.plan.steps.length;
+                    const completedSteps = data.plan.steps.filter(s => s.status === 'completed').length;
+                    const percentage = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
+                    
+                    const progressContainer = document.getElementById('plan-progress-container');
+                    const progressBar = document.getElementById('plan-progress-bar');
+                    const progressVal = document.getElementById('plan-progress-val');
+                    
+                    if (progressContainer && progressBar && progressVal) {
+                        progressContainer.style.display = 'block';
+                        progressBar.style.width = `${percentage}%`;
+                        progressVal.textContent = `${percentage}%`;
+                    }
                     
                     // Render Goal if present
                     if (data.plan.goal) {
@@ -937,6 +960,9 @@ async function pollPlanAndTelemetry() {
                         p.textContent = 'No execution plan generated for this session yet.';
                         empty.appendChild(p);
                         container.appendChild(empty);
+                        
+                        const progressContainer = document.getElementById('plan-progress-container');
+                        if (progressContainer) progressContainer.style.display = 'none';
                     }
                 }
             }
@@ -1083,12 +1109,12 @@ async function pollSubagents() {
 
             return `
                 <div class="subagent-node" style="position: relative; margin-bottom: 0.75rem;">
-                    <div class="subagent-item" style="display: flex; gap: 0.75rem; align-items: flex-start;">
+                    <div class="subagent-item clickable-subagent" onclick="showSubagentDetails('${node.subagent_id}', '${node.status}', \`${node.prompt.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`, '${node.started_at}', '${node.completed_at || ''}', '${displayName}')" style="display: flex; gap: 0.75rem; align-items: flex-start; cursor: pointer; padding: 4px; border-radius: 4px;">
                         <div class="subagent-status-dot ${node.status}" style="margin-top: 0.25rem;"></div>
                         <div class="subagent-details" style="flex: 1; min-width: 0;">
                             <div class="subagent-prompt" title="${node.prompt}" style="font-size: 0.85rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary);">${node.prompt}</div>
                             <div class="subagent-meta" style="display: flex; gap: 0.5rem; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem;">
-                                <span class="subagent-id-badge" title="${node.subagent_id}">${displayName}</span>
+                                <span class="subagent-id-badge" title="${node.subagent_id}">${getSubagentEmoji(displayName, node.status)} ${displayName}</span>
                                 <span class="subagent-time">${timeStr}</span>
                             </div>
                         </div>
@@ -1508,3 +1534,179 @@ async function submitCustomSkill(e) {
         alert(`Error: ${err.message}`);
     }
 }
+
+// ============================================================================
+// Modernized UI: Color-Coded Emojis, Status Modals, and Task Details
+// ============================================================================
+
+function getSubagentEmoji(displayName, status) {
+    let typeEmoji = "🤖";
+    const nameLower = displayName.toLowerCase();
+    
+    // Icon based on purpose/name
+    if (nameLower.includes("timekeeper") || nameLower.includes("timer") || nameLower.includes("grace")) {
+        typeEmoji = "⏱️";
+    } else if (nameLower.includes("gmail") || nameLower.includes("mail") || nameLower.includes("email") || nameLower.includes("sync")) {
+        typeEmoji = "📧";
+    } else if (nameLower.includes("observer") || nameLower.includes("quiet")) {
+        typeEmoji = "🤫";
+    } else if (nameLower.includes("eval") || nameLower.includes("meta")) {
+        typeEmoji = "🧠";
+    } else if (nameLower.includes("trade") || nameLower.includes("stock") || nameLower.includes("portfolio")) {
+        typeEmoji = "📈";
+    } else if (nameLower.includes("qa") || nameLower.includes("test")) {
+        typeEmoji = "🧪";
+    } else if (nameLower.includes("secure") || nameLower.includes("security") || nameLower.includes("audit")) {
+        typeEmoji = "🛡️";
+    }
+    
+    // Status color-coding
+    let statusEmoji = "⚪";
+    if (status === "active" || status === "running") {
+        statusEmoji = "🟢";
+    } else if (status === "completed" || status === "success") {
+        statusEmoji = "✅";
+    } else if (status === "failed") {
+        statusEmoji = "❌";
+    }
+    
+    return `${statusEmoji} ${typeEmoji}`;
+}
+
+// Details modal DOM bindings
+const detailsModal = document.getElementById('details-modal');
+const closeDetailsBtn = document.getElementById('close-details-btn');
+const detailsModalTitle = document.getElementById('details-modal-title');
+const detailsType = document.getElementById('details-type');
+const detailsStatus = document.getElementById('details-status');
+const detailsPrompt = document.getElementById('details-prompt');
+const detailsLogs = document.getElementById('details-logs');
+const detailsLogsSection = document.getElementById('details-logs-section');
+const detailsTime = document.getElementById('details-time');
+
+if (closeDetailsBtn && detailsModal) {
+    closeDetailsBtn.addEventListener('click', () => {
+        detailsModal.classList.remove('active');
+    });
+    detailsModal.addEventListener('click', (e) => {
+        if (e.target === detailsModal) {
+            detailsModal.classList.remove('active');
+        }
+    });
+}
+
+function showSubagentDetails(subagentId, status, prompt, startedAt, completedAt, displayName) {
+    if (!detailsModal) return;
+    
+    detailsModalTitle.innerHTML = `<i class="fa-solid fa-robot" style="color: var(--accent-orchid);"></i> Subagent Details`;
+    detailsType.textContent = displayName || subagentId;
+    
+    const emojiStr = getSubagentEmoji(displayName || subagentId, status);
+    detailsStatus.innerHTML = `
+        <span class="subagent-status-dot ${status}" style="display: inline-block;"></span>
+        <span style="font-weight: 600; font-size: 0.9rem;">${emojiStr} ${status.toUpperCase()}</span>
+    `;
+    
+    detailsPrompt.textContent = prompt || "No prompt detail recorded.";
+    
+    // Load subagent messages
+    detailsLogsSection.style.display = 'block';
+    detailsLogs.innerHTML = `<div style="color: var(--text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> Fetching coordination logs...</div>`;
+    
+    fetch(`/api/subagents/${subagentId}/messages`)
+        .then(res => res.ok ? res.json() : { messages: [] })
+        .then(data => {
+            const msgs = data.messages || [];
+            if (msgs.length === 0) {
+                detailsLogs.innerHTML = `<div style="color: var(--text-muted);">No message logs found for this subagent.</div>`;
+            } else {
+                detailsLogs.innerHTML = msgs.map(m => {
+                    const time = new Date(m.timestamp).toLocaleTimeString();
+                    const color = m.role === 'subagent' ? 'var(--accent-mint)' : 'var(--accent-orchid)';
+                    return `<div style="margin-bottom: 0.35rem; line-height: 1.3;">
+                        <span style="color: var(--text-muted); font-size: 0.75rem;">[${time}]</span>
+                        <strong style="color: ${color};">${m.role.toUpperCase()}:</strong>
+                        <span style="color: var(--text-primary); font-size: 0.8rem;">${m.message}</span>
+                    </div>`;
+                }).join('');
+            }
+        })
+        .catch(err => {
+            detailsLogs.innerHTML = `<div style="color: #ef4444;">Failed to load logs: ${err.message}</div>`;
+        });
+        
+    const start = new Date(startedAt).toLocaleString();
+    const end = completedAt ? new Date(completedAt).toLocaleString() : 'Running...';
+    detailsTime.innerHTML = `
+        <div><strong>Started:</strong> ${start}</div>
+        <div><strong>Finished:</strong> ${end}</div>
+    `;
+    
+    detailsModal.classList.add('active');
+}
+
+function showTaskDetails(task) {
+    if (!detailsModal) return;
+    
+    detailsModalTitle.innerHTML = `<i class="fa-solid fa-bolt" style="color: var(--accent-orchid);"></i> Task / Tool Details`;
+    detailsType.textContent = task.name;
+    
+    // Status formatting
+    let statusColor = "var(--text-muted)";
+    let statusEmoji = "⚪";
+    if (task.status === "running") {
+        statusColor = "var(--accent-orchid)";
+        statusEmoji = "🟢";
+    } else if (task.status === "completed") {
+        statusColor = "var(--accent-mint)";
+        statusEmoji = "✅";
+    } else if (task.status === "failed" || task.status === "denied") {
+        statusColor = "#ef4444";
+        statusEmoji = "❌";
+    }
+    
+    detailsStatus.innerHTML = `
+        <span class="card-status-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${statusColor};"></span>
+        <span style="font-weight: 600; font-size: 0.9rem; color: ${statusColor};">${statusEmoji} ${task.status.toUpperCase()}</span>
+    `;
+    
+    detailsPrompt.textContent = task.details || "No details recorded.";
+    
+    // Load task logs
+    detailsLogsSection.style.display = 'block';
+    detailsLogs.innerHTML = `<div style="color: var(--text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> Fetching task execution logs...</div>`;
+    
+    fetch(`/api/tasks/${task.id}/logs`)
+        .then(res => res.ok ? res.json() : { logs: [] })
+        .then(data => {
+            const logs = data.logs || [];
+            if (logs.length === 0) {
+                detailsLogs.innerHTML = `<div style="color: var(--text-muted);">No execution logs recorded yet.</div>`;
+            } else {
+                detailsLogs.innerHTML = logs.map(l => {
+                    const time = new Date(l.timestamp).toLocaleTimeString();
+                    return `<div style="margin-bottom: 0.25rem;">
+                        <span style="color: var(--text-muted); font-size: 0.75rem;">[${time}]</span>
+                        <span style="color: var(--text-primary); font-size: 0.8rem;">> ${l.message}</span>
+                    </div>`;
+                }).join('');
+            }
+        })
+        .catch(err => {
+            detailsLogs.innerHTML = `<div style="color: #ef4444;">Failed to load logs: ${err.message}</div>`;
+        });
+        
+    const start = new Date(task.started_at).toLocaleString();
+    const end = task.completed_at ? new Date(task.completed_at).toLocaleString() : 'Active...';
+    detailsTime.innerHTML = `
+        <div><strong>Started:</strong> ${start}</div>
+        <div><strong>Finished:</strong> ${end}</div>
+    `;
+    
+    detailsModal.classList.add('active');
+}
+
+// Bind methods globally so inline onclick events can find them
+window.showSubagentDetails = showSubagentDetails;
+window.showTaskDetails = showTaskDetails;
+window.getSubagentEmoji = getSubagentEmoji;

@@ -604,6 +604,11 @@ async def chat_endpoint(req: ChatRequest):
                         active_agent = await get_or_create_agent(primary_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
                         async for item in stream_agent_response(active_agent, driver_prompt):
                             yield f"data: {json.dumps(item)}\n\n"
+                        
+                        # Verify outputs before completing the step
+                        verif_err = orchestration_service.verify_agent_outputs(req.session_id)
+                        if verif_err:
+                            raise ValueError(f"Step output verification failed: {verif_err}")
                     except Exception as step_err:
                         print(f"[DRIVER] Step {step_order} failed: {step_err}")
                         memory.update_plan_step_status(step_id, "failed", error_message=str(step_err))
