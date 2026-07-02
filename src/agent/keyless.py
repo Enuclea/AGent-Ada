@@ -167,14 +167,31 @@ class KeylessAgyResponse:
                     yield line
                 return
                 
+            start_time = asyncio.get_event_loop().time()
+            max_duration = self.timeout_val
             try:
                 while True:
-                    line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=self.timeout_val)
-                    if not line:
-                        break
-                    decoded = line.decode("utf-8", errors="replace")
-                    self.stdout_lines.append(decoded)
-                    yield decoded
+                    # Calculate remaining time for the overall timeout
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    remaining = max_duration - elapsed
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError()
+                        
+                    # Use a short timeout of 15 seconds to yield keep-alive pings
+                    chunk_timeout = min(15.0, remaining)
+                    try:
+                        line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=chunk_timeout)
+                        if not line:
+                            break
+                        decoded = line.decode("utf-8", errors="replace")
+                        self.stdout_lines.append(decoded)
+                        yield decoded
+                    except asyncio.TimeoutError:
+                        # Yield a blank keep-alive chunk to reset connection inactivity timers
+                        if self.proc.returncode is None:
+                            yield ""
+                        else:
+                            break
             except asyncio.TimeoutError:
                 try:
                     self.proc.kill()
