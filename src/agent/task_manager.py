@@ -383,6 +383,206 @@ def get_session_plan(session_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+# --- Task Checkpoints (for resuming long-running tasks across sessions) ---
+
+def save_checkpoint(
+    task_name: str,
+    session_id: str,
+    phase: str,
+    step_completed: int,
+    state_json: str,
+    total_steps: Optional[int] = None
+) -> str:
+    """Saves or updates a task checkpoint. Upserts by task_name (global scope).
+    
+    Returns the checkpoint ID.
+    """
+    import uuid
+    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        
+        # Check if a checkpoint already exists for this task_name
+        cursor.execute(
+            "SELECT id FROM task_checkpoints WHERE task_name = ? AND status = 'in_progress'",
+            (task_name,)
+        )
+        existing = cursor.fetchone()
+        
+        if existing:
+            checkpoint_id = existing[0]
+            cursor.execute(
+                """UPDATE task_checkpoints 
+                SET session_id = ?, phase = ?, step_completed = ?, total_steps = ?, 
+                    state_json = ?, updated_at = ?
+                WHERE id = ?""",
+                (session_id, phase, step_completed, total_steps, state_json, now, checkpoint_id)
+            )
+        else:
+            checkpoint_id = str(uuid.uuid4())
+            cursor.execute(
+                """INSERT INTO task_checkpoints 
+                (id, task_name, session_id, phase, step_completed, total_steps, state_json, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?)""",
+                (checkpoint_id, task_name, session_id, phase, step_completed, total_steps, state_json, now, now)
+            )
+        conn.commit()
+        return checkpoint_id
+    except Exception as e:
+        print(f"[CHECKPOINT] Error saving checkpoint: {e}")
+        return ""
+    finally:
+        conn.close()
+
+
+def get_checkpoint(task_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieves the latest in-progress checkpoint for a task name."""
+    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, task_name, session_id, phase, step_completed, total_steps, 
+                      state_json, status, created_at, updated_at
+            FROM task_checkpoints 
+            WHERE task_name = ? AND status = 'in_progress'
+            ORDER BY updated_at DESC LIMIT 1""",
+            (task_name,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "task_name": row[1],
+            "session_id": row[2],
+            "phase": row[3],
+            "step_completed": row[4],
+            "total_steps": row[5],
+            "state_json": row[6],
+            "status": row[7],
+            "created_at": row[8],
+            "updated_at": row[9]
+        }
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def complete_checkpoint(task_name: str) -> bool:
+    """Marks a checkpoint as completed (task finished successfully)."""
+    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "UPDATE task_checkpoints SET status = 'completed', updated_at = ? WHERE task_name = ? AND status = 'in_progress'",
+            (now, task_name)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def abandon_checkpoint(task_name: str) -> bool:
+    """Marks a checkpoint as abandoned (task no longer relevant)."""
+    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "UPDATE task_checkpoints SET status = 'abandoned', updated_at = ? WHERE task_name = ? AND status = 'in_progress'",
+            (now, task_name)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def get_active_checkpoints() -> List[Dict[str, Any]]:
+    """Returns all in-progress checkpoints (for injecting resume context)."""
+    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, task_name, session_id, phase, step_completed, total_steps, 
+                      state_json, status, created_at, updated_at
+            FROM task_checkpoints 
+            WHERE status = 'in_progress'
+            ORDER BY updated_at DESC"""
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": r[0], "task_name": r[1], "session_id": r[2], "phase": r[3],
+                "step_completed": r[4], "total_steps": r[5], "state_json": r[6],
+                "status": r[7], "created_at": r[8], "updated_at": r[9]
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def get_stale_checkpoints(max_age_hours: int = 24) -> List[Dict[str, Any]]:
+    """Returns in-progress checkpoints older than max_age_hours."""
+    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        cursor.execute(
+            """SELECT id, task_name, session_id, phase, step_completed, total_steps, 
+                      state_json, status, created_at, updated_at
+            FROM task_checkpoints 
+            WHERE status = 'in_progress' AND updated_at < ?
+            ORDER BY updated_at ASC""",
+            (cutoff,)
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": r[0], "task_name": r[1], "session_id": r[2], "phase": r[3],
+                "step_completed": r[4], "total_steps": r[5], "state_json": r[6],
+                "status": r[7], "created_at": r[8], "updated_at": r[9]
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def auto_abandon_stale_checkpoints(max_age_hours: int = 24) -> int:
+    """Marks all in-progress checkpoints older than max_age_hours as abandoned. Returns count."""
+    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "UPDATE task_checkpoints SET status = 'abandoned', updated_at = ? WHERE status = 'in_progress' AND updated_at < ?",
+            (now, cutoff)
+        )
+        conn.commit()
+        return cursor.rowcount
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
 # --- Discord Approval Bridge ---
 
 async def ask_discord_approval(task_id: str, tool_name: str, tool_args: str) -> None:

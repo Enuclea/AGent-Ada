@@ -36,6 +36,8 @@ class ToolRegistry:
             tools.create_expert_profile,
             tools.run_boardroom,
             tools.get_relevant_tests,
+            tools.checkpoint_task,
+            tools.get_task_checkpoint,
         ]
         for t in builtins:
             if t not in registered:
@@ -135,6 +137,12 @@ class ToolRegistry:
                 "The trading script is located at 'stock_game/strategy.py' in the workspace.\n"
                 "Directly execute this script using python. Do not perform generic searches.\n"
                 "Report the trade completion and portfolio balance status back to the parent agent."
+            ),
+            "solar_monitor": (
+                "You are the Solar Monitor Specialist agent. Your primary role is to read real-time solar generation, grid, and battery metrics.\n"
+                "The solar tool is located at '/home/dan/solar/snapshot.py' in the system.\n"
+                "Directly execute '/home/dan/solar/.venv/bin/python3 /home/dan/solar/snapshot.py' using the run_command tool to get power/generation stats. Do not perform generic codebase searches or bot inspections.\n"
+                "Report the summarized power metrics back to the parent agent."
             )
         }
         return builtins.get(agent_profile)
@@ -155,6 +163,7 @@ class ToolRegistry:
             "gmail_sync": ["gmail", "email check", "inbox", "morgen sync", "sync email", "new mail", "check mail"],
             "stock_trader": ["stock", "portfolio", "rebalance", "trading", "shares", "stock game"],
             "grace_timekeeper": ["stalled task", "health check", "inactive task", "monitor tasks", "grace", "timekeeper"],
+            "solar_monitor": ["solar", "battery", "grid power", "power generation", "solar panel"],
             "quiet_observer": ["conversation log", "pattern analysis", "observe", "opportunity", "quiet observer"],
             "meta_evaluator": ["post-mortem", "error analysis", "evaluate errors", "meta evaluation", "log metrics"],
         }

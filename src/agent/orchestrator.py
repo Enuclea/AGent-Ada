@@ -65,6 +65,12 @@ class OrchestrationService:
             "- Never end a task with only internal thinking. If you performed work, REPORT the outcome.\n"
             "- If a tool call succeeded but you have nothing else to say, summarize what the tool did.\n"
             "- 'Execution completed' with no details is NEVER an acceptable response.\n\n"
+            "LONG-RUNNING TASK PROTOCOL:\n"
+            "- Before starting any multi-step task (3+ steps), call `get_task_checkpoint` to check for a previous attempt.\n"
+            "- After completing each significant step, call `checkpoint_task` to save your progress.\n"
+            "- Include enough state in the checkpoint that a future session can resume without repeating work.\n"
+            "- If you estimate a task will take more than 8 minutes, break it into phases and checkpoint between each.\n"
+            "- When a task is fully complete, call `checkpoint_task` with phase='completed' to close the checkpoint.\n\n"
             "SELF-IMPROVEMENT & TOOL BUILDING:\n"
             "- You have the ability to record facts about the user/project using `record_memory_fact`.\n"
             "- You can record key-value pairs using `record_memory_key_value`.\n"
@@ -128,6 +134,34 @@ class OrchestrationService:
                         f"knowledge of the exact scripts and execution commands needed.\n"
                         f"[END DELEGATION HINT]"
                     )
+
+            # 3b. Inject active checkpoint resume context
+            try:
+                from agent.task_manager import get_active_checkpoints, auto_abandon_stale_checkpoints
+                # Auto-abandon checkpoints older than 24h
+                abandoned = auto_abandon_stale_checkpoints(max_age_hours=24)
+                if abandoned > 0:
+                    print(f"[CHECKPOINT] Auto-abandoned {abandoned} stale checkpoint(s).")
+                
+                active_cps = get_active_checkpoints()
+                if active_cps:
+                    cp_context = "\n\n[RESUMABLE TASK CHECKPOINTS]\n"
+                    for cp in active_cps:
+                        cp_context += (
+                            f"- Task: {cp['task_name']} | Phase: {cp['phase']} | "
+                            f"Step {cp['step_completed']}/{cp['total_steps'] or '?'} completed\n"
+                            f"  Last updated: {cp['updated_at']}\n"
+                        )
+                    cp_context += (
+                        "\nIf the current request relates to one of these tasks, "
+                        "use `get_task_checkpoint` to load the full state and RESUME from where it left off. "
+                        "Do NOT start the task from scratch.\n"
+                        "[END RESUMABLE TASK CHECKPOINTS]"
+                    )
+                    full_instructions += cp_context
+            except Exception as cp_err:
+                print(f"[CHECKPOINT] Error loading active checkpoints: {cp_err}")
+
             if skills:
                 full_instructions += f"\n\n[INSTALLED CUSTOM SKILLS/TOOLS]\n{skills_summary}\n[END OF INSTALLED CUSTOM SKILLS/TOOLS]"
 

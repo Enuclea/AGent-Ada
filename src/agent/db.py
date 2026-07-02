@@ -156,6 +156,21 @@ def init_db() -> None:
             error_message TEXT
         )
         """)
+        # Task checkpoints (for resuming long-running tasks across sessions)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS task_checkpoints (
+            id TEXT PRIMARY KEY,
+            task_name TEXT NOT NULL,
+            session_id TEXT,
+            phase TEXT NOT NULL,
+            step_completed INTEGER NOT NULL,
+            total_steps INTEGER,
+            state_json TEXT,
+            status TEXT DEFAULT 'in_progress',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """)
         # Token usage telemetry
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS token_telemetry (

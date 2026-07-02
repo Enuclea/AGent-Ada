@@ -64,6 +64,13 @@ from agent.task_manager import (  # noqa: F401
     update_plan_step_status,
     get_session_plan,
     ask_discord_approval,
+    save_checkpoint,
+    get_checkpoint,
+    complete_checkpoint,
+    abandon_checkpoint,
+    get_active_checkpoints,
+    get_stale_checkpoints,
+    auto_abandon_stale_checkpoints,
 )
 
 # --- Telemetry, quotas, subagents, workers ---
