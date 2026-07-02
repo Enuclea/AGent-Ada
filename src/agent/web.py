@@ -1569,6 +1569,25 @@ async def execute_scheduled_task(name: str, prompt: str):
             
         system_instructions = specialist_inst or f"You are executing the scheduled background task: {name}. Complete it and report results concisely."
 
+        # Check for resumable checkpoint
+        try:
+            from agent.task_manager import get_checkpoint
+            task_key = name.lower().replace(" ", "_").replace("-", "_")
+            checkpoint = get_checkpoint(task_key)
+            if checkpoint and checkpoint['status'] == 'in_progress':
+                prompt = (
+                    f"[RESUMING FROM CHECKPOINT]\n"
+                    f"Task: {name}\n"
+                    f"Phase completed: {checkpoint['phase']}\n"
+                    f"Step {checkpoint['step_completed']}/{checkpoint['total_steps'] or '?'}\n"
+                    f"Saved state: {checkpoint['state_json']}\n\n"
+                    f"Resume from the next step. Do NOT repeat completed work.\n\n"
+                    f"Original task: {prompt}"
+                )
+                print(f"[CHECKPOINT] Resuming scheduled task '{name}' from step {checkpoint['step_completed']}")
+        except Exception as cp_err:
+            print(f"[CHECKPOINT] Error checking checkpoint for scheduled task: {cp_err}")
+
         agent = KeylessAgyAgent(
             model="gemini-3.5-flash",
             system_instructions=system_instructions,
