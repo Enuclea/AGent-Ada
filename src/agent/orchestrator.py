@@ -13,6 +13,16 @@ class OrchestrationService:
     def __init__(self) -> None:
         self.active_agents: Dict[str, Dict[str, Any]] = {}
         self.session_locks: Dict[str, asyncio.Lock] = {}
+        self._pre_tool_hooks: List[Callable] = []
+
+    def register_pre_tool_hook(self, hook_fn: Callable) -> None:
+        """Register a pre-tool-call hook. Plugins use this to inject isolation guards.
+        
+        The hook_fn signature: (session_id: str, tool_name: str, tool_args: dict) -> None
+        It should raise PermissionError to block the tool call.
+        """
+        if hook_fn not in self._pre_tool_hooks:
+            self._pre_tool_hooks.append(hook_fn)
 
     def get_session_lock(self, session_id: str) -> asyncio.Lock:
         if session_id not in self.session_locks:

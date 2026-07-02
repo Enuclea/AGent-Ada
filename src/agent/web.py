@@ -277,6 +277,13 @@ def load_plugins(app: FastAPI) -> None:
                 spec = importlib.util.spec_from_file_location(f"agent.plugins.{item.name}", item / "__init__.py")
                 module = importlib.util.module_from_spec(spec)
                 import sys
+                # Ensure the intermediate 'agent.plugins' package is registered
+                if "agent.plugins" not in sys.modules:
+                    try:
+                        import agent.plugins
+                        sys.modules["agent.plugins"] = agent.plugins
+                    except ImportError:
+                        pass
                 sys.modules[f"agent.plugins.{item.name}"] = module
                 spec.loader.exec_module(module)
                 
