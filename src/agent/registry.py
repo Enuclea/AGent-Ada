@@ -119,7 +119,7 @@ class ToolRegistry:
             ),
             "quiet_observer": (
                 "You are the Quiet Observer Specialist agent. Your primary role is to analyze conversation logs, user commands, and tool calls to discover patterns and opportunities.\n"
-                "The observer script is located at 'scratch/quiet_observer.py' in the workspace.\n"
+                "The observer script is located at 'src/agent/quiet_observer.py' in the workspace.\n"
                 "Directly execute this script using python to perform the analysis. Do not perform generic searches.\n"
                 "Report suggestions and memory facts back to the parent agent."
             ),

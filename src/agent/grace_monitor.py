@@ -16,7 +16,7 @@ except ImportError:
         print(f"[GRACE] Discord notification not available (standalone mode): {text[:100]}...")
         return False
 
-def check_tasks(inactivity_threshold_mins=20):
+def check_tasks(inactivity_threshold_mins=10):
     if not DB_PATH.exists():
         print(json.dumps({"error": "Database does not exist."}))
         return
