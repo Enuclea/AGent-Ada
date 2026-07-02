@@ -15,8 +15,9 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from agent.web import app, fetch_real_quotas_sync
 from agent import memory
 
-# Override DB_FILE_PATH directly
-memory.DB_FILE_PATH = Path(tmp_db_path)
+# Override DB_FILE_PATH at the canonical source
+import agent.db
+agent.db.DB_FILE_PATH = Path(tmp_db_path)
 
 client = TestClient(app)
 

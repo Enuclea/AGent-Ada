@@ -1,6 +1,13 @@
-"""Shared Discord notification utilities for background agents and monitors."""
+"""Shared Discord notification utilities for background agents and monitors.
+
+Configuration is resolved via environment variables with filesystem fallback:
+- DISCORD_BOT_TOKEN: The bot token (preferred)
+- DISCORD_ENV_PATH: Path to .env file containing DISCORD_BOT_TOKEN= (fallback)
+- DISCORD_CONFIG_PATH: Path to config.json with channel mappings (fallback)
+"""
 
 import json
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -8,8 +15,18 @@ from typing import Optional
 
 
 def get_discord_config() -> dict:
-    """Loads the Discord channel configuration from the project's config.json."""
-    config_path = Path(__file__).parent.parent.parent / "discord" / "config.json"
+    """Loads the Discord channel configuration from config.json.
+    
+    Resolution order:
+    1. DISCORD_CONFIG_PATH environment variable
+    2. discord/config.json relative to project root (legacy fallback)
+    """
+    config_path_str = os.environ.get("DISCORD_CONFIG_PATH")
+    if config_path_str:
+        config_path = Path(config_path_str)
+    else:
+        config_path = Path(__file__).parent.parent.parent / "discord" / "config.json"
+    
     if config_path.exists():
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -20,8 +37,25 @@ def get_discord_config() -> dict:
 
 
 def get_bot_token() -> Optional[str]:
-    """Loads the Discord bot token from the project's .env file."""
-    env_path = Path(__file__).parent.parent.parent / "discord" / ".env"
+    """Loads the Discord bot token.
+    
+    Resolution order:
+    1. DISCORD_BOT_TOKEN environment variable (preferred)
+    2. .env file at DISCORD_ENV_PATH (if set)
+    3. discord/.env relative to project root (legacy fallback)
+    """
+    # 1. Environment variable (preferred)
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    if token:
+        return token
+    
+    # 2. File-based fallback
+    env_path_str = os.environ.get("DISCORD_ENV_PATH")
+    if env_path_str:
+        env_path = Path(env_path_str)
+    else:
+        env_path = Path(__file__).parent.parent.parent / "discord" / ".env"
+    
     if env_path.exists():
         try:
             with open(env_path, "r", encoding="utf-8") as f:

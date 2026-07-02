@@ -9,7 +9,7 @@ def test_orchestration_service_init():
 
 @pytest.mark.anyio
 async def test_prepare_agent_config():
-    with patch("agent.memory.load_memory") as mock_load, \
+    with patch("agent.persistence.load_memory") as mock_load, \
          patch("agent.memory.get_auto_rag_context", new_callable=AsyncMock) as mock_rag, \
          patch("agent.registry.tool_registry.get_registered_tools") as mock_tools:
          

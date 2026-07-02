@@ -2,8 +2,22 @@ import sqlite3
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable, List
 from agent import memory
 from agent.keyless import KeylessAgyAgent, TaskPriority
+
+# Plugin hook: error data providers
+# Plugins call register_error_data_provider(fn) where fn(since_iso: str) -> List[str]
+_error_data_providers: List[Callable[[str], List[str]]] = []
+
+def register_error_data_provider(provider_fn: Callable[[str], List[str]]) -> None:
+    """Register a plugin function that returns supplementary error log lines.
+
+    The function receives a single argument: an ISO timestamp string representing
+    the cutoff date. It should return a list of formatted error log strings.
+    """
+    if provider_fn not in _error_data_providers:
+        _error_data_providers.append(provider_fn)
 
 async def run_meta_evaluation(days: int = 1):
     db_path = memory.DB_FILE_PATH
@@ -33,27 +47,15 @@ async def run_meta_evaluation(days: int = 1):
             f"Logs:\n" + "\n".join(log_lines)
         )
 
-    # 2. Failed api calls (only query if enuclea is available)
+    # 2. Collect supplementary error data from registered plugins
     api_log_data = []
-    try:
-        from enuclea.db import DEFAULT_DB_PATH
-        if Path(DEFAULT_DB_PATH).exists():
-            conn_en = sqlite3.connect(DEFAULT_DB_PATH)
-            conn_en.row_factory = sqlite3.Row
-            cursor_en = conn_en.cursor()
-            cursor_en.execute(
-                "SELECT timestamp, service, endpoint, method, success, duration, error FROM api_call_logs WHERE success = 0 AND timestamp >= ?",
-                (since,)
-            )
-            failed_apis = cursor_en.fetchall()
-            for api in failed_apis:
-                api_log_data.append(
-                    f"[{api['timestamp']}] API Error: {api['method']} {api['service']}/{api['endpoint']} "
-                    f"Failed in {api['duration']:.2f}s with error: {api['error']}"
-                )
-            conn_en.close()
-    except Exception:
-        pass
+    for provider in _error_data_providers:
+        try:
+            extra_logs = provider(since)
+            if extra_logs:
+                api_log_data.extend(extra_logs)
+        except Exception:
+            pass
 
     conn.close()
 

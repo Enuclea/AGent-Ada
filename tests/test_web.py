@@ -14,8 +14,9 @@ import sqlite3
 from unittest.mock import AsyncMock, patch
 from agent import memory
 
-# Override DB_FILE_PATH directly since memory module might have been loaded earlier by other tests
-memory.DB_FILE_PATH = Path(tmp_db_path)
+# Override DB_FILE_PATH at the canonical source since memory module might have been loaded earlier
+import agent.db
+agent.db.DB_FILE_PATH = Path(tmp_db_path)
 memory.init_db()
 
 from agent.web import app

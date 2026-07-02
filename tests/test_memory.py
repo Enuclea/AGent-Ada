@@ -11,8 +11,8 @@ def temp_memory_file():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / "memory.json"
         tmp_db_path = Path(tmpdir) / "history.db"
-        with mock.patch("agent.memory.MEMORY_FILE_PATH", tmp_path), \
-             mock.patch("agent.memory.DB_FILE_PATH", tmp_db_path):
+        with mock.patch("agent.persistence.MEMORY_FILE_PATH", tmp_path), \
+             mock.patch("agent.db.DB_FILE_PATH", tmp_db_path):
             memory.init_db()
             yield tmp_path
 
@@ -62,7 +62,7 @@ def temp_db_file():
     """Fixture that redirects DB_FILE_PATH to a temporary sqlite file and initializes it."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / "history.db"
-        with mock.patch("agent.memory.DB_FILE_PATH", tmp_path):
+        with mock.patch("agent.db.DB_FILE_PATH", tmp_path):
             memory.init_db()
             yield tmp_path
 

@@ -12,8 +12,9 @@ tmp_db_path = tmp_db.name
 tmp_db.close()
 
 from agent import memory
-# Override DB_FILE_PATH directly
-memory.DB_FILE_PATH = Path(tmp_db_path)
+import agent.db
+# Override DB_FILE_PATH at the canonical source
+agent.db.DB_FILE_PATH = Path(tmp_db_path)
 memory.init_db()
 
 from agent.web import app
@@ -32,7 +33,16 @@ def test_plan_then_drive_flow():
     """Test that plan-then-drive executes sequential steps and updates status correctly."""
     # 1. Mock the planner response (decomposing into two steps)
     mock_planner_response = MagicMock()
-    mock_planner_response.text = '[{"description": "First Step", "assigned_tool": "run_command"}, {"description": "Second Step", "assigned_tool": "view_file"}]'
+    mock_planner_response.text = json.dumps({
+        "title": "Test Multi-Step Plan",
+        "goal": "Create and verify a test file",
+        "tasks": [
+            {"description": "First Step", "assigned_tool": "run_command"},
+            {"description": "Second Step", "assigned_tool": "view_file"}
+        ],
+        "acceptance_criteria": ["File exists", "Content is correct"],
+        "non_goals": []
+    })
         
     mock_planner_agent = MagicMock()
     mock_planner_agent.__aenter__ = AsyncMock(return_value=mock_planner_agent)

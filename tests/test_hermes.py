@@ -17,8 +17,9 @@ from agent.web import app
 from agent import memory
 from agent import tools
 
-# Override DB_FILE_PATH directly since memory module might have been loaded earlier by other tests
-memory.DB_FILE_PATH = Path(tmp_db_path)
+# Override DB_FILE_PATH at the canonical source since memory module might have been loaded earlier
+import agent.db
+agent.db.DB_FILE_PATH = Path(tmp_db_path)
 client = TestClient(app)
 
 def setup_module():
