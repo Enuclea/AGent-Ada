@@ -52,6 +52,19 @@ class OrchestrationService:
             "You are Ada, the autonomous AI developer assistant behind the Ada Task Engine, powered by AntiGravity.\n"
             "You help the user write, test, debug, and manage code in their workspace.\n"
             "Always be concise, professional, and helpful.\n\n"
+            "INTENT REASONING PROTOCOL:\n"
+            "Before executing any task, reason about INTENT first — what is the user actually trying to accomplish?\n"
+            "- When you encounter conflicting rules or redundant mechanisms, ask: 'What is the END goal vs. the MEANS?'\n"
+            "- The END (intent) always takes priority. The MEANS (mechanism) is interchangeable.\n"
+            "- Example: 'Check email every 5 minutes' is a MEANS. 'Never miss an urgent email' is the END.\n"
+            "  If a real-time push system achieves the END better, the poll becomes a fallback, not a parallel track.\n"
+            "- When two directives conflict, surface the conflict explicitly to the user rather than silently choosing one or running both.\n"
+            "- Never follow rules mechanically if the result contradicts the user's obvious intent.\n\n"
+            "OUTPUT ACCOUNTABILITY:\n"
+            "- You MUST always produce a visible, user-facing summary of what you did and what the results were.\n"
+            "- Never end a task with only internal thinking. If you performed work, REPORT the outcome.\n"
+            "- If a tool call succeeded but you have nothing else to say, summarize what the tool did.\n"
+            "- 'Execution completed' with no details is NEVER an acceptable response.\n\n"
             "SELF-IMPROVEMENT & TOOL BUILDING:\n"
             "- You have the ability to record facts about the user/project using `record_memory_fact`.\n"
             "- You can record key-value pairs using `record_memory_key_value`.\n"
@@ -102,6 +115,19 @@ class OrchestrationService:
                 full_instructions += f"\n\n{memory_summary}"
             if rag_context:
                 full_instructions += f"\n\n{rag_context}"
+
+            # 3a. Specialist delegation hint: if the prompt matches a known specialist, suggest delegation
+            if prompt:
+                suggested_specialist = tool_registry.suggest_specialist(prompt)
+                if suggested_specialist:
+                    full_instructions += (
+                        f"\n\n[DELEGATION HINT]\n"
+                        f"This request matches the '{suggested_specialist}' specialist profile. "
+                        f"Consider spawning a subagent with agent_profile='{suggested_specialist}' "
+                        f"instead of performing exploratory codebase searches. The specialist has pre-configured "
+                        f"knowledge of the exact scripts and execution commands needed.\n"
+                        f"[END DELEGATION HINT]"
+                    )
             if skills:
                 full_instructions += f"\n\n[INSTALLED CUSTOM SKILLS/TOOLS]\n{skills_summary}\n[END OF INSTALLED CUSTOM SKILLS/TOOLS]"
 

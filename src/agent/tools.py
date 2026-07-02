@@ -1259,4 +1259,60 @@ async def run_boardroom(
     })
 
 
+def get_relevant_tests(changed_files: List[str], workspace_root: Optional[str] = None) -> str:
+    """Given a list of changed file paths, returns the most relevant test files to run.
+    
+    Use this tool BEFORE running tests to avoid running the full test suite on every change.
+    Only run the full suite as a final gate before committing.
+    
+    Args:
+        changed_files: List of absolute or relative paths to files that were modified.
+        workspace_root: Optional workspace root path. Defaults to current working directory.
+    
+    Returns:
+        JSON with targeted test command and file list.
+    """
+    root = Path(workspace_root) if workspace_root else Path(os.getcwd())
+    tests_dir = root / "tests"
+    
+    if not tests_dir.exists():
+        return json.dumps({"command": "pytest tests/", "reason": "No tests directory found, running all tests."})
+    
+    # Build a map of source files to their test files
+    test_map = {}
+    for test_file in tests_dir.glob("test_*.py"):
+        # Extract the module name from the test file (e.g., test_web.py -> web)
+        module_name = test_file.stem.replace("test_", "")
+        # Map to possible source file patterns
+        test_map[module_name] = str(test_file.relative_to(root))
+    
+    relevant_tests = set()
+    for changed_file in changed_files:
+        changed_path = Path(changed_file)
+        stem = changed_path.stem  # e.g., "web" from "web.py"
+        
+        # Direct match: changed file name matches a test module
+        if stem in test_map:
+            relevant_tests.add(test_map[stem])
+        
+        # Check if the changed file IS a test file
+        if changed_path.name.startswith("test_"):
+            rel = str(changed_path.relative_to(root)) if changed_path.is_absolute() else str(changed_path)
+            relevant_tests.add(rel)
+    
+    if relevant_tests:
+        test_list = sorted(relevant_tests)
+        cmd = f"pytest {' '.join(test_list)} -v"
+        return json.dumps({
+            "command": cmd,
+            "test_files": test_list,
+            "reason": f"Targeted {len(test_list)} test file(s) based on {len(changed_files)} changed file(s).",
+            "note": "Run the full suite (pytest tests/ -v) as a final gate before committing."
+        })
+    else:
+        return json.dumps({
+            "command": "pytest tests/ -v",
+            "reason": "No targeted test mapping found for changed files. Running full suite.",
+            "changed_files": changed_files
+        })
 

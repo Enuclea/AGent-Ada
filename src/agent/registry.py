@@ -35,6 +35,7 @@ class ToolRegistry:
             tools.spawn_subagent,
             tools.create_expert_profile,
             tools.run_boardroom,
+            tools.get_relevant_tests,
         ]
         for t in builtins:
             if t not in registered:
@@ -137,5 +138,31 @@ class ToolRegistry:
             )
         }
         return builtins.get(agent_profile)
+
+    def suggest_specialist(self, prompt: str) -> Optional[str]:
+        """Given a user prompt, suggests the most relevant specialist agent profile.
+        
+        Returns the specialist profile name if a strong match is found, None otherwise.
+        This enables automatic delegation routing: if a specialist exists for the task,
+        delegate to them instead of doing exploratory codebase searches.
+        """
+        if not prompt:
+            return None
+        
+        prompt_lower = prompt.lower()
+        
+        delegation_triggers = {
+            "gmail_sync": ["gmail", "email check", "inbox", "morgen sync", "sync email", "new mail", "check mail"],
+            "stock_trader": ["stock", "portfolio", "rebalance", "trading", "shares", "stock game"],
+            "grace_timekeeper": ["stalled task", "health check", "inactive task", "monitor tasks", "grace", "timekeeper"],
+            "quiet_observer": ["conversation log", "pattern analysis", "observe", "opportunity", "quiet observer"],
+            "meta_evaluator": ["post-mortem", "error analysis", "evaluate errors", "meta evaluation", "log metrics"],
+        }
+        
+        for profile, triggers in delegation_triggers.items():
+            if any(trigger in prompt_lower for trigger in triggers):
+                return profile
+        
+        return None
 
 tool_registry = ToolRegistry()

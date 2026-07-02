@@ -454,6 +454,9 @@ async def chat_endpoint(req: ChatRequest):
         await lock.acquire(priority)
         from agent.memory import active_session_id_var
         token = active_session_id_var.set(agent.conversation_id)
+        # Output Gate: track whether any text content was yielded to the client
+        text_chunks_emitted = False
+        thoughts_emitted = False
         try:
             # 1. Decompose plan steps if enabled and prompt is complex enough
             enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "true").lower() == "true"
@@ -534,6 +537,7 @@ async def chat_endpoint(req: ChatRequest):
             is_gemini = "gemini" in primary_model.lower()
 
             async def stream_agent_response(active_agent, prompt_to_send):
+                nonlocal text_chunks_emitted, thoughts_emitted
                 response = await active_agent.chat(prompt_to_send)
                 yield {"type": "session_id", "content": active_agent.conversation_id}
                 
@@ -541,6 +545,7 @@ async def chat_endpoint(req: ChatRequest):
                 thoughts_str = ""
                 async for thought in response.thoughts:
                     thoughts_str += thought
+                    thoughts_emitted = True
                     yield {"type": "thought", "content": thought}
                     
                 if thoughts_str:
@@ -550,6 +555,7 @@ async def chat_endpoint(req: ChatRequest):
                 output_content = ""
                 async for chunk in response:
                     output_content += chunk
+                    text_chunks_emitted = True
                     yield {"type": "chunk", "content": chunk}
                     
                 if output_content:
@@ -661,6 +667,24 @@ async def chat_endpoint(req: ChatRequest):
                     except Exception as second_error:
                         print(f"[STUCK PREVENTION] Fallback model ({fallback_model}) also failed: {second_error}")
                         raise second_error
+
+            # Output Gate: if the model produced thinking but no visible text output, inject recovery
+            if not text_chunks_emitted and thoughts_emitted:
+                recovery_msg = (
+                    "⚠️ I completed processing but my response was empty. "
+                    "The task may have been executed — please check the results directly, "
+                    "or re-run the request."
+                )
+                yield f"data: {json.dumps({'type': 'chunk', 'content': recovery_msg})}\n\n"
+                memory.log_conversation_step(agent.conversation_id, "assistant", f"[OUTPUT GATE RECOVERY] {recovery_msg}")
+                print(f"[OUTPUT GATE] Triggered for session {lookup_id}: thinking emitted but no text content produced.")
+            elif not text_chunks_emitted and not thoughts_emitted:
+                recovery_msg = (
+                    "⚠️ No response was generated. The model may have encountered an issue. "
+                    "Please try again."
+                )
+                yield f"data: {json.dumps({'type': 'chunk', 'content': recovery_msg})}\n\n"
+                print(f"[OUTPUT GATE] Triggered for session {lookup_id}: no output at all (no thoughts, no text).")
 
             # Complete
             yield "data: [DONE]\n\n"
