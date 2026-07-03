@@ -1,8 +1,55 @@
 import os
+import json
 import asyncio
 import aiohttp
+from pathlib import Path
 from typing import List, Optional
 from agent.routes.base import BaseRoute, RouteStatus
+
+def load_ollama_hosts() -> List[str]:
+    """Resolves and loads Ollama server hosts from configuration or defaults.
+    
+    If no config file exists, it auto-generates a default config at config/ollama_hosts.json
+    so the user can edit it.
+    """
+    env_config = os.environ.get("OLLAMA_HOSTS_CONFIG")
+    if env_config:
+        config_path = Path(env_config)
+    else:
+        config_path = Path("config/ollama_hosts.json")
+
+    # If local path doesn't exist, try standard home fallback
+    if not config_path.exists():
+        home_config = Path.home() / ".agent" / "ollama_hosts.json"
+        if home_config.exists():
+            config_path = home_config
+        else:
+            # Auto-generate a default JSON file in config/ollama_hosts.json
+            try:
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                default_data = {
+                    "hosts": [
+                        "http://10.200.0.4:11434",
+                        "http://10.200.0.3:11434",
+                        "http://localhost:11434"
+                    ]
+                }
+                with open(config_path, "w") as f:
+                    json.dump(default_data, f, indent=2)
+                print(f"[OLLAMA] Auto-generated default config file at: {config_path}")
+            except Exception as e:
+                print(f"[OLLAMA] Failed to auto-generate config: {e}")
+                return ["http://10.200.0.4:11434", "http://10.200.0.3:11434", "http://localhost:11434"]
+
+    try:
+        with open(config_path, "r") as f:
+            data = json.load(f)
+            if "hosts" in data and isinstance(data["hosts"], list):
+                return [str(h) for h in data["hosts"] if h]
+    except Exception as e:
+        print(f"[OLLAMA] Failed to parse config file {config_path}: {e}")
+
+    return ["http://10.200.0.4:11434", "http://10.200.0.3:11434", "http://localhost:11434"]
 
 class OllamaRoute(BaseRoute):
     @property
@@ -46,11 +93,8 @@ class OllamaRoute(BaseRoute):
             if single_host:
                 raw_hosts = [single_host]
             else:
-                raw_hosts = [
-                    "http://10.200.0.4:11434",
-                    "http://10.200.0.3:11434",
-                    "http://localhost:11434"
-                ]
+                # Load from the formal config file
+                raw_hosts = load_ollama_hosts()
 
         urls = []
         for host in raw_hosts:
