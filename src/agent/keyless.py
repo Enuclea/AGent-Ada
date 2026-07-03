@@ -12,13 +12,8 @@ from typing import Optional, List, Dict, Any
 from google.antigravity.models import GeminiAPIEndpoint
 
 
-class TaskPriority(IntEnum):
-    """Controls failover depth per call type to optimize quota usage."""
-    INTERACTIVE = 0       # User is waiting — full failover chain including Grok
-    SCHEDULED_CRITICAL = 1  # Grace monitor, Meta-Eval — Gemini + 3P, no Grok
-    SCHEDULED_ROUTINE = 2   # Gmail check, Morgen sync — Gemini only, retry next cycle
-    BACKGROUND = 3           # Compaction, observer — cheapest model, no failover
-
+from agent.routes.base import TaskPriority, get_harness_path, setup_keyless_environment
+from agent.core.routing import routing_engine
 
 class CircuitBreaker:
     """Tracks consecutive failures per model and skips models in 'open' state.
@@ -66,56 +61,6 @@ class KeylessGeminiAPIEndpoint(GeminiAPIEndpoint):
         # Bypass client-side API key validation for Gemini Developer API.
         # This allows routing to keyless / Ultra plan gateways via Go localharness/agy.
         pass
-
-def get_harness_path() -> Optional[str]:
-    """Resolves the path to the system-wide agy binary."""
-    if "ANTIGRAVITY_HARNESS_PATH" in os.environ:
-        return os.environ["ANTIGRAVITY_HARNESS_PATH"]
-    
-    # Check system PATH for 'agy'
-    agy_path = shutil.which("agy")
-    if agy_path:
-        try:
-            cwd_path = Path.cwd().resolve()
-            resolved_path = Path(agy_path).resolve()
-            
-            is_in_cwd = cwd_path in resolved_path.parents or resolved_path == cwd_path
-            
-            trusted_dirs = [
-                Path("/usr/bin").resolve(),
-                Path("/usr/local/bin").resolve(),
-                Path("/bin").resolve(),
-                Path("/sbin").resolve(),
-                Path("~/.local/bin").expanduser().resolve(),
-                Path("~/.gemini/antigravity-cli/bin").expanduser().resolve(),
-            ]
-            is_trusted_parent = resolved_path.parent in trusted_dirs
-            
-            if is_in_cwd or not is_trusted_parent:
-                import logging
-                logging.warning(
-                    f"agy binary path {agy_path} (resolved to {resolved_path}) failed security check. "
-                    f"is_in_cwd={is_in_cwd}, is_trusted_parent={is_trusted_parent}."
-                )
-            else:
-                return agy_path
-        except Exception as e:
-            import logging
-            logging.warning(f"Error resolving agy path: {e}")
-        
-    # Fallback to standard local bin paths
-    user_home = Path.home()
-    fallback_path = user_home / ".local" / "bin" / "agy"
-    if fallback_path.exists() and fallback_path.is_file():
-        return str(fallback_path)
-            
-    return None
-
-def setup_keyless_environment() -> None:
-    """Sets the ANTIGRAVITY_HARNESS_PATH env var if system agy is found."""
-    harness_path = get_harness_path()
-    if harness_path:
-        os.environ["ANTIGRAVITY_HARNESS_PATH"] = harness_path
 
 class KeylessAgyResponse:
     def __init__(self, text_or_proc, timeout_val=None, agent=None, prev_newest=None):
@@ -531,11 +476,9 @@ class KeylessAgyAgent:
         if self.roleplay:
             failover_sequence = [primary_model, "ollama/gemma4:12b"]
         else:
-            # Determine which pool the primary model belongs to
             is_primary_gemini = any(primary_model.lower().startswith(g.lower().split("-")[0]) for g in GEMINI_POOL) or primary_model.lower().startswith("gemini")
 
             if is_primary_gemini:
-                # Start with Gemini pool, then fall to 3P pool
                 for m in GEMINI_POOL:
                     if m not in failover_sequence:
                         failover_sequence.append(m)
@@ -544,7 +487,6 @@ class KeylessAgyAgent:
                         if m not in failover_sequence:
                             failover_sequence.append(m)
             else:
-                # Primary is 3P — try it first, then Gemini, then rest of 3P
                 failover_sequence.append(primary_model)
                 for m in GEMINI_POOL:
                     if m not in failover_sequence:
@@ -553,10 +495,8 @@ class KeylessAgyAgent:
                     if m not in failover_sequence:
                         failover_sequence.append(m)
 
-            # For BACKGROUND priority, only try the primary model — no failover
             if self.task_priority >= TaskPriority.BACKGROUND:
                 failover_sequence = [primary_model]
-            # For SCHEDULED_ROUTINE, only try models in the primary pool
             elif self.task_priority >= TaskPriority.SCHEDULED_ROUTINE:
                 if is_primary_gemini:
                     failover_sequence = [m for m in failover_sequence if m in GEMINI_POOL]
@@ -566,105 +506,28 @@ class KeylessAgyAgent:
             # Filter out models with open circuits
             failover_sequence = [m for m in failover_sequence if not _circuit_breaker.is_open(m)]
             if not failover_sequence:
-                # All circuits open — force-try primary model anyway
                 failover_sequence = [primary_model]
 
         timeout_val = self.timeout if self.timeout is not None else 120.0
-        harness_path = get_harness_path() or "agy"
-        last_error = "All agy execution attempts failed."
+        last_error = "All execution routes failed."
 
         for current_model in failover_sequence:
-            if current_model.startswith("ollama/"):
-                import aiohttp
-                urls = ["http://10.200.0.4:11434/api/generate", "http://10.200.0.3:11434/api/generate"]
-                payload = {
-                    "model": current_model.replace("ollama/", ""),
-                    "prompt": full_prompt,
-                    "stream": False
-                }
-                success = False
-                for url in urls:
-                    try:
-                        async with aiohttp.ClientSession() as session:
-                            async with session.post(url, json=payload, timeout=self.timeout or 60.0) as resp:
-                                if resp.status == 200:
-                                    data = await resp.json()
-                                    return KeylessAgyResponse(data["response"])
-                                else:
-                                    raise RuntimeError(f"Ollama Mac Mini returned status {resp.status}")
-                    except Exception as e:
-                        print(f"[FAILOVER] Ollama Mac Mini call to {url} failed: {e}")
-                continue
-
-            cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions"]
-            if self.conversation_id:
-                cmd.extend(["--conversation", self.conversation_id])
-            cmd.extend(["--model", current_model])
-
-            # For long-running user chats (timeout > 30s), run primary model only with streaming
-            if self.timeout is not None and self.timeout > 30.0:
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdin=asyncio.subprocess.DEVNULL,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        cwd=self.cwd
-                    )
+            prev_newest = self._get_newest_conversation_id()
+            try:
+                result = await routing_engine.execute(
+                    prompt=full_prompt,
+                    model=current_model,
+                    timeout=self.timeout,
+                    conversation_id=self.conversation_id,
+                    task_priority=self.task_priority
+                )
+                if result is not None:
                     _circuit_breaker.record_success(current_model)
-                    return KeylessAgyResponse(proc, timeout_val, agent=self, prev_newest=self._get_newest_conversation_id())
-                except Exception as e:
-                    _circuit_breaker.record_failure(current_model)
-                    last_error = str(e)
-                    # If primary streaming fails, continue to next model in failover sequence
-                    continue
-
-            # Run with retries for short/background tasks (timeout <= 30s)
-            max_retries = 2
-            backoff = 1.0
-
-            for attempt in range(max_retries):
-                prev_newest = self._get_newest_conversation_id()
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdin=asyncio.subprocess.DEVNULL,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        cwd=self.cwd
-                    )
-                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
-                    response_text = stdout.decode("utf-8", errors="replace")
-                    stderr_text = stderr.decode("utf-8", errors="replace")
-
-                    if proc.returncode == 0 and response_text.strip():
-                        curr_newest = self._get_newest_conversation_id()
-                        if curr_newest and curr_newest != prev_newest:
-                            self.conversation_id = curr_newest
-                        elif not self.conversation_id and curr_newest:
-                            self.conversation_id = curr_newest
-
-                        _circuit_breaker.record_success(current_model)
-                        return KeylessAgyResponse(response_text)
-                    else:
-                        last_error = stderr_text.strip() or response_text.strip() or "Empty response"
-                except asyncio.TimeoutError:
-                    last_error = f"Timeout after {timeout_val} seconds"
-                    try:
-                        proc.kill()
-                        await proc.wait()
-                    except Exception:
-                        pass
-                except Exception as e:
-                    last_error = str(e)
-
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(backoff)
-                    backoff *= 2.0
-
-            # If we reached here, the current model in the sequence failed. Try next model.
-            _circuit_breaker.record_failure(current_model)
-            print(f"[FAILOVER] Model {current_model} failed. Trying next model...")
+                    return KeylessAgyResponse(result, timeout_val, agent=self, prev_newest=prev_newest)
+            except Exception as e:
+                _circuit_breaker.record_failure(current_model)
+                last_error = str(e)
+                print(f"[FAILOVER] Model {current_model} failed: {e}. Trying next model...")
 
         # --- Grok fallback (only for INTERACTIVE and SCHEDULED_CRITICAL priority) ---
         if not self.roleplay and self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
