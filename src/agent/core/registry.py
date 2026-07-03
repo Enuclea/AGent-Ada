@@ -1,3 +1,10 @@
+"""Module for tool registration, skill discovery, and specialist profile resolution.
+
+This module provides the ToolRegistry class which handles discoverability of
+installed agent skills, registered Python tools, and system instructions/triggers
+for specialist subagents.
+"""
+
 import os
 import re
 from pathlib import Path
@@ -5,21 +12,44 @@ from typing import List, Dict, Callable, Any, Optional
 from agent import tools
 from agent.core.agent_types import SkillInfo
 
+
 class ToolRegistry:
+    """Registry that manages tools, custom skills, and specialist agent configurations.
+
+    It acts as the central directory for functions that the agent can execute
+    as tools, dynamic skills discovered in the workspace or system directories,
+    and profile instructions for subagent specialist roles.
+    """
+
     def __init__(self) -> None:
+        """Initializes the ToolRegistry with empty lists, dicts, and caches."""
         self._tools: List[Callable[..., Any]] = []
         self._skills: Dict[str, SkillInfo] = {}
         self._workspace_root: Optional[Path] = None
         self._configs_cache: Optional[Dict[str, Dict[str, Any]]] = None
-        
+
     def register_tool(self, tool_func: Callable[..., Any]) -> None:
+        """Registers a callable function as an agent tool.
+
+        Args:
+            tool_func: The function callable to register.
+        """
         if tool_func not in self._tools:
             self._tools.append(tool_func)
-            
+
     def get_registered_tools(self, is_discord: bool = False, disable_tools: bool = False) -> List[Callable[..., Any]]:
+        """Returns a list of all registered callable tools, including built-ins and plugin tools.
+
+        Args:
+            is_discord: Flag indicating if the current session is running inside Discord.
+            disable_tools: If True, returns an empty list, disabling all tool executions.
+
+        Returns:
+            A list of callable tool functions.
+        """
         if disable_tools:
             return []
-            
+
         registered = list(self._tools)
         # Add default built-in tools if they are not already registered
         builtins = [
@@ -45,37 +75,47 @@ class ToolRegistry:
         for t in builtins:
             if t not in registered:
                 registered.append(t)
-                
+
+        # Discord-specific exclusion check for backup tool
         if not is_discord and tools.backup_discord_channel not in registered:
             registered.append(tools.backup_discord_channel)
-            
-        # Add plugin tools
+
+        # Dynamically append plugin-contributed tools
         for t in tools.PLUGIN_TOOLS:
             if t not in registered:
                 registered.append(t)
-                
+
         return registered
 
     def discover_skills(self) -> List[SkillInfo]:
-        # Search global and workspace custom skills directories
+        """Searches global and workspace custom skills directories to discover active skills.
+
+        Iterates through the global skills directory and the local workspace '.agents/skills'
+        directory, parsing frontmatter from SKILL.md files to populate SkillInfo metadata.
+
+        Returns:
+            A list of discovered SkillInfo instances.
+        """
+        # Determine the workspace skills directory path
         workspace_skills = Path(os.getcwd()) / ".agents" / "skills"
         skills_paths = [tools.SKILLS_DIR]
         if workspace_skills.exists() and workspace_skills.is_dir():
             skills_paths.append(workspace_skills)
-            
+
         discovered = []
         seen_paths = set()
         for path in skills_paths:
             if path.exists() and path.is_dir():
                 for folder in path.iterdir():
                     if folder.is_dir():
+                        # Prevent traversal outside allowed path boundaries
                         if not tools._is_safe_path(path, folder):
                             continue
                         folder_resolved = str(folder.resolve())
                         if folder_resolved in seen_paths:
                             continue
                         seen_paths.add(folder_resolved)
-                        
+
                         skill_md = folder / "SKILL.md"
                         if skill_md.exists() and skill_md.is_file():
                             try:
@@ -93,11 +133,22 @@ class ToolRegistry:
                                     version=fm.get("version")
                                 ))
                             except Exception:
+                                # Ignore malformed skill folders or parse errors
                                 continue
         return discovered
 
     def resolve_subagent_profile(self, agent_profile: Optional[str]) -> Optional[str]:
-        """Resolves system instructions for a specialist subagent profile from the database or workspace files."""
+        """Resolves system instructions for a specialist subagent profile.
+
+        Resolves either from custom workspace files (e.g. .agents/agents/<profile_name>/system_instructions.txt)
+        or fallbacks to built-in system instruction templates.
+
+        Args:
+            agent_profile: The profile key identifier (e.g., 'lacie', 'ops_runner').
+
+        Returns:
+            The textual system instructions for the subagent, or None if not found.
+        """
         if not agent_profile:
             return None
 
@@ -237,13 +288,16 @@ class ToolRegistry:
 
     def _get_specialist_configs(self) -> Dict[str, Dict[str, Any]]:
         """Returns the specialist configuration metadata for all registered specialists.
-        
+
         Each config contains:
         - title: Human-readable title/role
         - domain: What tasks this specialist handles
         - discord_channel: The Discord channel name for direct queries
         - max_subagents: How many subagents this specialist can spawn
         - delegation_triggers: Keywords that trigger automatic delegation
+
+        Returns:
+            Dictionary mapping specialist profile name to its config metadata.
         """
         # Return cached configs if available (invalidate by setting _configs_cache = None)
         if self._configs_cache is not None:
@@ -332,19 +386,25 @@ class ToolRegistry:
 
     def _get_workspace_root(self) -> Path:
         """Returns the workspace root directory, cached after first resolution.
-        
+
         Resolves from __file__ path (src/agent/core/registry.py → workspace root)
         and caches the result to avoid repeated path traversal.
+
+        Returns:
+            The Path representing the resolved workspace root.
         """
         if self._workspace_root is None:
             self._workspace_root = Path(__file__).resolve().parent.parent.parent
         return self._workspace_root
 
     def get_specialist_roster(self) -> str:
-        """Returns a formatted specialist roster string for injection into the coordinator's system prompt.
-        
-        This dynamically generates the roster from specialist_configs so adding a new specialist
-        automatically updates the coordinator's knowledge of the team.
+        """Returns a formatted specialist roster string for injection into system prompts.
+
+        This dynamically generates the roster description from specialist_configs, mapping
+        role descriptions, profile names, and channels.
+
+        Returns:
+            A formatted multi-line string description of available specialists.
         """
         configs = self._get_specialist_configs()
         lines = []
@@ -357,7 +417,11 @@ class ToolRegistry:
         return "\n".join(lines)
 
     def get_specialist_channel_map(self) -> Dict[str, str]:
-        """Returns a mapping of discord_channel_name -> profile_name for all specialists with channels."""
+        """Returns a mapping of discord channel name to profile name.
+
+        Returns:
+            A dictionary mapping Discord channel string to specialist profile ID.
+        """
         configs = self._get_specialist_configs()
         return {
             cfg["discord_channel"]: profile
@@ -367,17 +431,22 @@ class ToolRegistry:
 
     def suggest_specialist(self, prompt: str) -> Optional[str]:
         """Given a user prompt, suggests the most relevant specialist agent profile.
-        
-        Returns the specialist profile name if a strong match is found, None otherwise.
-        Uses word-boundary regex matching against delegation_triggers to avoid
-        false positives (e.g. 'stock the kitchen' won't match 'stock_trader').
+
+        Uses regex matching with word boundaries against delegation triggers to prevent
+        false positives.
+
+        Args:
+            prompt: The user query or instruction text.
+
+        Returns:
+            The profile name string if matching, otherwise None.
         """
         if not prompt:
             return None
-        
+
         prompt_lower = prompt.lower()
         configs = self._get_specialist_configs()
-        
+
         for profile, cfg in configs.items():
             triggers = cfg.get("delegation_triggers", [])
             for trigger in triggers:
@@ -389,7 +458,8 @@ class ToolRegistry:
                 else:
                     if re.search(r'\b' + re.escape(trigger) + r'\b', prompt_lower):
                         return profile
-        
+
         return None
+
 
 tool_registry = ToolRegistry()

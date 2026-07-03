@@ -1,3 +1,10 @@
+"""Module orchestrating agent runtime configurations, lifecycle hooks, and lock management.
+
+This module provides the OrchestrationService that builds LLM system instructions,
+injects RAG context, resolves subagent/specialist configurations, enforces safety policies,
+manages task checkpoints, and registers pre/post tool hooks.
+"""
+
 import os
 import asyncio
 from pathlib import Path
@@ -9,22 +16,40 @@ from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import policy, hooks
 from google.antigravity.types import CapabilitiesConfig, ToolCall, ModelTarget, ModelType
 
+
 class OrchestrationService:
+    """Service class that orchestrates agent lifecycle configurations and instances.
+
+    Manages active session instances, pre-tool filters, system prompting, RAG,
+    telemetry logging, and background task safety rewrites.
+    """
+
     def __init__(self) -> None:
+        """Initializes the OrchestrationService with empty active agent maps and locks."""
         self.active_agents: Dict[str, Dict[str, Any]] = {}
         self.session_locks: Dict[str, asyncio.Lock] = {}
-        self._pre_tool_hooks: List[Callable] = []
+        self._pre_tool_hooks: List[Callable[[str, str, Dict[str, Any]], None]] = []
 
-    def register_pre_tool_hook(self, hook_fn: Callable) -> None:
-        """Register a pre-tool-call hook. Plugins use this to inject isolation guards.
-        
-        The hook_fn signature: (session_id: str, tool_name: str, tool_args: dict) -> None
-        It should raise PermissionError to block the tool call.
+    def register_pre_tool_hook(self, hook_fn: Callable[[str, str, Dict[str, Any]], None]) -> None:
+        """Registers a pre-tool execution filter callback.
+
+        Plugins use this to register safety checks or resource boundaries.
+
+        Args:
+            hook_fn: A callback matching (session_id, tool_name, tool_args) signature.
         """
         if hook_fn not in self._pre_tool_hooks:
             self._pre_tool_hooks.append(hook_fn)
 
     def get_session_lock(self, session_id: str) -> asyncio.Lock:
+        """Acquires a mutual-exclusion lock bound to a unique conversation session ID.
+
+        Args:
+            session_id: Unique identifier for the conversation session.
+
+        Returns:
+            The asyncio.Lock bound to the given session_id.
+        """
         if session_id not in self.session_locks:
             self.session_locks[session_id] = asyncio.Lock()
         return self.session_locks[session_id]
@@ -41,7 +66,22 @@ class OrchestrationService:
         prompt: Optional[str] = None,
         custom_approval_handler: Optional[Callable[[ToolCall], Any]] = None
     ) -> Dict[str, Any]:
-        """Prepares a unified agent configuration dictionary with loaded tools, hooks, and instructions."""
+        """Prepares a unified agent configuration dictionary with loaded tools, hooks, and instructions.
+
+        Args:
+            model: The Gemini model key name.
+            session_id: Optional unique session ID to associate data.
+            custom_instructions: Optional system instruction prompt override.
+            disable_tools: If True, blocks all tool execution capabilities.
+            roleplay: Enables specific roleplay sandbox mode.
+            workspaces: Directories allowed to access.
+            auto_approve: If True, configures pass-through policies for tools.
+            prompt: Initial prompt text, used for situational specialist suggestions.
+            custom_approval_handler: Callback handler to evaluate tool execution approval.
+
+        Returns:
+            A configuration dictionary matching AgentConfig specifications.
+        """
         # 1. Resolve workspaces
         if not workspaces:
             workspaces = [os.getcwd()]
@@ -239,7 +279,7 @@ class OrchestrationService:
         current_active_task_id = None
         
         @hooks.pre_tool_call_decide
-        async def on_pre_tool(tool_call: ToolCall):
+        async def on_pre_tool(tool_call: ToolCall) -> Any:
             nonlocal current_active_task_id
             import uuid
             from google.antigravity.hooks.hooks import HookResult
@@ -247,7 +287,7 @@ class OrchestrationService:
             # Run registered pre-tool hooks (e.g. server-scoped isolation guards)
             for hook_fn in self._pre_tool_hooks:
                 try:
-                    hook_fn(session_id, tool_call.name, tool_call.args)
+                    hook_fn(session_id or "New Session", tool_call.name, tool_call.args)
                 except PermissionError as e:
                     return HookResult(allow=False, message=str(e))
             
@@ -267,14 +307,14 @@ class OrchestrationService:
             return HookResult(allow=True)
 
         @hooks.post_tool_call
-        async def on_post_tool(data):
+        async def on_post_tool(data: Any) -> None:
             nonlocal current_active_task_id
             if current_active_task_id:
                 memory.update_active_task_status(current_active_task_id, "completed")
                 current_active_task_id = None
 
         @hooks.on_tool_error
-        async def on_tool_err(err):
+        async def on_tool_err(err: Any) -> None:
             nonlocal current_active_task_id
             if current_active_task_id:
                 memory.update_active_task_status(current_active_task_id, "failed")
@@ -292,7 +332,14 @@ class OrchestrationService:
         }
 
     def _get_default_discord_approval_handler(self, session_id: Optional[str]) -> Callable[[ToolCall], Any]:
-        """Returns the default Discord polling confirmation handler."""
+        """Returns the default Discord polling confirmation handler.
+
+        Args:
+            session_id: The conversation session identifier.
+
+        Returns:
+            The approval handler callable.
+        """
         async def my_approval_handler(tool_call: ToolCall) -> bool:
             import uuid
             task_id = str(uuid.uuid4())
@@ -302,7 +349,7 @@ class OrchestrationService:
             # Post the approval request to Discord
             await memory.ask_discord_approval(task_id, tool_call.name, str(tool_call.args))
             
-            # Poll database status
+            # Poll database status until approved or denied
             while True:
                 await asyncio.sleep(1.0)
                 status = memory.get_active_task_status(task_id)
@@ -314,7 +361,16 @@ class OrchestrationService:
         return my_approval_handler
 
     def verify_agent_outputs(self, session_id: Optional[str]) -> Optional[str]:
-        """Runs validation and compile checks on workspace code modified during the session."""
+        """Runs validation and compile checks on workspace code modified during the session.
+
+        Checks modifying files via Git and runs python compilation/json checks.
+
+        Args:
+            session_id: The current conversation session ID.
+
+        Returns:
+            Error message details if validation fails, otherwise None.
+        """
         import subprocess
         try:
             # Get list of modified files in the git workspace
@@ -342,7 +398,7 @@ class OrchestrationService:
                             json.load(f)
                     except Exception as e:
                         return f"JSON syntax error in {filename}: {str(e)}"
-        except Exception as e:
+        except Exception:
             # Fallback if git is not present/configured or fails
             pass
         return None
@@ -359,7 +415,25 @@ class OrchestrationService:
         prompt: Optional[str] = None,
         custom_approval_handler: Optional[Callable[[ToolCall], Any]] = None
     ) -> Any:
-        """Acquires a new or existing agent instance configured via the orchestrator config payload."""
+        """Acquires a new or existing agent instance configured via the orchestrator config payload.
+
+        Reuses the active agent instance if the parameters (model, custom instructions, tools option,
+        and roleplay flag) remain identical. Otherwise, constructs a new one.
+
+        Args:
+            model: Optional LLM model override name.
+            session_id: Optional conversation session identifier.
+            custom_instructions: Optional overlay system instructions.
+            disable_tools: Toggle to disable tool use capabilities.
+            roleplay: Toggle to activate roleplay mode.
+            workspaces: Folders allowed to interact.
+            auto_approve: If True, tool executions are auto-approved.
+            prompt: Initial execution query/prompt.
+            custom_approval_handler: User confirmation prompt callback.
+
+        Returns:
+            The configured KeylessAgyAgent instance.
+        """
         model_name = model or "gemini-3.5-flash"
         lookup_id = session_id or "default"
 
@@ -437,4 +511,6 @@ class OrchestrationService:
 
         return self.active_agents[lookup_id]["agent"]
 
-orchestration_service = OrchestrationService()
+
+# Global orchestration service instance
+orchestration_service: OrchestrationService = OrchestrationService()
