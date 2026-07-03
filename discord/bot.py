@@ -1268,8 +1268,13 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
         if not profile_name:
             payload["system_instructions"] = MODERATOR_ASSISTANT_INSTRUCTIONS
 
+    is_specialist = (profile_name is not None)
     if placeholder is None:
-        placeholder = await channel.send("🔄 **Acknowledged**: Received command. Connecting to local AGent daemon...")
+        if is_specialist:
+            placeholder_text = "*Lacie is looking over the system...*" if profile_name == "lacie" else "*Val is booting up the test harness...*"
+        else:
+            placeholder_text = "🔄 **Acknowledged**: Received command. Connecting to local AGent daemon..."
+        placeholder = await channel.send(placeholder_text)
     
     local_typing = False
     if typing_task is None:
@@ -1294,7 +1299,8 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                         typing_task.cancel()
                     return
 
-                await placeholder.edit(content="🔄 **Acknowledged**: Processing request... 🧠 *AGent is working on it...*")
+                if not is_specialist:
+                    await placeholder.edit(content="🔄 **Acknowledged**: Processing request... 🧠 *AGent is working on it...*")
 
                 thoughts = []
                 response_text = ""
@@ -1331,25 +1337,26 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                             elapsed = int(current_time - start_time)
                             last_update_time = current_time
                             
-                            status_msg = f"🔄 **Acknowledged**: Processing request...\n⏳ **Status**: "
-                            if response_text:
-                                status_msg += f"Generating response... (elapsed: {elapsed}s)\n"
-                            else:
-                                status_msg += f"Thinking... (elapsed: {elapsed}s)\n"
-                                
-                            if thoughts:
-                                raw_thoughts = "".join(thoughts).strip()
-                                if raw_thoughts:
-                                    snippet_len = 150
-                                    thought_snippet = raw_thoughts[-snippet_len:]
-                                    if len(raw_thoughts) > snippet_len:
-                                        thought_snippet = "... " + thought_snippet
-                                    status_msg += f"\n> *Latest thought:* {thought_snippet}"
+                            if not is_specialist:
+                                status_msg = f"🔄 **Acknowledged**: Processing request...\n⏳ **Status**: "
+                                if response_text:
+                                    status_msg += f"Generating response... (elapsed: {elapsed}s)\n"
+                                else:
+                                    status_msg += f"Thinking... (elapsed: {elapsed}s)\n"
                                     
-                            try:
-                                await placeholder.edit(content=status_msg)
-                            except Exception:
-                                pass
+                                if thoughts:
+                                    raw_thoughts = "".join(thoughts).strip()
+                                    if raw_thoughts:
+                                        snippet_len = 150
+                                        thought_snippet = raw_thoughts[-snippet_len:]
+                                        if len(raw_thoughts) > snippet_len:
+                                            thought_snippet = "... " + thought_snippet
+                                        status_msg += f"\n> *Latest thought:* {thought_snippet}"
+                                        
+                                try:
+                                    await placeholder.edit(content=status_msg)
+                                except Exception:
+                                    pass
                                 
                     except Exception:
                         pass
@@ -1456,12 +1463,18 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                 message_chunks = chunk_markdown(response_text)
                 
                 # Edit the placeholder with a clean final completion status
-                current_time = asyncio.get_event_loop().time()
-                elapsed = int(current_time - start_time)
-                try:
-                    await placeholder.edit(content=f"✅ **Response Generated** (elapsed: {elapsed}s):")
-                except Exception:
-                    pass
+                if is_specialist:
+                    try:
+                        await placeholder.delete()
+                    except Exception:
+                        pass
+                else:
+                    current_time = asyncio.get_event_loop().time()
+                    elapsed = int(current_time - start_time)
+                    try:
+                        await placeholder.edit(content=f"✅ **Response Generated** (elapsed: {elapsed}s):")
+                    except Exception:
+                        pass
                 
                 # Send all chunks as new messages sequentially
                 for chunk in message_chunks:
