@@ -1252,6 +1252,7 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     }
 
     # Route to specialist agent if the channel is dedicated to them
+    profile_name = None
     if hasattr(channel, "name") and channel.name:
         profile_name = get_specialist_profile_for_channel(channel.name)
         if profile_name:
@@ -1259,7 +1260,8 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
 
     if not full_tooling_authorized:
         payload["disable_tools"] = True
-        payload["system_instructions"] = MODERATOR_ASSISTANT_INSTRUCTIONS
+        if not profile_name:
+            payload["system_instructions"] = MODERATOR_ASSISTANT_INSTRUCTIONS
 
     if placeholder is None:
         placeholder = await channel.send("🔄 **Acknowledged**: Received command. Connecting to local AGent daemon...")
