@@ -266,7 +266,7 @@ def load_plugins(app: FastAPI) -> None:
     if _root not in sys.path:
         sys.path.append(_root)
 
-    plugins_dir = Path(__file__).parent / "plugins"
+    plugins_dir = Path(__file__).parent.parent / "plugins"
     if not plugins_dir.exists() or not plugins_dir.is_dir():
         return
         
@@ -1473,8 +1473,6 @@ async def execute_scheduled_task(name: str, prompt: str):
             return
 
     if name == "Gmail Email Check":
-        conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
         try:
             proc = await asyncio.create_subprocess_exec(
                 "/home/dan/AGent/.venv/bin/python", "scratch/run_gmail_sync.py",
@@ -1490,12 +1488,24 @@ async def execute_scheduled_task(name: str, prompt: str):
             if stderr_str:
                 output += f"\n\nStderr Errors:\n{stderr_str}"
             
+            has_no_new_mail = "No new emails detected since last check" in stdout_str or "no new emails detected" in stdout_str.lower()
+            is_pubsub_active = "Pub/Sub listener is active" in stdout_str
+            
+            if has_no_new_mail or is_pubsub_active:
+                print(f"[Scheduled Task: {name}] Quiet check: {stdout_str}")
+                return
+
+            conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
             memory.log_conversation_step(conversation_id, "assistant", output or "Gmail check completed with no output.")
-            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
+            print(f"[Scheduled Task: {name}] Executed directly via subprocess and logged. Return code: {proc.returncode}")
             return
         except Exception as e:
             err_msg = f"Failed to execute Gmail check script: {e}"
             print(f"[Scheduled Task: {name}] Error: {err_msg}")
+            # If it failed to run, we log it so the failure is visible
+            conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
             memory.log_conversation_step(conversation_id, "assistant", err_msg)
             return
 
