@@ -412,6 +412,7 @@ class OrchestrationService:
         roleplay: bool = False,
         workspaces: Optional[List[str]] = None,
         auto_approve: bool = False,
+        prompt: Optional[str] = None,
         custom_approval_handler: Optional[Callable[[ToolCall], Any]] = None,
         agent_profile: Optional[str] = None
     ) -> Any:
