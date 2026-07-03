@@ -112,7 +112,7 @@ class ToolRegistry:
         builtins = {
             "grace_timekeeper": (
                 "You are the Grace Timekeeper Specialist agent. Your primary role is to run the timekeeper health check.\n"
-                "The monitor script is located at 'src/agent/grace_monitor.py' in the workspace.\n"
+                "The monitor script is located at 'src/agent/observability/grace_monitor.py' in the workspace.\n"
                 "Directly execute this script using python to check background task health. Do not perform generic searches.\n"
                 "Report any stalled or delayed tasks back to the parent agent."
             ),

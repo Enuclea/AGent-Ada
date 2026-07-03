@@ -92,7 +92,7 @@ def ensure_default_scheduled_tasks(conn=None):
             (
                 "grace-check-task-id",
                 "Grace Timekeeper",
-                "Ada: Run Timekeeper Health Check. Invoke the Grace subagent to check background tasks using src/agent/grace_monitor.py and output the summary report.",
+                "Ada: Run Timekeeper Health Check. Invoke the Grace subagent to check background tasks using src/agent/observability/grace_monitor.py and output the summary report.",
                 "*/5 * * * *",
             ),
             (
@@ -1504,7 +1504,7 @@ async def execute_scheduled_task(name: str, prompt: str):
         memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
         try:
             proc = await asyncio.create_subprocess_exec(
-                "/home/dan/AGent/.venv/bin/python", "src/agent/grace_monitor.py",
+                "/home/dan/AGent/.venv/bin/python", "src/agent/observability/grace_monitor.py",
                 cwd="/home/dan/AGent",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
