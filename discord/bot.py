@@ -928,22 +928,25 @@ async def on_message(message: discord.Message):
             pass
 
     is_client_support_channel = False
+    is_lacie_channel = False
     if message.guild:
         channel_name = message.channel.name if hasattr(message.channel, "name") else ""
         if channel_name in ["support-triage", "ticket-status"]:
             is_client_support_channel = True
+        if channel_name == "lacie":
+            is_lacie_channel = True
 
     author_id = message.author.id
     is_boss = (author_id in [405566743415750656, 1418503476857540739]) or (hasattr(bot, "owner_id") and author_id == bot.owner_id)
     is_mod = is_user_moderator(author_id, message.guild.id if message.guild else None)
     is_author_admin = is_user_admin(author_id)
-    is_exempt = is_boss or is_mod or is_client_support_channel
+    is_exempt = is_boss or is_mod or is_client_support_channel or is_lacie_channel
 
     # Channel configurations
     channel_id_str = str(message.channel.id) if message.guild else None
     chan_cfg = bot_config.get_channel_config(channel_id_str) if channel_id_str else None
-    is_configured = (chan_cfg is not None) or is_client_support_channel
-    channel_purpose = chan_cfg.get("purpose") if chan_cfg else ("client-support" if is_client_support_channel else None)
+    is_configured = (chan_cfg is not None) or is_client_support_channel or is_lacie_channel
+    channel_purpose = chan_cfg.get("purpose") if chan_cfg else ("client-support" if is_client_support_channel else ("developer-assistant" if is_lacie_channel else None))
     chan_prefix = chan_cfg.get("prefix") if chan_cfg else None
     chan_on_mention = chan_cfg.get("on_mention", True) if chan_cfg else True
 
@@ -951,7 +954,13 @@ async def on_message(message: discord.Message):
     is_called = False
     trigger_prompt = None
 
-    if bot.user in message.mentions:
+    if is_lacie_channel:
+        is_called = True
+        trigger_prompt = message.content.strip()
+        if bot.user in message.mentions:
+            trigger_prompt = trigger_prompt.replace(f"<@{bot.user.id}>", "").strip()
+            trigger_prompt = trigger_prompt.replace(f"<@!{bot.user.id}>", "").strip()
+    elif bot.user in message.mentions:
         is_called = True
         trigger_prompt = message.content.replace(f"<@{bot.user.id}>", "").strip()
         trigger_prompt = trigger_prompt.replace(f"<@!{bot.user.id}>", "").strip()
