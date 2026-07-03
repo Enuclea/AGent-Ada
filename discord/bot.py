@@ -1330,7 +1330,7 @@ MODERATOR_ASSISTANT_INSTRUCTIONS = (
     "You have slightly more levity, but you are strictly Discord-specific.\n"
     "CRITICAL RULES:\n"
     "1. You have absolutely NO access to the local server, filesystem, shell commands, or databases.\n"
-    "2. You have absolutely NO access to Enuclea tools (Gmail, Morgen tasks, email synchronization, etc.).\n"
+    "2. You have absolutely NO access to business productivity tools (Gmail, Morgen tasks, email synchronization, etc.).\n"
     "3. You must never discuss or reveal server files, code, paths, credentials, or backend settings.\n"
     "4. Answer questions about Discord, server moderation, or channel history professionally and directly with levity where appropriate."
 )
@@ -1348,8 +1348,15 @@ CLIENT_SUPPORT_INSTRUCTIONS = (
 async def handle_client_support_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None):
     """Quietly handles Atera ticket status querying and creation for clients."""
     import re
-    from enuclea.atera_mapping import get_mapping
-    from enuclea.atera_ticketing_service import create_client_ticket, query_client_ticket_statuses
+    try:
+        from enuclea.atera_mapping import get_mapping
+        from enuclea.atera_ticketing_service import create_client_ticket, query_client_ticket_statuses
+    except ImportError:
+        if placeholder:
+            await placeholder.edit(content="❌ **Error**: Atera client support integrations are not available on this standalone installation.")
+        else:
+            await message.channel.send("❌ **Error**: Atera client support integrations are not available on this standalone installation.")
+        return
 
     channel = message.channel
 
@@ -2263,11 +2270,12 @@ def is_bot_admin(ctx) -> bool:
 async def setup_onboarding(ctx):
     """Sends the onboarding role selection message to the welcome-and-roles channel."""
     guild = ctx.guild
-    if not guild or guild.id != 1418504570170118184:
-        await ctx.send("❌ This command must be run inside the Enuclea server.")
+    portal_guild_id = int(os.environ.get("PORTAL_ONBOARDING_GUILD_ID") or 1418504570170118184)
+    if not guild or guild.id != portal_guild_id:
+        await ctx.send("❌ This command must be run inside the onboarding portal server.")
         return
         
-    welcome_channel_id = 1418504570941866055
+    welcome_channel_id = int(os.environ.get("WELCOME_CHANNEL_ID") or 1418504570941866055)
     welcome_channel = guild.get_channel(welcome_channel_id)
     if not welcome_channel:
         try:
@@ -2289,8 +2297,9 @@ async def setup_onboarding(ctx):
     except Exception as e:
         print(f"Error cleaning channel: {e}")
 
+    portal_title = os.environ.get("DISCORD_PORTAL_TITLE") or "🪐 Welcome to the Portal"
     embed = discord.Embed(
-        title="🪐 Welcome to the Enuclea Portal",
+        title=portal_title,
         description=(
             "Please select your primary association to request access to the server.\n\n"
             "---\n\n"
@@ -2395,8 +2404,9 @@ async def config_channel(ctx, channel_id_str: str, purpose: str, prefix_str: Opt
         
         if purpose == "roleplay":
             guild = getattr(discord_channel, "guild", None)
-            if guild and guild.id == 1418504570170118184:
-                await ctx.send("❌ **Error**: Roleplay purpose is not permitted on the Enuclea server.")
+            portal_guild_id = int(os.environ.get("PORTAL_ONBOARDING_GUILD_ID") or 1418504570170118184)
+            if guild and guild.id == portal_guild_id:
+                await ctx.send("❌ **Error**: Roleplay purpose is not permitted on this server.")
                 return
     except Exception as e:
         await ctx.send(f"❌ Invalid channel ID: {e}")

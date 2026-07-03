@@ -90,7 +90,7 @@ For a concrete starting point, refer to the template **[src/agent/routes/custom/
 ---
 
 ## 🗃️ Database Architecture
-AGent-Ada maintains agent state in a SQLite database (`enuclea.db`) containing the following key tables:
+AGent-Ada maintains agent state in a SQLite database (`history.db`) containing the following key tables:
 *   `memory_facts`: Stores key facts and metadata learned about the developer or environment.
 *   `memory_key_value`: Stores key-value parameters.
 *   `conversation_logs`: Stores conversation execution logs.
