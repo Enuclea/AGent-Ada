@@ -16,7 +16,7 @@ import agent.storage.db as _db
 
 def add_active_task(task_id: str, name: str, details: str) -> None:
     """Adds a new active task or tool execution to the database."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         started_at = datetime.now(timezone.utc).isoformat()
@@ -35,7 +35,7 @@ def add_active_task(task_id: str, name: str, details: str) -> None:
 
 def update_active_task_status(task_id: str, status: str) -> None:
     """Updates the status of an active task (e.g. 'completed', 'failed')."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         completed_at = datetime.now(timezone.utc).isoformat()
@@ -51,7 +51,7 @@ def update_active_task_status(task_id: str, status: str) -> None:
 
 def get_active_tasks() -> List[Dict[str, Any]]:
     """Retrieves all active running tasks and recently completed/failed tasks (within last 15 seconds)."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     results = []
     try:
         cursor = conn.cursor()
@@ -98,7 +98,7 @@ def get_active_tasks() -> List[Dict[str, Any]]:
 
 def get_active_task_status(task_id: str) -> Optional[str]:
     """Retrieves the status of a specific task by ID."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT status FROM active_tasks WHERE id = ?", (task_id,))
@@ -113,7 +113,7 @@ def get_active_task_status(task_id: str) -> Optional[str]:
 
 def clear_active_tasks() -> None:
     """Clears or completes all active tasks (e.g. at startup)."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute("UPDATE active_tasks SET status = 'completed' WHERE status = 'running'")
@@ -125,7 +125,7 @@ def clear_active_tasks() -> None:
 
 def add_task_log(task_id: str, message: str) -> None:
     """Appends a progress log message for an active task/subagent."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -141,7 +141,7 @@ def add_task_log(task_id: str, message: str) -> None:
 
 def get_task_logs(task_id: str) -> List[Dict[str, Any]]:
     """Retrieves all log messages for a specific task ordered by timestamp."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     results = []
     try:
         cursor = conn.cursor()
@@ -166,7 +166,7 @@ def get_task_logs(task_id: str) -> List[Dict[str, Any]]:
 
 def add_scheduled_task(task_id: str, name: str, prompt: str, cron_expr: str, next_run: str) -> None:
     """Creates a new scheduled background task/cron job."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -184,7 +184,7 @@ def add_scheduled_task(task_id: str, name: str, prompt: str, cron_expr: str, nex
 
 def get_scheduled_tasks() -> List[Dict[str, Any]]:
     """Retrieves all active scheduled tasks."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     results = []
     try:
         cursor = conn.cursor()
@@ -210,7 +210,7 @@ def get_scheduled_tasks() -> List[Dict[str, Any]]:
 
 def update_scheduled_task_run(task_id: str, last_run: str, next_run: str) -> None:
     """Updates the execution runtimes of a scheduled task."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -225,7 +225,7 @@ def update_scheduled_task_run(task_id: str, last_run: str, next_run: str) -> Non
 
 def delete_scheduled_task(task_id: str) -> None:
     """Removes a scheduled task."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
@@ -247,7 +247,7 @@ def ensure_plugin_scheduled_task(name: str, prompt: str, cron_expr: str) -> None
         from datetime import timedelta
         next_run = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
 
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT count(*) FROM scheduled_tasks WHERE name = ?", (name,))
@@ -278,7 +278,7 @@ def add_session_plan(
     non_goals: Optional[str] = None
 ) -> None:
     """Adds a new execution plan for a session."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         created_at = datetime.now(timezone.utc).isoformat()
@@ -306,7 +306,7 @@ def add_plan_step(
     assigned_args: Optional[str] = None
 ) -> None:
     """Adds a step to an existing plan."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -325,7 +325,7 @@ def add_plan_step(
 
 def update_plan_step_status(step_id: str, status: str, error_message: Optional[str] = None) -> None:
     """Updates the execution status of a plan step."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -340,7 +340,7 @@ def update_plan_step_status(step_id: str, status: str, error_message: Optional[s
 
 def get_session_plan(session_id: str) -> Optional[Dict[str, Any]]:
     """Retrieves the active plan and its steps for a session."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id, title, status, created_at, goal, acceptance_criteria, non_goals FROM session_plans WHERE session_id = ? ORDER BY created_at DESC LIMIT 1", (session_id,))
@@ -398,7 +398,7 @@ def save_checkpoint(
     Returns the checkpoint ID.
     """
     import uuid
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
@@ -438,7 +438,7 @@ def save_checkpoint(
 
 def get_checkpoint(task_name: str) -> Optional[Dict[str, Any]]:
     """Retrieves the latest in-progress checkpoint for a task name."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -472,7 +472,7 @@ def get_checkpoint(task_name: str) -> Optional[Dict[str, Any]]:
 
 def complete_checkpoint(task_name: str) -> bool:
     """Marks a checkpoint as completed (task finished successfully)."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
@@ -490,7 +490,7 @@ def complete_checkpoint(task_name: str) -> bool:
 
 def abandon_checkpoint(task_name: str) -> bool:
     """Marks a checkpoint as abandoned (task no longer relevant)."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
@@ -508,7 +508,7 @@ def abandon_checkpoint(task_name: str) -> bool:
 
 def get_active_checkpoints() -> List[Dict[str, Any]]:
     """Returns all in-progress checkpoints (for injecting resume context)."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -535,7 +535,7 @@ def get_active_checkpoints() -> List[Dict[str, Any]]:
 
 def get_stale_checkpoints(max_age_hours: int = 24) -> List[Dict[str, Any]]:
     """Returns in-progress checkpoints older than max_age_hours."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         from datetime import timedelta
@@ -565,7 +565,7 @@ def get_stale_checkpoints(max_age_hours: int = 24) -> List[Dict[str, Any]]:
 
 def auto_abandon_stale_checkpoints(max_age_hours: int = 24) -> int:
     """Marks all in-progress checkpoints older than max_age_hours as abandoned. Returns count."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         from datetime import timedelta

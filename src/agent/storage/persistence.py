@@ -8,24 +8,32 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 import agent.storage.db as _db
 
-MEMORY_FILE_PATH = Path.home() / ".agent" / "memory.json"
+MEMORY_FILE_PATH: Path = Path.home() / ".agent" / "memory.json"
 
 def get_memory_file() -> Path:
-    """Returns the path to the memory file and ensures its parent directory exists."""
+    """Returns the path to the memory file and ensures its parent directory exists.
+
+    Returns:
+        Path: Path to the JSON memory file.
+    """
     MEMORY_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
     return MEMORY_FILE_PATH
 
 def load_memory() -> Dict[str, Any]:
-    """Loads persistent memory from the SQLite database, with automatic migration from memory.json."""
+    """Loads persistent memory from the SQLite database, with automatic migration from memory.json.
+
+    Returns:
+        Dict[str, Any]: Loaded dictionary containing 'facts' and 'key_value' structures.
+    """
     _db.init_db()
     
     # 1. Try to read from SQLite
-    data = {"facts": [], "key_value": {}}
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    data: Dict[str, Any] = {"facts": [], "key_value": {}}
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT value FROM persistent_memory WHERE key = ?", ("global_memory",))
@@ -64,7 +72,7 @@ def load_memory() -> Dict[str, Any]:
     data.setdefault("key_value", {})
     
     # 3. Merge individual key-values from SQLite (excluding special/structural keys)
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT key, value FROM persistent_memory")
@@ -90,9 +98,13 @@ def load_memory() -> Dict[str, Any]:
     return data
 
 def save_memory(memory_dict: Dict[str, Any]) -> None:
-    """Saves the memory state to SQLite persistent_memory."""
+    """Saves the memory state to SQLite persistent_memory.
+
+    Args:
+        memory_dict: The memory dictionary structure to save.
+    """
     _db.init_db()
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         val_str = json.dumps(memory_dict, ensure_ascii=False)
@@ -107,7 +119,14 @@ def save_memory(memory_dict: Dict[str, Any]) -> None:
         conn.close()
 
 def add_fact(fact: str) -> str:
-    """Appends a new fact to the persistent facts list."""
+    """Appends a new fact to the persistent facts list.
+
+    Args:
+        fact: The text fact string to append.
+
+    Returns:
+        str: Success or skip log message.
+    """
     mem = load_memory()
     facts: List[str] = mem["facts"]
     if fact not in facts:
@@ -117,7 +136,15 @@ def add_fact(fact: str) -> str:
     return f"Fact already exists in persistent memory: '{fact}'"
 
 def update_key_value(key: str, value: Any) -> str:
-    """Updates or sets a key-value pair in persistent memory."""
+    """Updates or sets a key-value pair in persistent memory.
+
+    Args:
+        key: The configuration or state key name.
+        value: The value associated with key.
+
+    Returns:
+        str: Success message.
+    """
     try:
         from agent.memory import global_cache
         global_cache.set(key, value)
@@ -131,15 +158,18 @@ def get_fact_summary() -> str:
     """Generates a text summary of the persistent memory.
     
     This is formatted for injection into the agent's system instructions.
+
+    Returns:
+        str: Formatted markdown string containing persistent history logs.
     """
     mem = load_memory()
-    facts = mem.get("facts", [])
-    kv = mem.get("key_value", {})
+    facts: List[str] = mem.get("facts", [])
+    kv: Dict[str, Any] = mem.get("key_value", {})
     
     if not facts and not kv:
         return ""
         
-    lines = ["\n[PERSISTENT MEMORY FROM PAST SESSIONS]"]
+    lines: List[str] = ["\n[PERSISTENT MEMORY FROM PAST SESSIONS]"]
     if facts:
         lines.append("Remembered facts/notes:")
         for fact in facts:
@@ -154,12 +184,18 @@ def get_fact_summary() -> str:
 
 # --- Roleplay Memories ---
 
-active_roleplay_session_id = None
-active_session_id = None
+active_roleplay_session_id: Optional[str] = None
+active_session_id: Optional[str] = None
 
 def add_roleplay_memory(session_id: str, key: str, fact: str) -> None:
-    """Adds a new fact to the roleplay memory table."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    """Adds a new fact to the roleplay memory table.
+
+    Args:
+        session_id: The specific session/channel ID.
+        key: Memory key identifier.
+        fact: Fact content details.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -177,24 +213,32 @@ def add_roleplay_memory(session_id: str, key: str, fact: str) -> None:
         conn.close()
 
 def get_roleplay_memories(session_id: str) -> List[Dict[str, Any]]:
-    """Retrieves all roleplay memories saved for a specific session/channel, including shared rumors and messages."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
-    results = []
-    seen = set()
+    """Retrieves all roleplay memories saved for a specific session/channel, including shared rumors and messages.
+
+    Args:
+        session_id: Session ID to retrieve memories for.
+
+    Returns:
+        List[Dict[str, Any]]: List of matching rumor/fact objects.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
+    results: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str]] = set()
     
-    def add_row(key, fact, timestamp):
-        unique_key = (key.strip().lower(), fact.strip().lower())
+    def add_row(k_val: str, f_val: str, ts_val: str) -> None:
+        unique_key = (k_val.strip().lower(), f_val.strip().lower())
         if unique_key not in seen:
             seen.add(unique_key)
             results.append({
-                "key": key,
-                "fact": fact,
-                "timestamp": timestamp
+                "key": k_val,
+                "fact": f_val,
+                "timestamp": ts_val
             })
 
     try:
         cursor = conn.cursor()
         
+        # Load local roleplay memories
         cursor.execute(
             "SELECT key, fact, timestamp FROM roleplay_memories WHERE session_id = ? ORDER BY id ASC",
             (session_id,)
@@ -202,6 +246,7 @@ def get_roleplay_memories(session_id: str) -> List[Dict[str, Any]]:
         for row in cursor.fetchall():
             add_row(row[0], row[1], row[2])
             
+        # Retrieve system-wide rumores/past logs
         cursor.execute(
             """
             SELECT key, fact, timestamp FROM roleplay_memories 
@@ -214,6 +259,7 @@ def get_roleplay_memories(session_id: str) -> List[Dict[str, Any]]:
         for row in cursor.fetchall():
             add_row(row[0], row[1], row[2])
             
+        # Merge general main roleplay channel room rumors
         main_bar_session = "discord-roleplay-1518087367465111594"
         if session_id != main_bar_session:
             cursor.execute(
@@ -230,8 +276,12 @@ def get_roleplay_memories(session_id: str) -> List[Dict[str, Any]]:
     return results
 
 def compact_all_memories() -> Dict[str, Any]:
-    """Compacts study/roleplay memories in memory.json and history.db to free up space."""
-    stats = {
+    """Compacts study/roleplay memories in memory.json and history.db to free up space.
+
+    Returns:
+        Dict[str, Any]: Compaction statistics detailing metrics before/after.
+    """
+    stats: Dict[str, Any] = {
         "memory_json_before_facts": 0,
         "memory_json_after_facts": 0,
         "db_size_before": 0,
@@ -244,11 +294,11 @@ def compact_all_memories() -> Dict[str, Any]:
     }
     
     mem = load_memory()
-    facts = mem.get("facts", [])
+    facts: List[str] = mem.get("facts", [])
     stats["memory_json_before_facts"] = len(facts)
     
-    unique_facts = []
-    seen_normalized = set()
+    unique_facts: List[str] = []
+    seen_normalized: Set[str] = set()
     for f in facts:
         norm = f.strip().lower()
         if not norm:
@@ -257,7 +307,7 @@ def compact_all_memories() -> Dict[str, Any]:
             seen_normalized.add(norm)
             unique_facts.append(f)
             
-    final_facts = []
+    final_facts: List[str] = []
     for f in unique_facts:
         norm = f.strip().lower()
         is_sub = False
@@ -277,7 +327,7 @@ def compact_all_memories() -> Dict[str, Any]:
     if db_path.exists():
         stats["db_size_before"] = db_path.stat().st_size
         
-        conn = sqlite3.connect(db_path)
+        conn = _db.get_connection(db_path)
         try:
             cursor = conn.cursor()
             
@@ -287,6 +337,7 @@ def compact_all_memories() -> Dict[str, Any]:
             cursor.execute("SELECT count(*) FROM active_tasks")
             stats["active_tasks_before"] = cursor.fetchone()[0]
             
+            # Keep only the last 100 finished/completed active tasks to avoid bloat
             cursor.execute("""
                 SELECT id FROM active_tasks 
                 WHERE status IN ('completed', 'failed') 
@@ -306,6 +357,7 @@ def compact_all_memories() -> Dict[str, Any]:
             cursor.execute("SELECT count(*) FROM active_tasks")
             stats["active_tasks_after"] = cursor.fetchone()[0]
             
+            # Orphan task logs deletion
             cursor.execute("DELETE FROM task_logs WHERE task_id NOT IN (SELECT id FROM active_tasks)")
             stats["task_logs_deleted"] = cursor.rowcount
             
@@ -313,8 +365,8 @@ def compact_all_memories() -> Dict[str, Any]:
             all_rp = cursor.fetchall()
             
             main_bar_session = "discord-roleplay-1518087367465111594"
-            main_bar_facts = {}
-            other_facts = []
+            main_bar_facts: Dict[Tuple[str, str], int] = {}
+            other_facts: List[Tuple[int, str, str, str]] = []
             
             for row_id, sess_id, key, fact, ts in all_rp:
                 norm_key = key.strip().lower()
@@ -324,12 +376,12 @@ def compact_all_memories() -> Dict[str, Any]:
                 else:
                     other_facts.append((row_id, sess_id, norm_key, norm_fact))
                     
-            ids_to_delete = set()
+            ids_to_delete: Set[int] = set()
             for row_id, sess_id, norm_key, norm_fact in other_facts:
                 if (norm_key, norm_fact) in main_bar_facts:
                     ids_to_delete.add(row_id)
                     
-            seen_session_key_fact = set()
+            seen_session_key_fact: Set[Tuple[str, str, str]] = set()
             for row_id, sess_id, key, fact, ts in reversed(all_rp):
                 if row_id in ids_to_delete:
                     continue

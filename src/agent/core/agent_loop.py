@@ -1,3 +1,9 @@
+"""Module implementing the main execution loop and CLI interactive session for the agent.
+
+This module coordinates agent setups, custom approval handles for terminal-based runs,
+command line slash-commands, and interactive terminal loops.
+"""
+
 import asyncio
 import os
 import sys
@@ -18,11 +24,13 @@ from agent import __version__
 from agent import memory
 from agent import tools
 
-# Load environment variables from ~/.agent/.env and local .env
+# Load environment variables from ~/.agent/.env and local .env files
 load_dotenv(Path.home() / ".agent" / ".env")
 load_dotenv()
 
-console = Console()
+# Global Rich console instance for stdout output formatting
+console: Console = Console()
+
 
 async def run_agent(
     initial_prompt: Optional[str] = None,
@@ -35,27 +43,52 @@ async def run_agent(
     custom_instructions: Optional[str] = None,
     interactive: bool = True,
 ) -> None:
-    """Orchestrates the agent session and handles the CLI execution modes."""
+    """Orchestrates the agent session lifecycle and handles the CLI/interactive modes.
+
+    Configures workspaces, registers CLI approval policies, initializes the LLM agent,
+    and runs the interactive command loop.
+
+    Args:
+        initial_prompt: Optional prompt to execute immediately on startup.
+        model: Optional model name to override the default.
+        workspaces: List of directories the agent is allowed to access.
+        session_id: Optional UUID to resume a previous conversation.
+        save_dir: Optional folder path to save outputs.
+        auto_approve: If True, executes all tools without prompting the user.
+        text_only: If True, suppresses rich UI logs and runs tools without confirmation.
+        custom_instructions: Optional system instructions overlay for the LLM.
+        interactive: If True, continues to run the interactive prompt after initial prompts.
+    """
     import uuid
     from agent.core.orchestrator import orchestration_service
     
     model = model or "gemini-3.5-flash"
     if not workspaces:
         workspaces = [os.getcwd()]
-    resolved_workspaces = [str(Path(w).resolve()) for w in workspaces]
+    resolved_workspaces: List[str] = [str(Path(w).resolve()) for w in workspaces]
 
-    session_auto_approve = auto_approve
-    active_status = None
-    tool_calls_this_turn = 0
+    session_auto_approve: bool = auto_approve
+    active_status: Optional[Console.status] = None
+    tool_calls_this_turn: int = 0
     
-    # Custom approval handler for CLI
     async def my_cli_approval_handler(tool_call: ToolCall) -> bool:
+        """Handles tool execution confirmation prompts for the CLI session.
+
+        First attempts to poll a persistent task database status (e.g. approved via Discord)
+        while concurrently accepting terminal-based input from the user.
+
+        Args:
+            tool_call: The ToolCall details being requested by the agent.
+
+        Returns:
+            True if the tool call was approved, False otherwise.
+        """
         nonlocal session_auto_approve, active_status, tool_calls_this_turn
         tool_calls_this_turn += 1
         
-        # Get active task ID from database
+        # Resolve the active task ID from the database
         active_tasks = memory.get_active_tasks()
-        task_id = active_tasks[0]["id"] if active_tasks else str(uuid.uuid4())
+        task_id: str = active_tasks[0]["id"] if active_tasks else str(uuid.uuid4())
         
         if session_auto_approve:
             return True
@@ -64,6 +97,7 @@ async def run_agent(
             memory.update_active_task_status(task_id, "denied")
             return False
 
+        # Publish approval request to Discord channel via the database
         memory.update_active_task_status(task_id, "pending_approval")
         await memory.ask_discord_approval(task_id, tool_call.name, str(tool_call.args))
 
@@ -80,7 +114,12 @@ async def run_agent(
             expand=False,
         ))
 
-        async def poll_db():
+        async def poll_db() -> str:
+            """Polls the memory store for task status updates.
+
+            Returns:
+                The updated status string once approved or denied.
+            """
             while True:
                 await asyncio.sleep(1.0)
                 status = memory.get_active_task_status(task_id)
@@ -89,12 +128,13 @@ async def run_agent(
                 elif status and status.startswith("denied"):
                     return status
 
-        choice = None
-        choice_source = None
+        choice: Optional[str] = None
+        choice_source: Optional[str] = None
         loop = asyncio.get_event_loop()
         
         try:
             if sys.stdin.isatty():
+                # Concurrent polling: Wait for either user terminal input or Discord approval update
                 db_task = asyncio.create_task(poll_db())
                 console_task = loop.run_in_executor(
                     None,
@@ -126,6 +166,7 @@ async def run_agent(
                     except Exception:
                         choice = "n"
             else:
+                # Non-TTY standard streams rely solely on external Discord/Database polling
                 res = await poll_db()
                 choice_source = "discord"
                 if res == "approved":
@@ -160,7 +201,7 @@ async def run_agent(
                 memory.update_active_task_status(task_id, "denied")
             return False
 
-    # Get or create agent through OrchestrationService
+    # Retrieve or provision agent instance via OrchestrationService
     agent = await orchestration_service.get_or_create_agent(
         model=model,
         session_id=session_id,
@@ -173,7 +214,7 @@ async def run_agent(
         custom_approval_handler=my_cli_approval_handler
     )
 
-    current_session_id = agent.conversation_id
+    current_session_id: str = agent.conversation_id
 
     try:
         if not text_only:
@@ -185,6 +226,17 @@ async def run_agent(
             )
 
         async def execute_turn(prompt_text: str) -> str:
+            """Executes a single conversational step turn with the agent.
+
+            Logs the user prompt, tracks reasoning thoughts, streams output,
+            and captures the final response.
+
+            Args:
+                prompt_text: Prompt instruction sent to the agent.
+
+            Returns:
+                The response content string from the agent.
+            """
             nonlocal active_status, tool_calls_this_turn
             tool_calls_this_turn = 0
             
@@ -205,12 +257,14 @@ async def run_agent(
 
             output_content = ""
             if text_only:
+                # Stream plain text output chunks
                 async for chunk in response:
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
                 sys.stdout.write("\n")
                 sys.stdout.flush()
             else:
+                # Stream rich-formatted output chunks
                 console.print("[bold purple]Ada >[/bold purple] ", end="")
                 async for chunk in response:
                     console.print(chunk, end="", markup=False)
@@ -267,6 +321,7 @@ async def run_agent(
                 if not cleaned_input:
                     continue
 
+                # Slash command detection and router
                 if cleaned_input.startswith("/"):
                     cmd_parts = cleaned_input.split(maxsplit=1)
                     cmd = cmd_parts[0].lower()
@@ -307,7 +362,7 @@ async def run_agent(
                 await execute_turn(cleaned_input)
 
     finally:
-        # Exit context cleanly
+        # Exit context cleanly, freeing the active agent instance
         lookup_id = session_id or "default"
         session_data = orchestration_service.active_agents.pop(lookup_id, None)
         if session_data:
@@ -316,7 +371,9 @@ async def run_agent(
             except Exception:
                 pass
 
+
 def print_help() -> None:
+    """Prints list of all interactive slash commands."""
     help_text = """
 [bold]Available Commands:[/bold]
   [bold cyan]/help[/bold cyan]       - Show this help message
@@ -328,11 +385,15 @@ def print_help() -> None:
 """
     console.print(Panel(help_text.strip(), title="Ada Task Engine Help", expand=False))
 
+
 def print_skills() -> None:
+    """Lists learned custom skills and tools registered in the environment."""
     installed = tools.list_installed_skills()
     console.print(Panel(escape(installed), title="Learned Custom Skills & Tools", expand=False))
 
+
 def print_memory() -> None:
+    """Retrieves and formats persistent memory records for console display."""
     mem = memory.load_memory()
     facts = mem.get("facts", [])
     kv = mem.get("key_value", {})
@@ -359,6 +420,14 @@ def print_startup_banner(
     model_name: str,
     interactive: bool = True
 ) -> None:
+    """Renders the startup logo and initial status details inside the terminal session.
+
+    Args:
+        session_id: Active session UUID identifier.
+        workspace_path: Absolute path to the resolved workspace.
+        model_name: Name of the active LLM.
+        interactive: If True, appends instructions on using slash commands.
+    """
     logo = r"""[bold orchid1]
     ___       ___       ___   
    /\  \     /\  \     /\  \  

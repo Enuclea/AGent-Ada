@@ -1,3 +1,9 @@
+"""Quiet Observer: Passive background process pattern analysis and workflow optimizer.
+
+Analyzes conversation logs to extract optimization suggestions, automation ideas,
+and persistent memory candidates.
+"""
+
 import sqlite3
 import asyncio
 import json
@@ -6,32 +12,39 @@ import sys
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 # Setup paths so we can import from src/agent or run stand-alone
 sys.path.append(str(Path(__file__).parent.parent))
 
 from agent import memory
+from agent.storage.db import get_connection
 from agent.keyless import KeylessAgyAgent, TaskPriority
 
 # DB path resolved from memory module
-DB_PATH = memory.DB_FILE_PATH
+DB_PATH: Path = memory.DB_FILE_PATH
 
 # Import shared Discord notification utilities
 try:
     from agent.notifications import send_discord_alert
 except ImportError:
     # Fallback for standalone execution
-    def send_discord_alert(text, channel_name="control-room"):
+    def send_discord_alert(text: str, channel_name: str = "control-room") -> bool:
         print(f"[QUIET-OBSERVER] Discord notification not available (standalone mode): {text[:100]}...")
         return False
 
-async def run_quiet_observer(days: int = 1):
+async def run_quiet_observer(days: int = 1) -> None:
+    """Queries recent chat logs, performs pattern analysis, and generates recommendations.
+
+    Args:
+        days: Number of recent days of history to include in the analysis.
+    """
     print(f"[QUIET-OBSERVER] Running background pattern analysis (history range: last {days} day(s))...")
     if not DB_PATH.exists():
         print(f"[QUIET-OBSERVER] Database does not exist at {DB_PATH}.")
         return
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -52,15 +65,15 @@ async def run_quiet_observer(days: int = 1):
 
     # Process and summarize logs. We process starting from the most recent (descending) 
     # to make sure we keep the newest events if we hit the token/length limit.
-    log_entries = []
+    log_entries: List[str] = []
     accumulated_len = 0
     max_log_chars = 20000  # Safe boundary to avoid CLI command argument limits
 
     for step in steps:
-        role = step["role"]
-        content = step["content"] or ""
-        tool_name = step["tool_name"]
-        tool_result = step["tool_result"] or ""
+        role: str = step["role"]
+        content: str = step["content"] or ""
+        tool_name: Optional[str] = step["tool_name"]
+        tool_result: str = step["tool_result"] or ""
 
         # Limit lengths of individual contents to keep context compact and readable
         if len(content) > 150:

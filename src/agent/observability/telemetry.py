@@ -11,9 +11,23 @@ from typing import Any, Dict, List, Optional
 import agent.storage.db as _db
 
 
-def log_token_usage(session_id: str, model_name: str, input_tokens: int, output_tokens: int, cost: float) -> None:
-    """Records token usage and cost calculation in the telemetry logs."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+def log_token_usage(
+    session_id: str,
+    model_name: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost: float
+) -> None:
+    """Records token usage and cost calculation in the telemetry logs.
+
+    Args:
+        session_id: Active LLM chat session ID.
+        model_name: Name of the model invoked.
+        input_tokens: Count of context input prompt tokens.
+        output_tokens: Count of generated output completion tokens.
+        cost: Calculated API transaction cost.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -28,9 +42,16 @@ def log_token_usage(session_id: str, model_name: str, input_tokens: int, output_
         conn.close()
 
 def get_token_usage_telemetry(session_id: str) -> List[Dict[str, Any]]:
-    """Retrieves token usage telemetry records for a session."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
-    results = []
+    """Retrieves token usage telemetry records for a session.
+
+    Args:
+        session_id: Target session ID.
+
+    Returns:
+        List[Dict[str, Any]]: List of recorded telemetry step entries.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
+    results: List[Dict[str, Any]] = []
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -54,9 +75,16 @@ def get_token_usage_telemetry(session_id: str) -> List[Dict[str, Any]]:
     return results
 
 def log_telemetry_event(session_id: str, event_type: str, event_details: str, latency: float) -> None:
-    """Logs a system/telemetry event to SQLite."""
+    """Logs a system/telemetry event to SQLite.
+
+    Args:
+        session_id: Current agent session context.
+        event_type: Telemetry event type identifier.
+        event_details: Descriptive event payloads.
+        latency: Time taken in seconds.
+    """
     _db.init_db()
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -73,9 +101,21 @@ def log_telemetry_event(session_id: str, event_type: str, event_details: str, la
 
 # --- Subagent Messaging ---
 
-def log_subagent_message(subagent_id: str, role: str, message: str, parent_session_id: Optional[str] = None) -> None:
-    """Records a messaging communication log between parent and subagent."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+def log_subagent_message(
+    subagent_id: str,
+    role: str,
+    message: str,
+    parent_session_id: Optional[str] = None
+) -> None:
+    """Records a messaging communication log between parent and subagent.
+
+    Args:
+        subagent_id: Subagent's unique conversation ID.
+        role: Message author role (parent, subagent).
+        message: Content of the message.
+        parent_session_id: Parent's chat session ID.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -107,9 +147,16 @@ def log_subagent_message(subagent_id: str, role: str, message: str, parent_sessi
         conn.close()
 
 def get_subagent_messages(subagent_id: str) -> List[Dict[str, Any]]:
-    """Retrieves all coordination logs for a subagent."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
-    results = []
+    """Retrieves all coordination logs for a subagent.
+
+    Args:
+        subagent_id: Unique subagent conversation identifier.
+
+    Returns:
+        List[Dict[str, Any]]: Historical exchange logs between parent and child.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
+    results: List[Dict[str, Any]] = []
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -130,9 +177,13 @@ def get_subagent_messages(subagent_id: str) -> List[Dict[str, Any]]:
     return results
 
 def get_subagents_status() -> List[Dict[str, Any]]:
-    """Retrieves status and metadata for all spawned subagents."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
-    results = []
+    """Retrieves status and metadata for all spawned subagents.
+
+    Returns:
+        List[Dict[str, Any]]: List of subagent tracking status objects.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
+    results: List[Dict[str, Any]] = []
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT subagent_id FROM subagent_messages")
@@ -199,8 +250,14 @@ def get_subagents_status() -> List[Dict[str, Any]]:
 # --- Model Quotas ---
 
 def update_model_quotas(model_family: str, pct_5h: float, pct_weekly: float) -> None:
-    """Updates or inserts the quota usage percentages for a model family."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    """Updates or inserts the quota usage percentages for a model family.
+
+    Args:
+        model_family: Identifier for the model provider family.
+        pct_5h: Percentage usage over the past 5 hours.
+        pct_weekly: Percentage usage over the past week.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         last_updated = datetime.now(timezone.utc).isoformat()
@@ -218,9 +275,13 @@ def update_model_quotas(model_family: str, pct_5h: float, pct_weekly: float) -> 
         conn.close()
 
 def get_model_quotas() -> List[Dict[str, Any]]:
-    """Retrieves all current model quota records."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
-    results = []
+    """Retrieves all current model quota records.
+
+    Returns:
+        List[Dict[str, Any]]: List of quota tracking objects.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
+    results: List[Dict[str, Any]] = []
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT model_family, pct_5h, pct_weekly, last_updated FROM model_quotas")
@@ -241,12 +302,29 @@ def get_model_quotas() -> List[Dict[str, Any]]:
 
 # --- Remote Worker Registry ---
 
-def register_worker(worker_id: str, host: str, capabilities: List[str],
-                    platform_name: str = "", max_concurrent: int = 3,
-                    has_agy: bool = False, has_grok: bool = False,
-                    metadata: Optional[Dict[str, Any]] = None) -> None:
-    """Registers or updates a remote worker node."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+def register_worker(
+    worker_id: str,
+    host: str,
+    capabilities: List[str],
+    platform_name: str = "",
+    max_concurrent: int = 3,
+    has_agy: bool = False,
+    has_grok: bool = False,
+    metadata: Optional[Dict[str, Any]] = None
+) -> None:
+    """Registers or updates a remote worker node.
+
+    Args:
+        worker_id: Unique worker node name.
+        host: Host endpoint target.
+        capabilities: List of capability tags.
+        platform_name: Platform OS name.
+        max_concurrent: Max concurrent task limit.
+        has_agy: True if agy command is supported natively.
+        has_grok: True if Grok/Magica APIs are accessible.
+        metadata: Extra environment descriptors.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
@@ -280,9 +358,13 @@ def register_worker(worker_id: str, host: str, capabilities: List[str],
 
 
 def get_registered_workers() -> List[Dict[str, Any]]:
-    """Returns all registered workers."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
-    results = []
+    """Returns all registered workers.
+
+    Returns:
+        List[Dict[str, Any]]: List of registered worker nodes and metrics.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
+    results: List[Dict[str, Any]] = []
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -318,10 +400,19 @@ def get_registered_workers() -> List[Dict[str, Any]]:
     return results
 
 
-def update_worker_health(worker_id: str, status: str = "online",
-                         active_tasks: Optional[int] = None) -> None:
-    """Updates a worker's health status and optional task count."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+def update_worker_health(
+    worker_id: str,
+    status: str = "online",
+    active_tasks: Optional[int] = None
+) -> None:
+    """Updates a worker's health status and optional task count.
+
+    Args:
+        worker_id: Unique worker identifier.
+        status: Current health state (online, offline).
+        active_tasks: Active concurrent task execution count.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
@@ -343,8 +434,12 @@ def update_worker_health(worker_id: str, status: str = "online",
 
 
 def remove_worker(worker_id: str) -> None:
-    """Removes a worker registration."""
-    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    """Removes a worker node registration.
+
+    Args:
+        worker_id: Worker name target.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM workers WHERE worker_id = ?", (worker_id,))

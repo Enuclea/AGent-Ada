@@ -1,12 +1,21 @@
 """SQLite database setup, schema initialization, and shared constants.
 
 This module owns the database connection monkeypatch, DB_FILE_PATH,
-the full schema (init_db), and the active_session_id ContextVar.
+the full schema (init_db), the active_session_id ContextVar, and
+centralized helper functions for connection/query execution.
 """
 
 import json
 import os
 import sqlite3
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Generator, Union, Tuple
+from contextlib import contextmanager
+import contextvars
+
+logger = logging.getLogger(__name__)
 
 # Globally monkeypatch sqlite3.connect to set 10s timeout and enable WAL mode for concurrency
 _orig_sqlite3_connect = sqlite3.connect
@@ -15,24 +24,125 @@ def custom_sqlite3_connect(database, *args, **kwargs):
     conn = _orig_sqlite3_connect(database, *args, **kwargs)
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
     except Exception:
         pass
     return conn
 sqlite3.connect = custom_sqlite3_connect
 
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-import contextvars
-
 active_session_id_var = contextvars.ContextVar("active_session_id", default=None)
 
 DB_FILE_PATH = Path(os.getenv("AGENT_DB_PATH", str(Path.home() / ".agent" / "history.db")))
 
+def get_connection(db_path: Optional[Union[str, Path]] = None) -> sqlite3.Connection:
+    """
+    Establishes and configures a SQLite connection with busy timeout and WAL mode enabled.
+    
+    Args:
+        db_path: Path to the SQLite database file. If None, DB_FILE_PATH is used.
+        
+    Returns:
+        sqlite3.Connection: A configured SQLite connection object.
+    """
+    if db_path is None:
+        db_path = DB_FILE_PATH
+        
+    target_path = Path(db_path)
+    
+    # Ensure parent directory exists
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.error("Failed to create database parent directory at %s: %s", target_path.parent, e)
+        raise IOError(f"Could not prepare database directory path: {target_path.parent}") from e
+
+    try:
+        conn = sqlite3.connect(str(target_path), timeout=10.0)
+        # Enable sqlite3.Row for dict-like access
+        conn.row_factory = sqlite3.Row
+        
+        # Configure Write-Ahead Logging (WAL) and synchronous settings
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        
+        return conn
+    except sqlite3.Error as e:
+        logger.error("SQLite connection/PRAGMA error for path %s: %s", target_path, e)
+        raise
+
+@contextmanager
+def get_db_session(db_path: Optional[Union[str, Path]] = None) -> Generator[sqlite3.Connection, None, None]:
+    """
+    Context manager to safely acquire and release a database connection.
+    Ensures that changes are committed on success, and rolled back on error.
+    
+    Args:
+        db_path: Path to the database file.
+        
+    Yields:
+        sqlite3.Connection: An open, transaction-managed SQLite connection.
+    """
+    conn = get_connection(db_path)
+    try:
+        yield conn
+        conn.commit()
+    except Exception as e:
+        logger.error("Database transaction failed, rolling back changes: %s", e)
+        try:
+            conn.rollback()
+        except sqlite3.Error as rollback_err:
+            logger.error("Failed to rollback transaction: %s", rollback_err)
+        raise e
+    finally:
+        conn.close()
+
+def execute_query(
+    query: str, 
+    params: Tuple[Any, ...] = (), 
+    db_path: Optional[Union[str, Path]] = None
+) -> List[sqlite3.Row]:
+    """
+    Executes a SELECT query securely using parameterized query formatting.
+    
+    Args:
+        query: SQL statement. Must not contain string interpolation for parameters.
+        params: Parameters to pass to the query execution sink.
+        db_path: Database path override.
+        
+    Returns:
+        List[sqlite3.Row]: Matching rows from the database.
+    """
+    with get_db_session(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return cursor.fetchall()
+
+def execute_write(
+    query: str, 
+    params: Tuple[Any, ...] = (), 
+    db_path: Optional[Union[str, Path]] = None
+) -> int:
+    """
+    Executes a write query (INSERT, UPDATE, DELETE) securely.
+    
+    Args:
+        query: SQL statement. Must use parameterized query format.
+        params: Parameters to bind to the SQL statement.
+        db_path: Database path override.
+        
+    Returns:
+        int: Number of affected rows.
+    """
+    with get_db_session(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return cursor.rowcount
+
 def init_db() -> None:
     """Initializes the SQLite conversation history and FTS5 search virtual tables."""
     DB_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_FILE_PATH)
+    conn = get_connection(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         # Persistent memory key-values

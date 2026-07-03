@@ -117,9 +117,9 @@ class TieredLRUCache:
         # 2. Check SQLite persistent_memory table
         import sqlite3
         import json
-        from agent.storage.db import DB_FILE_PATH, init_db
+        from agent.storage.db import DB_FILE_PATH, init_db, get_connection
         init_db()
-        conn = sqlite3.connect(DB_FILE_PATH)
+        conn = get_connection(DB_FILE_PATH)
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT value FROM persistent_memory WHERE key = ?", (key,))
@@ -149,9 +149,9 @@ class TieredLRUCache:
             if persist_evicted:
                 import sqlite3
                 import json
-                from agent.storage.db import DB_FILE_PATH, init_db
+                from agent.storage.db import DB_FILE_PATH, init_db, get_connection
                 init_db()
-                conn = sqlite3.connect(DB_FILE_PATH)
+                conn = get_connection(DB_FILE_PATH)
                 try:
                     cursor = conn.cursor()
                     val_str = json.dumps(evicted_val, ensure_ascii=False)

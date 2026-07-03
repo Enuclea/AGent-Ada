@@ -43,5 +43,16 @@ sys.modules['agent.meta_evaluation'] = meta_evaluation
 from agent.interfaces import cli as cli
 from agent.interfaces import web as web
 
-sys.modules['agent.cli'] = cli
+# Avoid registering sys.modules['agent.cli'] if we are running agent.cli as the main entry point
+# to prevent loader collisions in runpy.
+is_main_cli = False
+frame = sys._getframe()
+while frame:
+    if frame.f_code.co_name in ('_run_module_as_main', '_get_module_details') and frame.f_locals.get('mod_name') == 'agent.cli':
+        is_main_cli = True
+        break
+    frame = frame.f_back
+
+if not is_main_cli:
+    sys.modules['agent.cli'] = cli
 sys.modules['agent.web'] = web

@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agent import memory, tools, __version__
+from agent.storage.db import get_connection
 from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import policy, hooks
 from google.antigravity.types import CapabilitiesConfig, ToolCall, ModelTarget, ModelType
@@ -72,7 +73,7 @@ def ensure_default_scheduled_tasks(conn=None):
     """Ensures that default scheduled background tasks are registered if not already present."""
     close_conn = False
     if conn is None:
-        conn = sqlite3.connect(memory.DB_FILE_PATH)
+        conn = get_connection(memory.DB_FILE_PATH)
         close_conn = True
     try:
         cursor = conn.cursor()
@@ -665,7 +666,7 @@ async def chat_endpoint(req: ChatRequest):
                         
                         # Check if a subagent was spawned during this step
                         was_delegated = False
-                        conn = sqlite3.connect(memory.DB_FILE_PATH)
+                        conn = get_connection(memory.DB_FILE_PATH)
                         try:
                             cursor = conn.cursor()
                             cursor.execute(
@@ -1045,7 +1046,7 @@ async def history_endpoint(session_id: Optional[str] = None):
     if not resolved_id:
         return {"history": []}
 
-    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    conn = get_connection(memory.DB_FILE_PATH)
     history = []
     try:
         cursor = conn.cursor()
@@ -1343,7 +1344,7 @@ def get_next_cron_run(cron_expr: str, from_dt: datetime) -> datetime:
 # SQLite history context window rolling summary compaction
 async def check_and_compact_session_history(session_id: str, model_name: str = "gemini-3.5-flash", api_key: Optional[str] = None) -> None:
     """Checks conversation history size and compacts oldest 40 rows into a summary if row count exceeds 60."""
-    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    conn = get_connection(memory.DB_FILE_PATH)
     steps_count = 0
     try:
         cursor = conn.cursor()
@@ -1357,7 +1358,7 @@ async def check_and_compact_session_history(session_id: str, model_name: str = "
     if steps_count < 60:
         return
         
-    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    conn = get_connection(memory.DB_FILE_PATH)
     rows_to_compact = []
     try:
         cursor = conn.cursor()
@@ -1427,7 +1428,7 @@ async def check_and_compact_session_history(session_id: str, model_name: str = "
     if not summary_text:
         return
         
-    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    conn = get_connection(memory.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         min_id = min(row_ids)
@@ -1466,7 +1467,7 @@ async def fork_session_endpoint(req: ForkRequest):
         if isinstance(session_mappings, dict):
             resolved_id = session_mappings.get(session_id, session_id)
             
-    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    conn = get_connection(memory.DB_FILE_PATH)
     forked_steps = []
     try:
         cursor = conn.cursor()
@@ -1486,7 +1487,7 @@ async def fork_session_endpoint(req: ForkRequest):
     import uuid
     new_session_id = str(uuid.uuid4())
     
-    conn = sqlite3.connect(memory.DB_FILE_PATH)
+    conn = get_connection(memory.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
         for role, content, tool_name, tool_result, timestamp in forked_steps:
@@ -1769,7 +1770,7 @@ async def run_scheduler():
             except Exception as we:
                 print(f"[WORKERS] Health check error: {we}")
             # Check for delegated plan steps to resume
-            conn = sqlite3.connect(memory.DB_FILE_PATH)
+            conn = get_connection(memory.DB_FILE_PATH)
             try:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -1861,7 +1862,7 @@ async def run_scheduler():
                 conn.close()
 
             now_str = datetime.now(timezone.utc).isoformat()
-            conn = sqlite3.connect(memory.DB_FILE_PATH)
+            conn = get_connection(memory.DB_FILE_PATH)
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, name, prompt, cron_expr FROM scheduled_tasks WHERE status = 'active' AND next_run <= ?",

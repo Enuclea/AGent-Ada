@@ -1,9 +1,17 @@
+"""Command Line Interface (CLI) for Ada Task Engine.
+
+This module parses command-line arguments and routes the requests to either
+the CLI agent execution loop, listing existing sessions, or launching
+the Web UI dashboard.
+"""
+
 import argparse
 import asyncio
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import List, Tuple, Optional, Any
 
 from rich.console import Console
 from rich.table import Table
@@ -11,22 +19,28 @@ from rich.markup import escape
 
 from agent.core import agent_loop
 
-console = Console()
+# Initialize rich console for formatted output
+console: Console = Console()
+
 
 def list_sessions(save_dir: str) -> None:
-    """Lists saved session IDs and their last modification time."""
-    path = Path(save_dir)
+    """List saved session IDs and their last modification time.
+
+    Args:
+        save_dir: The directory path where session databases or files are stored.
+    """
+    path: Path = Path(save_dir)
     if not path.exists() or not path.is_dir():
         console.print("[dim]No sessions found.[/dim]")
         return
 
     # Find files/folders (the harness creates session files or subfolders named after conversation IDs)
-    entries = []
+    entries: List[Tuple[str, float]] = []
     for entry in path.iterdir():
         if entry.name.startswith("."):
             continue
-        stat = entry.stat()
-        name = entry.name
+        stat: os.stat_result = entry.stat()
+        name: str = entry.name
         if name.endswith(".db"):
             name = name[:-3]
         entries.append((name, stat.st_mtime))
@@ -35,29 +49,35 @@ def list_sessions(save_dir: str) -> None:
         console.print("[dim]No sessions found.[/dim]")
         return
 
-    # Sort by modification time, newest first
+    # Sort by modification time, newest first to display recent sessions
     entries.sort(key=lambda x: x[1], reverse=True)
 
-    table = Table(title="Recent Ada Task Engine Sessions", expand=False)
+    table: Table = Table(title="Recent Ada Task Engine Sessions", expand=False)
     table.add_column("Session ID", style="cyan")
     table.add_column("Last Active", style="green")
 
     for name, mtime in entries:
-        dt = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+        dt: str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
         table.add_row(name, dt)
 
     console.print(table)
 
+
 def main() -> None:
-    parser = argparse.ArgumentParser(
+    """Parse command line arguments and execute the corresponding command.
+
+    Supports listing sessions, running queries, starting the web dashboard,
+    or resuming / forking existing conversation sessions.
+    """
+    parser: argparse.ArgumentParser = argparse.ArgumentParser(
         description="Ada Task Engine: A Hermes-style CLI wrapper around the Google AntiGravity SDK."
     )
     
     # Positionals / Subcommands
-    subparsers = parser.add_subparsers(dest="command", help="Optional subcommands")
+    subparsers: argparse._SubParsersAction = parser.add_subparsers(dest="command", help="Optional subcommands")
     
     # 'list' subcommand
-    list_parser = subparsers.add_parser("list", help="List recent sessions")
+    list_parser: argparse.ArgumentParser = subparsers.add_parser("list", help="List recent sessions")
     list_parser.add_argument(
         "--save-dir",
         type=str,
@@ -66,7 +86,7 @@ def main() -> None:
     )
     
     # 'ui' subcommand
-    ui_parser = subparsers.add_parser("ui", help="Start the Web UI Dashboard")
+    ui_parser: argparse.ArgumentParser = subparsers.add_parser("ui", help="Start the Web UI Dashboard")
     ui_parser.add_argument(
         "--port",
         type=int,
@@ -166,7 +186,8 @@ def main() -> None:
 
         console.print(f"[bold green]Starting Ada Task Engine Dashboard on {url}...[/bold green]")
 
-        def open_browser():
+        def open_browser() -> None:
+            """Delay and open browser window automatically."""
             time.sleep(1.0)
             webbrowser.open(url)
 
@@ -175,10 +196,10 @@ def main() -> None:
         return
 
     # Check if there is a positional query (fallback when -q/-z are not used but user supplied text)
-    initial_prompt = None
-    interactive = not args.no_interactive
-    text_only = False
-    auto_approve = args.yes
+    initial_prompt: Optional[str] = None
+    interactive: bool = not args.no_interactive
+    text_only: bool = False
+    auto_approve: bool = args.yes
 
     if args.script:
         initial_prompt = args.script
@@ -193,7 +214,7 @@ def main() -> None:
         initial_prompt = " ".join(unknown)
 
     # Read instructions file if a path is provided
-    instructions = None
+    instructions: Optional[str] = None
     if args.instructions:
         inst_path = Path(args.instructions)
         if inst_path.exists() and inst_path.is_file():
@@ -206,7 +227,7 @@ def main() -> None:
         else:
             instructions = args.instructions
 
-    session_id = args.session
+    session_id: Optional[str] = args.session
     if args.fork:
         parent_session = args.fork
         if parent_session.endswith(".db"):
@@ -217,7 +238,8 @@ def main() -> None:
         from agent import memory
         new_session_id = str(uuid.uuid4())
         
-        conn = sqlite3.connect(memory.DB_FILE_PATH)
+        from agent.storage.db import get_connection
+        conn = get_connection(memory.DB_FILE_PATH)
         try:
             cursor = conn.cursor()
             cursor.execute(

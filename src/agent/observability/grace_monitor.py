@@ -5,7 +5,8 @@ import json
 import sys
 import urllib.request
 
-DB_PATH = Path.home() / ".agent" / "history.db"
+from agent.storage.db import get_connection, DB_FILE_PATH
+DB_PATH = DB_FILE_PATH
 
 # Import shared Discord notification utilities
 try:
@@ -21,7 +22,7 @@ def check_tasks(inactivity_threshold_mins=10):
         print(json.dumps({"error": "Database does not exist."}))
         return
         
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection(DB_PATH)
     cursor = conn.cursor()
     
     try:

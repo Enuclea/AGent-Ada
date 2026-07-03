@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, List
 from agent import memory
+from agent.storage.db import get_connection
 from agent.keyless import KeylessAgyAgent, TaskPriority
 
 # Plugin hook: error data providers
@@ -21,7 +22,7 @@ def register_error_data_provider(provider_fn: Callable[[str], List[str]]) -> Non
 
 async def run_meta_evaluation(days: int = 1):
     db_path = memory.DB_FILE_PATH
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
