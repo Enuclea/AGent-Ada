@@ -37,8 +37,29 @@ class OllamaRoute(BaseRoute):
         if system_instructions:
             full_prompt = f"[System Instructions]\n{system_instructions}\n\n[User Prompt]\n{prompt}"
 
-        # Try both the primary and fallback worker interfaces
-        urls = ["http://10.200.0.4:11434/api/generate", "http://10.200.0.3:11434/api/generate"]
+        # Resolve target URLs dynamically from config / env
+        hosts_env = os.environ.get("OLLAMA_SERVERS") or os.environ.get("OLLAMA_HOSTS")
+        if hosts_env:
+            raw_hosts = [h.strip() for h in hosts_env.split(",") if h.strip()]
+        else:
+            single_host = os.environ.get("OLLAMA_HOST")
+            if single_host:
+                raw_hosts = [single_host]
+            else:
+                raw_hosts = [
+                    "http://10.200.0.4:11434",
+                    "http://10.200.0.3:11434",
+                    "http://localhost:11434"
+                ]
+
+        urls = []
+        for host in raw_hosts:
+            if not host.startswith("http"):
+                host = f"http://{host}"
+            if not host.endswith("/api/generate") and not host.endswith("/api/chat"):
+                host = host.rstrip("/") + "/api/generate"
+            urls.append(host)
+
         payload = {
             "model": actual_model,
             "prompt": full_prompt,
