@@ -175,8 +175,8 @@ chatForm.addEventListener('submit', async (e) => {
     } catch (error) {
         console.error('Failed to stream response:', error);
         appendMessage('system', `Error streaming agent response: ${error.message}`);
-        if (thoughtBubble) thoughtBubble.remove();
-        if (responseBubble) responseBubble.remove();
+        if (thoughtBubble && !lastThoughtText) thoughtBubble.remove();
+        if (responseBubble && !lastResponseText) responseBubble.remove();
     } finally {
         setLoadingState(false);
         // Refresh tasks and status

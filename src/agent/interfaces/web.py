@@ -504,279 +504,303 @@ async def chat_endpoint(req: ChatRequest):
     async def event_generator():
         global active_agents
         lookup_id = req.session_id or "default"
-        lock = get_session_lock(lookup_id)
-        await lock.acquire(priority)
-        from agent.memory import active_session_id_var
-        token = active_session_id_var.set(agent.conversation_id)
-        # Output Gate: track whether any text content was yielded to the client
-        text_chunks_emitted = False
-        thoughts_emitted = False
-        try:
-            # 1. Decompose plan steps if enabled and prompt is complex enough
-            enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "true").lower() == "true"
-            existing_plan = memory.get_session_plan(agent.conversation_id)
-            if enable_planning and not existing_plan and len(req.prompt.strip()) > 200:
-                import uuid
-                plan_id = str(uuid.uuid4())
-                plan_prompt = (
-                    f"Given the user request: '{req.prompt}', decompose it into 3-5 sequential execution plan steps, "
-                    "identifying the overall goal, tasks, acceptance criteria, and non-goals.\n"
-                    "Return ONLY a JSON object with the following structure:\n"
-                    "{\n"
-                    '  "title": "Short title of the task (e.g. Create hello world web page)",\n'
-                    '  "goal": "Clear explanation of the overall goal (e.g. Create a simple, nicely styled Hello World page.)",\n'
-                    '  "tasks": [\n'
-                    '    {"description": "Description of step 1", "assigned_tool": "assigned_tool (e.g. run_command or write_to_file or spawn_subagent)"},\n'
-                    '    {"description": "Description of step 2", "assigned_tool": "..."}\n'
-                    '  ],\n'
-                    '  "acceptance_criteria": [\n'
-                    '    "Acceptance criteria 1",\n'
-                    '    "Acceptance criteria 2"\n'
-                    '  ],\n'
-                    '  "non_goals": [\n'
-                    '    "Non-goal 1 (optional)",\n'
-                    '    "Non-goal 2 (optional)"\n'
-                    '  ]\n'
-                    "}"
-                )
-                try:
-                    from agent.keyless import KeylessAgyAgent as PlanAgent, TaskPriority
-                    plan_agent = PlanAgent(
-                        model="gemini-3.5-flash",
-                        system_instructions="You are a plan decomposer. Output ONLY raw JSON.",
-                        task_priority=TaskPriority.BACKGROUND
-                    )
-                    async with plan_agent as pa:
-                        plan_resp = await pa.chat(plan_prompt)
-                        plan_data = json.loads(plan_resp.text.strip().strip("`").strip("json").strip())
-                        if isinstance(plan_data, dict):
-                            title = plan_data.get("title") or f"Plan: {req.prompt[:50]}..."
-                            goal = plan_data.get("goal")
-                            ac = json.dumps(plan_data.get("acceptance_criteria") or [])
-                            ng = json.dumps(plan_data.get("non_goals") or [])
-                            tasks = plan_data.get("tasks") or []
-                            
-                            memory.add_session_plan(plan_id, agent.conversation_id, title, "pending", goal, ac, ng)
-                            for idx, step in enumerate(tasks):
-                                step_id = f"step-{plan_id}-{idx}"
-                                memory.add_plan_step(
-                                    step_id=step_id,
-                                    plan_id=plan_id,
-                                    step_order=idx + 1,
-                                    description=step.get("description", ""),
-                                    status="pending",
-                                    assigned_tool=step.get("assigned_tool"),
-                                    assigned_args=str(step.get("assigned_args", ""))
-                                )
-                except Exception as pe:
-                    print(f"[PLANNING] Failed to decompose plan: {pe}")
+        queue = asyncio.Queue()
 
-            # Log user prompt
-            memory.log_conversation_step(agent.conversation_id, "user", req.prompt)
-            
-            # 2. Run the agent execution with Fallback Routing & Stuck Prevention
-            primary_model = req.model or "gemini-3.5-flash"
-            
-            # Check Gemini quota: if usage > 80% (remaining < 20%), route to Claude
+        async def run_agent():
+            from agent.memory import active_session_id_var
+            token = active_session_id_var.set(agent.conversation_id)
+            lock = get_session_lock(lookup_id)
             try:
-                quotas = memory.get_model_quotas()
-                gemini_quota = next((q for q in quotas if q["model_family"] == "gemini"), None)
-                if gemini_quota:
-                    if gemini_quota.get("pct_5h", 100.0) < 20.0 or gemini_quota.get("pct_weekly", 100.0) < 20.0:
-                        print("[QUOTA FAILOVER] Gemini remaining < 20%. Redirecting to Claude.")
-                        primary_model = "Claude Sonnet 4.6 (Thinking)"
-            except Exception as qe:
-                print(f"[QUOTA CHECK ERROR] {qe}")
-
-            is_gemini = "gemini" in primary_model.lower()
-
-            async def stream_agent_response(active_agent, prompt_to_send):
-                nonlocal text_chunks_emitted, thoughts_emitted
-                response = await active_agent.chat(prompt_to_send)
-                yield {"type": "session_id", "content": active_agent.conversation_id}
+                await lock.acquire(priority)
                 
-                # Stream thoughts
-                thoughts_str = ""
-                async for thought in response.thoughts:
-                    thoughts_str += thought
-                    thoughts_emitted = True
-                    yield {"type": "thought", "content": thought}
-                    
-                if thoughts_str:
-                    memory.log_conversation_step(active_agent.conversation_id, "thought", thoughts_str)
-                    
-                # Stream response chunks
-                output_content = ""
-                async for chunk in response:
-                    output_content += chunk
-                    text_chunks_emitted = True
-                    yield {"type": "chunk", "content": chunk}
-                    
-                if output_content:
-                    memory.log_conversation_step(active_agent.conversation_id, "assistant", output_content)
-
-                # Record token usage telemetry
-                input_tokens = 0
-                output_tokens = 0
-                if hasattr(response, "usage_metadata") and response.usage_metadata:
-                    input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
-                    output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
-                if input_tokens == 0 and output_tokens == 0:
-                    input_tokens = len(prompt_to_send) // 4
-                    output_content_len = len(output_content) if output_content else 100
-                    output_tokens = output_content_len // 4
-                cost = (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
-                memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.5-flash", input_tokens, output_tokens, cost)
-
-            # Run sequential driving steps
-            current_plan = memory.get_session_plan(agent.conversation_id)
-            if current_plan and "steps" in current_plan:
-                steps_to_run = [s for s in current_plan["steps"] if s["status"] != "completed"]
-            else:
-                steps_to_run = []
-
-            if steps_to_run:
-                total_steps = len(current_plan["steps"])
-                for step in steps_to_run:
-                    step_id = step["id"]
-                    step_desc = step["description"]
-                    step_tool = step.get("assigned_tool") or "any tool"
-                    step_order = step["step_order"]
-                    
-                    # Update status to running
-                    memory.update_plan_step_status(step_id, "running")
-                    
-                    # Yield thought block to visual progress
-                    yield f"data: {json.dumps({'type': 'thought', 'content': f'\n⚙️ [Step {step_order}/{total_steps}]: {step_desc}...\n'})}\n\n"
-                    
-                    # Construct driving prompt
-                    driver_prompt = (
-                        f"[SYSTEM DRIVER]\n"
-                        f"You are executing Step {step_order} of {total_steps}: \"{step_desc}\".\n"
-                        f"The recommended tool for this step is \"{step_tool}\".\n\n"
-                        f"Please execute this step now using your tools. Review the previous conversation history "
-                        f"and outputs to obtain any context you need. Once this step is complete, summarize your findings "
-                        f"clearly so we can transition to the next step."
+                # Output Gate: track whether any text content was yielded to the client
+                text_chunks_emitted = False
+                thoughts_emitted = False
+                
+                # 1. Decompose plan steps if enabled and prompt is complex enough
+                enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "true").lower() == "true"
+                existing_plan = memory.get_session_plan(agent.conversation_id)
+                if enable_planning and not existing_plan and len(req.prompt.strip()) > 200:
+                    import uuid
+                    plan_id = str(uuid.uuid4())
+                    plan_prompt = (
+                        f"Given the user request: '{req.prompt}', decompose it into 3-5 sequential execution plan steps, "
+                        "identifying the overall goal, tasks, acceptance criteria, and non-goals.\n"
+                        "Return ONLY a JSON object with the following structure:\n"
+                        "{\n"
+                        '  "title": "Short title of the task (e.g. Create hello world web page)",\n'
+                        '  "goal": "Clear explanation of the overall goal (e.g. Create a simple, nicely styled Hello World page.)",\n'
+                        '  "tasks": [\n'
+                        '    {"description": "Description of step 1", "assigned_tool": "assigned_tool (e.g. run_command or write_to_file or spawn_subagent)"},\n'
+                        '    {"description": "Description of step 2", "assigned_tool": "..."}\n'
+                        '  ],\n'
+                        '  "acceptance_criteria": [\n'
+                        '    "Acceptance criteria 1",\n'
+                        '    "Acceptance criteria 2"\n'
+                        '  ],\n'
+                        '  "non_goals": [\n'
+                        '    "Non-goal 1 (optional)",\n'
+                        '    "Non-goal 2 (optional)"\n'
+                        '  ]\n'
+                        "}"
                     )
-                    
-                    step_failed = False
-                    step_start_time = datetime.now(timezone.utc).isoformat()
                     try:
-                        active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
-                        async for item in stream_agent_response(active_agent, driver_prompt):
-                            yield f"data: {json.dumps(item)}\n\n"
-                        
-                        # Check if a subagent was spawned during this step
-                        was_delegated = False
-                        conn = get_connection(memory.DB_FILE_PATH)
-                        try:
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                "SELECT count(*) FROM subagent_messages WHERE parent_session_id = ? AND timestamp >= ?",
-                                (agent.conversation_id, step_start_time)
-                            )
-                            count = cursor.fetchone()[0]
-                            if count > 0:
-                                was_delegated = True
-                        except Exception as db_err:
-                            print(f"Error checking subagent delegation in database: {db_err}")
-                        finally:
-                            conn.close()
-
-                        if was_delegated:
-                            memory.update_plan_step_status(step_id, "delegated")
-                            yield f"data: {json.dumps({'type': 'thought', 'content': f'\n⏭️ Step {step_order} delegated to subagent. Exiting active execution loop.\n'})}\n\n"
-                            break
-
-                        # Verify outputs before completing the step
-                        verif_err = orchestration_service.verify_agent_outputs(req.session_id)
-                        if verif_err:
-                            raise ValueError(f"Step output verification failed: {verif_err}")
-                    except Exception as step_err:
-                        print(f"[DRIVER] Step {step_order} failed: {step_err}")
-                        memory.update_plan_step_status(step_id, "failed", error_message=str(step_err))
-                        step_failed = True
-                        
-                        # Fallback try
-                        fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
-                        yield f"data: {json.dumps({'type': 'thought', 'content': f'\n⚠️ [System: Step {step_order} failed. Retrying step with fallback model...]\n'})}\n\n"
-                        
-                        fallback_prompt = (
-                            f"[SYSTEM DRIVER - FALLBACK]\n"
-                            f"The previous attempt to execute Step {step_order} failed with error: {step_err}.\n"
-                            f"Original step task: \"{step_desc}\".\n"
-                            f"Please complete this step successfully now."
+                        from agent.keyless import KeylessAgyAgent as PlanAgent, TaskPriority
+                        plan_agent = PlanAgent(
+                            model="gemini-3.5-flash",
+                            system_instructions="You are a plan decomposer. Output ONLY raw JSON.",
+                            task_priority=TaskPriority.BACKGROUND
                         )
-                        try:
-                            active_agents.pop(lookup_id, None)
-                            fallback_agent = await get_or_create_agent(fallback_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
-                            async for item in stream_agent_response(fallback_agent, fallback_prompt):
-                                yield f"data: {json.dumps(item)}\n\n"
-                            step_failed = False
-                        except Exception as fallback_err:
-                            print(f"[DRIVER] Step {step_order} fallback also failed: {fallback_err}")
-                            memory.update_plan_step_status(step_id, "failed", error_message=str(fallback_err))
-                            raise fallback_err
-                    
-                    if not step_failed:
-                        memory.update_plan_step_status(step_id, "completed")
-            else:
-                # Fallback to single call with fallback model routing & stuck prevention
+                        async with plan_agent as pa:
+                            await queue.put({"type": "thought", "content": "🤖 Creating execution plan...\n"})
+                            plan_resp = await pa.chat(plan_prompt)
+                            plan_data = json.loads(plan_resp.text.strip().strip("`").strip("json").strip())
+                            if isinstance(plan_data, dict):
+                                title = plan_data.get("title") or f"Plan: {req.prompt[:50]}..."
+                                goal = plan_data.get("goal")
+                                ac = json.dumps(plan_data.get("acceptance_criteria") or [])
+                                ng = json.dumps(plan_data.get("non_goals") or [])
+                                tasks = plan_data.get("tasks") or []
+                                
+                                memory.add_session_plan(plan_id, agent.conversation_id, title, "pending", goal, ac, ng)
+                                for idx, step in enumerate(tasks):
+                                    step_id = f"step-{plan_id}-{idx}"
+                                    memory.add_plan_step(
+                                        step_id=step_id,
+                                        plan_id=plan_id,
+                                        step_order=idx + 1,
+                                        description=step.get("description", ""),
+                                        status="pending",
+                                        assigned_tool=step.get("assigned_tool"),
+                                        assigned_args=str(step.get("assigned_args", ""))
+                                    )
+                    except Exception as pe:
+                        print(f"[PLANNING] Failed to decompose plan: {pe}")
+
+                # Log user prompt
+                memory.log_conversation_step(agent.conversation_id, "user", req.prompt)
+                
+                # 2. Run the agent execution with Fallback Routing & Stuck Prevention
+                primary_model = req.model or "gemini-3.5-flash"
+                
+                # Check Gemini quota: if usage > 80% (remaining < 20%), route to Claude
                 try:
-                    active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
-                    async for item in stream_agent_response(active_agent, req.prompt):
-                        yield f"data: {json.dumps(item)}\n\n"
-                except Exception as first_error:
-                    print(f"[STUCK PREVENTION] Primary model ({primary_model}) failed: {first_error}. Triggering fallback double check.")
-                    active_agents.pop(lookup_id, None)
+                    quotas = memory.get_model_quotas()
+                    gemini_quota = next((q for q in quotas if q["model_family"] == "gemini"), None)
+                    if gemini_quota:
+                        if gemini_quota.get("pct_5h", 100.0) < 20.0 or gemini_quota.get("pct_weekly", 100.0) < 20.0:
+                            print("[QUOTA FAILOVER] Gemini remaining < 20%. Redirecting to Claude.")
+                            primary_model = "Claude Sonnet 4.6 (Thinking)"
+                except Exception as qe:
+                    print(f"[QUOTA CHECK ERROR] {qe}")
+
+                is_gemini = "gemini" in primary_model.lower()
+
+                async def stream_agent_response(active_agent, prompt_to_send):
+                    nonlocal text_chunks_emitted, thoughts_emitted
+                    response = await active_agent.chat(prompt_to_send)
+                    await queue.put({"type": "session_id", "content": active_agent.conversation_id})
                     
-                    # Notify frontend of retry
-                    yield f"data: {json.dumps({'type': 'thought', 'content': '\n⚠️ [System: Model got stuck/errored. Retrying with fallback model...]\n'})}\n\n"
-                    
-                    # Fallback model selection
-                    fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
-                    fallback_prompt = f"The previous model run got stuck/encountered an error. Please analyze and solve it.\n\nOriginal prompt: {req.prompt}"
-                    
+                    # Stream thoughts
+                    thoughts_str = ""
+                    async for thought in response.thoughts:
+                        thoughts_str += thought
+                        if thought:
+                            thoughts_emitted = True
+                            await queue.put({"type": "thought", "content": thought})
+                        
+                    if thoughts_str:
+                        memory.log_conversation_step(active_agent.conversation_id, "thought", thoughts_str)
+                        
+                    # Stream response chunks
+                    output_content = ""
+                    async for chunk in response:
+                        output_content += chunk
+                        if chunk:
+                            text_chunks_emitted = True
+                            await queue.put({"type": "chunk", "content": chunk})
+                        
+                    if output_content:
+                        memory.log_conversation_step(active_agent.conversation_id, "assistant", output_content)
+
+                    # Record token usage telemetry
+                    input_tokens = 0
+                    output_tokens = 0
+                    if hasattr(response, "usage_metadata") and response.usage_metadata:
+                        input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
+                        output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
+                    if input_tokens == 0 and output_tokens == 0:
+                        input_tokens = len(prompt_to_send) // 4
+                        output_content_len = len(output_content) if output_content else 100
+                        output_tokens = output_content_len // 4
+                    cost = (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
+                    memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.5-flash", input_tokens, output_tokens, cost)
+
+                # Run sequential driving steps
+                current_plan = memory.get_session_plan(agent.conversation_id)
+                if current_plan and "steps" in current_plan:
+                    steps_to_run = [s for s in current_plan["steps"] if s["status"] != "completed"]
+                else:
+                    steps_to_run = []
+
+                if steps_to_run:
+                    total_steps = len(current_plan["steps"])
+                    for step in steps_to_run:
+                        step_id = step["id"]
+                        step_desc = step["description"]
+                        step_tool = step.get("assigned_tool") or "any tool"
+                        step_order = step["step_order"]
+                        
+                        # Update status to running
+                        memory.update_plan_step_status(step_id, "running")
+                        
+                        # Yield thought block to visual progress
+                        await queue.put({"type": "thought", "content": f"\n⚙️ [Step {step_order}/{total_steps}]: {step_desc}...\n"})
+                        
+                        # Construct driving prompt
+                        driver_prompt = (
+                            f"[SYSTEM DRIVER]\n"
+                            f"You are executing Step {step_order} of {total_steps}: \"{step_desc}\".\n"
+                            f"The recommended tool for this step is \"{step_tool}\".\n\n"
+                            f"Please execute this step now using your tools. Review the previous conversation history "
+                            f"and outputs to obtain any context you need. Once this step is complete, summarize your findings "
+                            f"clearly so we can transition to the next step."
+                        )
+                        
+                        step_failed = False
+                        step_start_time = datetime.now(timezone.utc).isoformat()
+                        try:
+                            active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
+                            await stream_agent_response(active_agent, driver_prompt)
+                            
+                            # Check if a subagent was spawned during this step
+                            was_delegated = False
+                            conn = get_connection(memory.DB_FILE_PATH)
+                            try:
+                                cursor = conn.cursor()
+                                cursor.execute(
+                                    "SELECT count(*) FROM subagent_messages WHERE parent_session_id = ? AND timestamp >= ?",
+                                    (agent.conversation_id, step_start_time)
+                                )
+                                count = cursor.fetchone()[0]
+                                if count > 0:
+                                    was_delegated = True
+                            except Exception as db_err:
+                                print(f"Error checking subagent delegation in database: {db_err}")
+                            finally:
+                                conn.close()
+
+                            if was_delegated:
+                                memory.update_plan_step_status(step_id, "delegated")
+                                await queue.put({"type": "thought", "content": f"\n⏭️ Step {step_order} delegated to subagent. Exiting active execution loop.\n"})
+                                break
+
+                            # Verify outputs before completing the step
+                            verif_err = orchestration_service.verify_agent_outputs(req.session_id)
+                            if verif_err:
+                                raise ValueError(f"Step output verification failed: {verif_err}")
+                        except Exception as step_err:
+                            print(f"[DRIVER] Step {step_order} failed: {step_err}")
+                            memory.update_plan_step_status(step_id, "failed", error_message=str(step_err))
+                            step_failed = True
+                            
+                            # Fallback try
+                            fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
+                            await queue.put({"type": "thought", "content": f"\n⚠️ [System: Step {step_order} failed. Retrying step with fallback model...]\n"})
+                            
+                            fallback_prompt = (
+                                f"[SYSTEM DRIVER - FALLBACK]\n"
+                                f"The previous attempt to execute Step {step_order} failed with error: {step_err}.\n"
+                                f"Original step task: \"{step_desc}\".\n"
+                                f"Please complete this step successfully now."
+                            )
+                            try:
+                                active_agents.pop(lookup_id, None)
+                                fallback_agent = await get_or_create_agent(fallback_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
+                                await stream_agent_response(fallback_agent, fallback_prompt)
+                                step_failed = False
+                            except Exception as fallback_err:
+                                print(f"[DRIVER] Step {step_order} fallback also failed: {fallback_err}")
+                                memory.update_plan_step_status(step_id, "failed", error_message=str(fallback_err))
+                                raise fallback_err
+                        
+                        if not step_failed:
+                            memory.update_plan_step_status(step_id, "completed")
+                else:
+                    # Fallback to single call with fallback model routing & stuck prevention
                     try:
-                        fallback_agent = await get_or_create_agent(fallback_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
-                        async for item in stream_agent_response(fallback_agent, fallback_prompt):
-                            yield f"data: {json.dumps(item)}\n\n"
-                    except Exception as second_error:
-                        print(f"[STUCK PREVENTION] Fallback model ({fallback_model}) also failed: {second_error}")
-                        raise second_error
+                        active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
+                        await stream_agent_response(active_agent, req.prompt)
+                    except Exception as first_error:
+                        print(f"[STUCK PREVENTION] Primary model ({primary_model}) failed: {first_error}. Triggering fallback double check.")
+                        active_agents.pop(lookup_id, None)
+                        
+                        # Notify frontend of retry
+                        await queue.put({"type": "thought", "content": "\n⚠️ [System: Model got stuck/errored. Retrying with fallback model...]\n"})
+                        
+                        # Fallback model selection
+                        fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
+                        fallback_prompt = f"The previous model run got stuck/encountered an error. Please analyze and solve it.\n\nOriginal prompt: {req.prompt}"
+                        
+                        try:
+                            fallback_agent = await get_or_create_agent(fallback_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
+                            await stream_agent_response(fallback_agent, fallback_prompt)
+                        except Exception as second_error:
+                            print(f"[STUCK PREVENTION] Fallback model ({fallback_model}) also failed: {second_error}")
+                            raise second_error
 
-            # Output Gate: if the model produced thinking but no visible text output, inject recovery
-            if not text_chunks_emitted and thoughts_emitted:
-                recovery_msg = (
-                    "⚠️ I completed processing but my response was empty. "
-                    "The task may have been executed — please check the results directly, "
-                    "or re-run the request."
-                )
-                yield f"data: {json.dumps({'type': 'chunk', 'content': recovery_msg})}\n\n"
-                memory.log_conversation_step(agent.conversation_id, "assistant", f"[OUTPUT GATE RECOVERY] {recovery_msg}")
-                print(f"[OUTPUT GATE] Triggered for session {lookup_id}: thinking emitted but no text content produced.")
-            elif not text_chunks_emitted and not thoughts_emitted:
-                recovery_msg = (
-                    "⚠️ No response was generated. The model may have encountered an issue. "
-                    "Please try again."
-                )
-                yield f"data: {json.dumps({'type': 'chunk', 'content': recovery_msg})}\n\n"
-                print(f"[OUTPUT GATE] Triggered for session {lookup_id}: no output at all (no thoughts, no text).")
+                # Output Gate: if the model produced thinking but no visible text output, inject recovery
+                if not text_chunks_emitted and thoughts_emitted:
+                    recovery_msg = (
+                        "⚠️ I completed processing but my response was empty. "
+                        "The task may have been executed — please check the results directly, "
+                        "or re-run the request."
+                    )
+                    await queue.put({"type": "chunk", "content": recovery_msg})
+                    memory.log_conversation_step(agent.conversation_id, "assistant", f"[OUTPUT GATE RECOVERY] {recovery_msg}")
+                    print(f"[OUTPUT GATE] Triggered for session {lookup_id}: thinking emitted but no text content produced.")
+                elif not text_chunks_emitted and not thoughts_emitted:
+                    recovery_msg = (
+                        "⚠️ No response was generated. The model may have encountered an issue. "
+                        "Please try again."
+                    )
+                    await queue.put({"type": "chunk", "content": recovery_msg})
+                    print(f"[OUTPUT GATE] Triggered for session {lookup_id}: no output at all (no thoughts, no text).")
 
-            # Complete
+                await queue.put("DONE")
+            except Exception as e:
+                # Update running step status to 'failed'
+                if 'step_id' in locals() and step_id:
+                    memory.update_plan_step_status(step_id, "failed", error_message=str(e))
+                await queue.put(e)
+            finally:
+                active_session_id_var.reset(token)
+                lock.release()
+
+        # Start execution in background task
+        task = asyncio.create_task(run_agent())
+        try:
+            while True:
+                try:
+                    # Wait for items from the queue with a timeout to send keep-alive comment lines
+                    item = await asyncio.wait_for(queue.get(), timeout=10.0)
+                    if item == "DONE":
+                        break
+                    elif isinstance(item, Exception):
+                        yield f"data: {json.dumps({'type': 'error', 'content': f'Agent connection error: {item}'})}\n\n"
+                        break
+                    else:
+                        yield f"data: {json.dumps(item)}\n\n"
+                except asyncio.TimeoutError:
+                    # Send a keep-alive line to prevent HTTP connection timeout
+                    yield ": keep-alive\n\n"
             yield "data: [DONE]\n\n"
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            active_agents.pop(lookup_id, None)
-            # Update running step status to 'failed'
-            if 'step_id' in locals() and step_id:
-                memory.update_plan_step_status(step_id, "failed", error_message=str(e))
-            yield f"data: {json.dumps({'type': 'error', 'content': f'Agent connection error: {e}'})}\n\n"
-            yield "data: [DONE]\n\n"
+        except asyncio.CancelledError:
+            print(f"[CHAT] Client disconnected from streaming session {lookup_id}.")
+            raise
         finally:
-            active_session_id_var.reset(token)
-            lock.release()
+            if not task.done():
+                task.cancel()
 
     return StreamingResponse(
         event_generator(),
@@ -1850,7 +1874,6 @@ async def run_scheduler():
                     
                     if subagent_row:
                         subagent_id, message, timestamp = subagent_row
-                        
                         if "subagent completed:" in message.lower():
                             cursor.execute("UPDATE plan_steps SET status = 'completed' WHERE id = ?", (step_id,))
                             conn.commit()
@@ -1858,6 +1881,23 @@ async def run_scheduler():
                             
                             async def resume_parent(sess_id, sub_id, msg):
                                 try:
+                                    # Find original Discord channel if it's a mapped discord session
+                                    channel_id = None
+                                    mem = memory.load_memory()
+                                    session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+                                    if isinstance(session_mappings, dict):
+                                        for k, v in session_mappings.items():
+                                            if v == sess_id and k.startswith("discord-session-"):
+                                                try:
+                                                    channel_id = int(k.split("-")[-1])
+                                                except ValueError:
+                                                    pass
+                                                break
+
+                                    if channel_id:
+                                        from agent.notifications import send_direct_discord_message
+                                        send_direct_discord_message(channel_id, f"⚙️ **Plan Resuming**: Subagent `{sub_id}` completed its task. Resuming parent execution...")
+
                                     from agent.keyless import KeylessAgyAgent
                                     agent = KeylessAgyAgent(
                                         model="gemini-3.5-flash",
@@ -1878,6 +1918,8 @@ async def run_scheduler():
                                             output_content += chunk
                                         if output_content:
                                             memory.log_conversation_step(sess_id, "assistant", output_content)
+                                            if channel_id:
+                                                send_direct_discord_message(channel_id, output_content)
                                 except Exception as re_err:
                                     print(f"[SCHEDULER] Failed to resume parent session {sess_id}: {re_err}")
                             
@@ -1890,6 +1932,23 @@ async def run_scheduler():
                             
                             async def resume_parent_fail(sess_id, sub_id, err_msg):
                                 try:
+                                    # Find original Discord channel if it's a mapped discord session
+                                    channel_id = None
+                                    mem = memory.load_memory()
+                                    session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+                                    if isinstance(session_mappings, dict):
+                                        for k, v in session_mappings.items():
+                                            if v == sess_id and k.startswith("discord-session-"):
+                                                try:
+                                                    channel_id = int(k.split("-")[-1])
+                                                except ValueError:
+                                                    pass
+                                                break
+
+                                    if channel_id:
+                                        from agent.notifications import send_direct_discord_message
+                                        send_direct_discord_message(channel_id, f"⚠️ **Plan Resuming on Failure**: Subagent `{sub_id}` failed. Resuming parent to handle error...")
+
                                     from agent.keyless import KeylessAgyAgent
                                     agent = KeylessAgyAgent(
                                         model="gemini-3.5-flash",
@@ -1910,9 +1969,11 @@ async def run_scheduler():
                                             output_content += chunk
                                         if output_content:
                                             memory.log_conversation_step(sess_id, "assistant", output_content)
+                                            if channel_id:
+                                                send_direct_discord_message(channel_id, output_content)
                                 except Exception as re_err:
                                     print(f"[SCHEDULER] Failed to resume parent session {sess_id} on failure: {re_err}")
-                            
+                                    
                             asyncio.create_task(resume_parent_fail(session_id, subagent_id, message))
             except Exception as e:
                 print(f"[SCHEDULER] Error checking subagent completion: {e}")
