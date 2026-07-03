@@ -31,6 +31,11 @@ class RoutingEngine:
             self.register_route(OllamaRoute())
         except ImportError:
             pass
+        try:
+            from agent.routes.byok import BYOKRoute
+            self.register_route(BYOKRoute())
+        except ImportError:
+            pass
 
     def _load_custom_routes(self):
         """Dynamically loads custom user routes from the custom routes directory."""
