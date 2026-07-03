@@ -1194,6 +1194,25 @@ CLIENT_SUPPORT_INSTRUCTIONS = (
 
 
 
+def get_specialist_profile_for_channel(channel_name: str) -> Optional[str]:
+    """Resolves a Discord channel name to its corresponding specialist agent profile name."""
+    c_name = channel_name.lower().replace("🤖", "").replace("・", "").replace("_", "-").strip()
+    if "timekeeper" in c_name or "grace" in c_name:
+        return "grace_timekeeper"
+    if "gmail" in c_name or "morgen" in c_name:
+        return "gmail_sync"
+    if "quiet-observer" in c_name or "observer" in c_name:
+        return "quiet_observer"
+    if "meta-eval" in c_name or "evaluator" in c_name or "evaluation" in c_name:
+        return "meta_evaluator"
+    if "stock" in c_name or "trading" in c_name or "trader" in c_name:
+        return "stock_trader"
+    if "solar" in c_name:
+        return "solar_monitor"
+    if "lacie" in c_name or "architect" in c_name:
+        return "lacie"
+    return None
+
 async def handle_agent_hook_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None):
     """Funnels user inputs directly to the local AGent FastAPI endpoint, streaming response."""
     channel = message.channel
@@ -1222,6 +1241,12 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
         "prompt": prompt_text,
         "session_id": session_id
     }
+
+    # Route to specialist agent if the channel is dedicated to them
+    if hasattr(channel, "name") and channel.name:
+        profile_name = get_specialist_profile_for_channel(channel.name)
+        if profile_name:
+            payload["agent_profile"] = profile_name
 
     if not full_tooling_authorized:
         payload["disable_tools"] = True

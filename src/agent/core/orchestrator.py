@@ -122,17 +122,16 @@ class OrchestrationService:
             if rag_context:
                 full_instructions += f"\n\n{rag_context}"
 
-            # 3a. Specialist delegation hint: if the prompt matches a known specialist, suggest delegation
+            # 3a. Specialist delegation rule: if the prompt matches a known specialist, enforce delegation
             if prompt:
                 suggested_specialist = tool_registry.suggest_specialist(prompt)
                 if suggested_specialist:
                     full_instructions += (
-                        f"\n\n[DELEGATION HINT]\n"
-                        f"This request matches the '{suggested_specialist}' specialist profile. "
-                        f"Consider spawning a subagent with agent_profile='{suggested_specialist}' "
-                        f"instead of performing exploratory codebase searches. The specialist has pre-configured "
-                        f"knowledge of the exact scripts and execution commands needed.\n"
-                        f"[END DELEGATION HINT]"
+                        f"\n\n[MANDATORY DELEGATION RULE]\n"
+                        f"This request touches the purpose of the '{suggested_specialist}' specialist agent. "
+                        f"You MUST delegate this task to them by spawning a subagent using the 'spawn_subagent' tool "
+                        f"with agent_profile='{suggested_specialist}' rather than trying to perform exploratory codebase/system searches or execute commands yourself.\n"
+                        f"[END DELEGATION RULE]"
                     )
 
             # 3b. Inject active checkpoint resume context

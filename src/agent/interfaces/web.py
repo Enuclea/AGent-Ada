@@ -365,6 +365,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     model: Optional[str] = None
     system_instructions: Optional[str] = None
+    agent_profile: Optional[str] = None
     disable_tools: Optional[bool] = False
     roleplay: Optional[bool] = False
 
@@ -380,13 +381,21 @@ async def get_or_create_agent(
     system_instructions: Optional[str] = None,
     disable_tools: bool = False,
     roleplay: bool = False,
-    prompt: Optional[str] = None
+    prompt: Optional[str] = None,
+    agent_profile: Optional[str] = None
 ):
     # Inspection tests look for these lines statically:
     # if not is_discord: tools.backup_discord_channel
     is_discord = session_id is not None and (session_id.startswith("discord-session-") or session_id.startswith("discord-roleplay-"))
     if not is_discord:
         _ = tools.backup_discord_channel
+
+    # Resolve specialist profile instructions if provided
+    if agent_profile and not system_instructions:
+        from agent.core.registry import tool_registry
+        specialist_inst = tool_registry.resolve_subagent_profile(agent_profile)
+        if specialist_inst:
+            system_instructions = specialist_inst
 
     # Auto-approve local dashboard sessions, while requiring approvals for Discord/external channels
     auto_approve = not is_discord
@@ -441,7 +450,19 @@ async def chat_endpoint(req: ChatRequest):
         )
 
     try:
-        agent = await get_or_create_agent(req.model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
+        kwargs = {}
+        if req.agent_profile is not None:
+            kwargs["agent_profile"] = req.agent_profile
+
+        agent = await get_or_create_agent(
+            req.model,
+            req.session_id,
+            req.system_instructions,
+            req.disable_tools,
+            req.roleplay,
+            req.prompt,
+            **kwargs
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()

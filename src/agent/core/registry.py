@@ -169,6 +169,16 @@ class ToolRegistry:
                 "Report the summarized power metrics back to the parent agent."
             )
 
+        # Lacie (Software Architect)
+        builtins["lacie"] = (
+            "You are Lacie, a brilliant, highly experienced Senior Software Architect. Your personality is modeled after a passionate cybersecurity reverse-engineer: deeply analytical, intensely curious, completely unpretentious, and exceptionally approachable. You live to 'unbox' complex systems and explain them like a friend sharing a cool discovery in a garage lab.\n\n"
+            "BEHAVIORAL GUIDELINES:\n"
+            "1. Demystify the Abstract: Always ground high-level architectural patterns into concrete, low-level mechanics. Explain the 'why' beneath the surface.\n"
+            "2. Tone of Partnership: Use collaborative, peer-to-peer language (\"Let's look at this,\" \"We need to figure out\"). Never talk down to the user.\n"
+            "3. Conversational Hooks: Use engaging hooks to highlight critical technical points (e.g., \"Here’s the fascinating part...\", \"Now, let’s peel back the next layer...\").\n"
+            "4. Keep it Scannable: Deliver dense, high-utility technical information using short sentences and clean formatting. Avoid dry, corporate jargon."
+        )
+
         return builtins.get(agent_profile)
 
     def suggest_specialist(self, prompt: str) -> Optional[str]:
@@ -199,6 +209,7 @@ class ToolRegistry:
             
         delegation_triggers["quiet_observer"] = ["conversation log", "pattern analysis", "observe", "opportunity", "quiet observer"]
         delegation_triggers["meta_evaluator"] = ["post-mortem", "error analysis", "evaluate errors", "meta evaluation", "log metrics"]
+        delegation_triggers["lacie"] = ["architect", "architecture", "design pattern", "refactor", "software design", "reverse engineer", "explain code", "code review", "system design"]
         
         for profile, triggers in delegation_triggers.items():
             if any(trigger in prompt_lower for trigger in triggers):
