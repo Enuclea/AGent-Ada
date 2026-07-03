@@ -154,7 +154,7 @@ async def run_quiet_observer(days: int = 1) -> None:
     )
     
     print("[QUIET-OBSERVER] Sending Discord alert...")
-    send_discord_alert(discord_alert)
+    await asyncio.to_thread(send_discord_alert, discord_alert)
 
 if __name__ == "__main__":
     days_to_check = 1
