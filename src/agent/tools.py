@@ -1119,17 +1119,19 @@ async def spawn_subagent(
         if stub_context:
             enriched_prompt += "\n\n[INTERFACE STUBS]\n" + "\n".join(stub_context) + "\n[END INTERFACE STUBS]"
     
-    # Build API payload — uses the full /api/chat pipeline with real tools
+    # Build API payload — uses the background spawn endpoint
     payload = {
+        "subagent_id": subagent_session,
+        "parent_session_id": parent_session_id or "New Session",
         "prompt": enriched_prompt,
-        "session_id": subagent_session
+        "target_files": target_files,
+        "stub_files": stub_files,
+        "agent_profile": agent_profile
     }
-    if agent_profile:
-        payload["agent_profile"] = agent_profile
     
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600.0)) as session:
-            async with session.post("http://localhost:8050/api/chat", json=payload) as resp:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30.0)) as session:
+            async with session.post("http://localhost:8050/api/subagents/spawn", json=payload) as resp:
                 if resp.status != 200:
                     err_text = await resp.text()
                     err_msg = f"[FAILED] Subagent API returned HTTP {resp.status}: {err_text}"
@@ -1139,30 +1141,15 @@ async def spawn_subagent(
                         "summary": err_msg
                     })
                 
-                # Stream SSE response and collect the final text
-                response_text = ""
-                async for line in resp.content:
-                    line_str = line.decode("utf-8").strip()
-                    if not line_str.startswith("data: "):
-                        continue
-                    data_payload = line_str[6:].strip()
-                    if data_payload == "[DONE]":
-                        break
-                    try:
-                        event_data = json.loads(data_payload)
-                        if event_data.get("type") == "chunk":
-                            response_text += event_data.get("content", "")
-                        elif event_data.get("type") == "error":
-                            response_text = f"[ERROR] {event_data.get('content', 'Unknown error')}"
-                            break
-                    except Exception:
-                        pass
+                resp_json = await resp.json()
+                sandbox_dir = resp_json.get("sandbox_dir", "")
                 
-                if not response_text:
-                    response_text = "Subagent completed but returned no output."
+                # Log success
+                memory.log_subagent_message(subagent_session, "subagent", f"[SPAWNED] Subagent successfully spawned in background. Sandbox: {sandbox_dir}")
                 
-                memory.log_subagent_message(subagent_session, "subagent", f"[SUCCESS] Subagent completed: {response_text[:500]}")
-                return response_text
+                # Exit the active execution loop immediately
+                import sys
+                sys.exit(0)
                 
     except Exception as e:
         err_msg = f"[FAILED] Subagent execution failed: {e}"
