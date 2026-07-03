@@ -657,11 +657,34 @@ async def chat_endpoint(req: ChatRequest):
                     )
                     
                     step_failed = False
+                    step_start_time = datetime.now(timezone.utc).isoformat()
                     try:
                         active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
                         async for item in stream_agent_response(active_agent, driver_prompt):
                             yield f"data: {json.dumps(item)}\n\n"
                         
+                        # Check if a subagent was spawned during this step
+                        was_delegated = False
+                        conn = sqlite3.connect(memory.DB_FILE_PATH)
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "SELECT count(*) FROM subagent_messages WHERE parent_session_id = ? AND timestamp >= ?",
+                                (agent.conversation_id, step_start_time)
+                            )
+                            count = cursor.fetchone()[0]
+                            if count > 0:
+                                was_delegated = True
+                        except Exception as db_err:
+                            print(f"Error checking subagent delegation in database: {db_err}")
+                        finally:
+                            conn.close()
+
+                        if was_delegated:
+                            memory.update_plan_step_status(step_id, "delegated")
+                            yield f"data: {json.dumps({'type': 'thought', 'content': f'\n⏭️ Step {step_order} delegated to subagent. Exiting active execution loop.\n'})}\n\n"
+                            break
+
                         # Verify outputs before completing the step
                         verif_err = orchestration_service.verify_agent_outputs(req.session_id)
                         if verif_err:
@@ -1745,6 +1768,97 @@ async def run_scheduler():
                         await check_worker_health(w)
             except Exception as we:
                 print(f"[WORKERS] Health check error: {we}")
+            # Check for delegated plan steps to resume
+            conn = sqlite3.connect(memory.DB_FILE_PATH)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT ps.id, ps.plan_id, ps.description, sp.session_id, ps.step_order 
+                    FROM plan_steps ps
+                    JOIN session_plans sp ON ps.plan_id = sp.id
+                    WHERE ps.status = 'delegated'
+                """)
+                delegated_steps = cursor.fetchall()
+                
+                for step_id, plan_id, step_desc, session_id, step_order in delegated_steps:
+                    cursor.execute("""
+                        SELECT subagent_id, message, timestamp 
+                        FROM subagent_messages 
+                        WHERE parent_session_id = ? AND role = 'subagent'
+                        ORDER BY id DESC LIMIT 1
+                    """, (session_id,))
+                    subagent_row = cursor.fetchone()
+                    
+                    if subagent_row:
+                        subagent_id, message, timestamp = subagent_row
+                        
+                        if "subagent completed:" in message.lower():
+                            cursor.execute("UPDATE plan_steps SET status = 'completed' WHERE id = ?", (step_id,))
+                            conn.commit()
+                            print(f"[SCHEDULER] Subagent {subagent_id} completed. Step {step_id} marked completed.")
+                            
+                            async def resume_parent(sess_id, sub_id, msg):
+                                try:
+                                    from agent.keyless import KeylessAgyAgent
+                                    agent = KeylessAgyAgent(
+                                        model="gemini-3.5-flash",
+                                        conversation_id=sess_id,
+                                        timeout=120.0
+                                    )
+                                    resume_prompt = (
+                                        f"[SYSTEM RESUME]\n"
+                                        f"Subagent '{sub_id}' has completed the delegated task for Step {step_order}.\n"
+                                        f"Subagent Output: {msg}\n\n"
+                                        f"Please resume execution of the plan and proceed with the remaining steps."
+                                    )
+                                    memory.log_conversation_step(sess_id, "user", resume_prompt)
+                                    async with agent as active_agent:
+                                        response = await active_agent.chat(resume_prompt)
+                                        output_content = ""
+                                        async for chunk in response:
+                                            output_content += chunk
+                                        if output_content:
+                                            memory.log_conversation_step(sess_id, "assistant", output_content)
+                                except Exception as re_err:
+                                    print(f"[SCHEDULER] Failed to resume parent session {sess_id}: {re_err}")
+                            
+                            asyncio.create_task(resume_parent(session_id, subagent_id, message))
+                            
+                        elif "subagent failed:" in message.lower():
+                            cursor.execute("UPDATE plan_steps SET status = 'failed', error_message = ? WHERE id = ?", (message, step_id))
+                            conn.commit()
+                            print(f"[SCHEDULER] Subagent {subagent_id} failed. Step {step_id} marked failed.")
+                            
+                            async def resume_parent_fail(sess_id, sub_id, err_msg):
+                                try:
+                                    from agent.keyless import KeylessAgyAgent
+                                    agent = KeylessAgyAgent(
+                                        model="gemini-3.5-flash",
+                                        conversation_id=sess_id,
+                                        timeout=120.0
+                                    )
+                                    resume_prompt = (
+                                        f"[SYSTEM RESUME - FAILURE]\n"
+                                        f"Subagent '{sub_id}' failed during execution of Step {step_order}.\n"
+                                        f"Failure message: {err_msg}\n\n"
+                                        f"Please handle the failure and proceed accordingly."
+                                    )
+                                    memory.log_conversation_step(sess_id, "user", resume_prompt)
+                                    async with agent as active_agent:
+                                        response = await active_agent.chat(resume_prompt)
+                                        output_content = ""
+                                        async for chunk in response:
+                                            output_content += chunk
+                                        if output_content:
+                                            memory.log_conversation_step(sess_id, "assistant", output_content)
+                                except Exception as re_err:
+                                    print(f"[SCHEDULER] Failed to resume parent session {sess_id} on failure: {re_err}")
+                            
+                            asyncio.create_task(resume_parent_fail(session_id, subagent_id, message))
+            except Exception as e:
+                print(f"[SCHEDULER] Error checking subagent completion: {e}")
+            finally:
+                conn.close()
 
             now_str = datetime.now(timezone.utc).isoformat()
             conn = sqlite3.connect(memory.DB_FILE_PATH)
