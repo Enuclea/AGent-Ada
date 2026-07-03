@@ -34,3 +34,6 @@ src/agent_ada.egg-info/
 
 # Handover / Process Documentation
 .oob-docs/
+
+# Custom modules (private extensions)
+discord/custom_modules/

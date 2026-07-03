@@ -92,7 +92,38 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
+def load_custom_modules(bot):
+    """Dynamically loads custom Discord command modules and task handlers from the custom_modules folder."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    custom_dir = Path(__file__).resolve().parent / "custom_modules"
+    if not custom_dir.exists() or not custom_dir.is_dir():
+        return
+
+    # Add to sys.path
+    if str(custom_dir) not in sys.path:
+        sys.path.append(str(custom_dir))
+
+    for item in custom_dir.iterdir():
+        if item.is_file() and item.name.endswith(".py") and not item.name.startswith("_"):
+            try:
+                module_name = f"discord.custom_modules.{item.stem}"
+                spec = importlib.util.spec_from_file_location(module_name, item)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+                # Call setup function if it exists
+                if hasattr(module, "setup"):
+                    module.setup(bot)
+                print(f"[Custom Module] Loaded: {item.name}")
+            except Exception as e:
+                print(f"[Custom Module] Failed to load {item.name}: {e}")
+
 bot = commands.Bot(command_prefix="!ada ", intents=intents)
+bot.custom_task_handlers = {}
+load_custom_modules(bot)
 
 # Cooldowns and quiet mode configurations for roleplay channels
 roleplay_cooldowns = {}
@@ -458,8 +489,9 @@ async def queue_worker():
             try:
                 if task_type == "command":
                     await bot.process_commands(message)
-                elif task_type == "client-support":
-                    await handle_client_support_query(message, prompt_text, placeholder=placeholder, typing_task=typing_task)
+                elif task_type in getattr(bot, "custom_task_handlers", {}):
+                    handler = bot.custom_task_handlers[task_type]
+                    await handler(message, prompt_text, placeholder=placeholder, typing_task=typing_task)
                 elif task_type == "hook":
                     await handle_agent_hook_query(message, prompt_text, placeholder=placeholder, typing_task=typing_task)
                 elif task_type == "roleplay":
@@ -581,192 +613,7 @@ async def on_interaction(interaction: discord.Interaction):
     if not custom_id:
         return
 
-    # --- Start of Onboarding Staging and Role Selection ---
-    if custom_id.startswith("select_"):
-        role_type = custom_id.split("_", 1)[1] # "vendor" or "client"
-        member = interaction.user
-        guild = interaction.guild
-        if not guild or guild.id != 1418504570170118184:
-            await interaction.response.send_message("❌ This action is not supported in this server.", ephemeral=True)
-            return
-
-        staging_role_id = 1447879242359504976
-        vendor_role_id = 1447869559150215199
-        client_role_id = 1447869606676004904
-        
-        has_staging = any(r.id == staging_role_id for r in member.roles)
-        has_vendor = any(r.id == vendor_role_id for r in member.roles)
-        has_client = any(r.id == client_role_id for r in member.roles)
-        
-        if has_vendor or has_client:
-            await interaction.response.send_message("❌ You already have an active role in this server.", ephemeral=True)
-            return
-            
-        if has_staging:
-            await interaction.response.send_message("⏳ You are already in staging. Please wait for an administrator to confirm your request.", ephemeral=True)
-            return
-
-        staging_role = guild.get_role(staging_role_id)
-        if not staging_role:
-            await interaction.response.send_message("❌ Staging role not found on the server. Please contact an admin.", ephemeral=True)
-            return
-            
-        try:
-            await member.add_roles(staging_role)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to assign staging role: {e}", ephemeral=True)
-            return
-            
-        mod_channel_id = 1447778916294197330
-        mod_channel = guild.get_channel(mod_channel_id)
-        if not mod_channel:
-            try:
-                mod_channel = await guild.fetch_channel(mod_channel_id)
-            except Exception:
-                pass
-            
-        if mod_channel:
-            embed = discord.Embed(
-                title="🔔 Staging Admission Request",
-                description=f"User {member.mention} (`{member.name}`) has requested to join as a **{role_type.upper()}**.",
-                color=discord.Color.orange()
-            )
-            if member.display_avatar:
-                embed.set_thumbnail(url=member.display_avatar.url)
-            embed.add_field(name="Username", value=member.name, inline=True)
-            embed.add_field(name="User ID", value=str(member.id), inline=True)
-            embed.add_field(name="Requested Role", value=role_type.upper(), inline=True)
-            
-            class ApproveDenyView(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=None)
-                    self.add_item(discord.ui.Button(
-                        label="Approve",
-                        style=discord.ButtonStyle.success,
-                        custom_id=f"stage_approve_{member.id}_{role_type}"
-                    ))
-                    self.add_item(discord.ui.Button(
-                        label="Deny",
-                        style=discord.ButtonStyle.danger,
-                        custom_id=f"stage_deny_{member.id}_{role_type}"
-                    ))
-                    
-            await mod_channel.send(embed=embed, view=ApproveDenyView())
-            
-        await interaction.response.send_message(f"✅ You have selected the **{role_type.upper()}** role. You have been placed in staging (`#be-with-you-shortly`). An administrator will review your access shortly.", ephemeral=True)
-        return
-
-    if custom_id.startswith("stage_approve_") or custom_id.startswith("stage_deny_"):
-        guild = interaction.guild
-        if not guild or guild.id != 1418504570170118184:
-            await interaction.response.send_message("❌ This action is not supported in this server.", ephemeral=True)
-            return
-
-        is_staff = False
-        if is_user_admin(interaction.user.id) or is_user_moderator(interaction.user.id, guild.id):
-            is_staff = True
-        else:
-            staff_role_ids = {1447784382969544766, 1442242285252116510}
-            if any(r.id in staff_role_ids for r in interaction.user.roles):
-                is_staff = True
-
-        if not is_staff:
-            await interaction.response.send_message("🛡️ **Access Denied**: Only server staff can confirm staging admissions.", ephemeral=True)
-            return
-
-        parts = custom_id.split("_")
-        action = parts[1]
-        member_id = int(parts[2])
-        role_type = parts[3]
-
-        try:
-            member = guild.get_member(member_id)
-            if not member:
-                member = await guild.fetch_member(member_id)
-        except Exception:
-            member = None
-
-        if not member:
-            await interaction.response.send_message("❌ Member not found on this server.", ephemeral=True)
-            return
-
-        staging_role_id = 1447879242359504976
-        agreed_role_id = 1447778024912322581
-        confirmed_role_id = 1448164237426954260
-
-        if action == "approve":
-            roles_to_add = []
-            for rid in [agreed_role_id, confirmed_role_id]:
-                r = guild.get_role(rid)
-                if r:
-                    roles_to_add.append(r)
-
-            if role_type == "vendor":
-                vendor_role_id = 1447869559150215199
-                purple_role_id = 1447868508913537095
-                for rid in [vendor_role_id, purple_role_id]:
-                    r = guild.get_role(rid)
-                    if r:
-                        roles_to_add.append(r)
-            elif role_type == "client":
-                client_role_id = 1447869606676004904
-                green_role_id = 1447869148381188157
-                for rid in [client_role_id, green_role_id]:
-                    r = guild.get_role(rid)
-                    if r:
-                        roles_to_add.append(r)
-
-            staging_role = guild.get_role(staging_role_id)
-
-            try:
-                if roles_to_add:
-                    await member.add_roles(*roles_to_add)
-                if staging_role and any(r.id == staging_role_id for r in member.roles):
-                    await member.remove_roles(staging_role)
-            except Exception as e:
-                await interaction.response.send_message(f"❌ Failed to update roles for user: {e}", ephemeral=True)
-                return
-
-            if interaction.message and interaction.message.embeds:
-                embed = interaction.message.embeds[0]
-                embed.title = "✅ Staging Request Approved"
-                embed.color = discord.Color.green()
-                embed.add_field(name="Status", value=f"Approved by {interaction.user.mention}", inline=False)
-                await interaction.message.edit(embed=embed, view=None)
-
-            await interaction.response.send_message(f"✅ Approved {member.mention} as a **{role_type.upper()}**.", ephemeral=True)
-            
-            general_channel_id = 1447886556735213588
-            general_channel = guild.get_channel(general_channel_id)
-            if not general_channel:
-                try:
-                    general_channel = await guild.fetch_channel(general_channel_id)
-                except Exception:
-                    pass
-            if general_channel:
-                await general_channel.send(f"🎉 Welcome {member.mention} to the server! They have joined as a **{role_type.upper()}**.")
-
-        elif action == "deny":
-            try:
-                await member.kick(reason=f"Staging access denied by moderator: {interaction.user.name}")
-            except discord.Forbidden:
-                staging_role = guild.get_role(staging_role_id)
-                if staging_role:
-                    await member.remove_roles(staging_role)
-            except Exception as e:
-                await interaction.response.send_message(f"❌ Failed to kick/restrict user: {e}", ephemeral=True)
-                return
-
-            if interaction.message and interaction.message.embeds:
-                embed = interaction.message.embeds[0]
-                embed.title = "❌ Staging Request Denied"
-                embed.color = discord.Color.red()
-                embed.add_field(name="Status", value=f"Denied and kicked by {interaction.user.mention}", inline=False)
-                await interaction.message.edit(embed=embed, view=None)
-
-            await interaction.response.send_message(f"❌ Denied and kicked {member.name}.", ephemeral=True)
-        return
-    # --- End of Onboarding Staging and Role Selection ---
+    # Custom modules can handle other custom_ids (e.g., staging select, approve, deny) via registered listeners.
 
     if custom_id.startswith("approve_") or custom_id.startswith("deny_"):
         parts = custom_id.split("_", 1)
@@ -1345,84 +1192,7 @@ CLIENT_SUPPORT_INSTRUCTIONS = (
     "3. Keep all responses professional and concise."
 )
 
-async def handle_client_support_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None):
-    """Quietly handles Atera ticket status querying and creation for clients."""
-    import re
-    try:
-        from enuclea.atera_mapping import get_mapping
-        from enuclea.atera_ticketing_service import create_client_ticket, query_client_ticket_statuses
-    except ImportError:
-        if placeholder:
-            await placeholder.edit(content="❌ **Error**: Atera client support integrations are not available on this standalone installation.")
-        else:
-            await message.channel.send("❌ **Error**: Atera client support integrations are not available on this standalone installation.")
-        return
 
-    channel = message.channel
-
-    if placeholder is None:
-        placeholder = await channel.send("Looking it up...be right with you...")
-
-    category_name = channel.category.name if channel.category else ""
-    mapping = get_mapping(category_name)
-    if not mapping:
-        mapping = get_mapping(channel.name)
-
-    if not mapping:
-        await placeholder.edit(content=f"❌ **Error**: No Atera customer mapping found for category '{category_name}'. Please register using `!ada register` command.")
-        return
-
-    prompt_lower = prompt_text.lower()
-    is_query = (
-        any(w in prompt_lower for w in ["list", "check", "show", "view", "get", "status", "retrieve", "what are", "what is", "current", "active", "my", "any"])
-        or "tickets" in prompt_lower
-    )
-    is_create = False
-    if not is_query:
-        is_create = any(w in prompt_lower for w in ["create", "log", "new", "open", "submit"]) and ("ticket" in prompt_lower)
-    
-
-    if is_create:
-        await placeholder.edit(content="Creating it...one moment...")
-        quotes = re.findall(r'"([^"]*)"', prompt_text)
-        if len(quotes) >= 1:
-            title = quotes[0]
-            description = quotes[1] if len(quotes) > 1 else "No description provided."
-        else:
-            lines = [l.strip() for l in prompt_text.split("\n") if l.strip()]
-            if lines:
-                title = lines[0]
-                description = "\n".join(lines[1:]) if len(lines) > 1 else "No description provided."
-            else:
-                title = "Support Request"
-                description = prompt_text
-
-        try:
-            ticket_id = await create_client_ticket(category_name, title, description, priority="Low")
-            if ticket_id:
-                await placeholder.edit(content=f"✅ Ticket #{ticket_id} created successfully!")
-            else:
-                await placeholder.edit(content="❌ Failed to create ticket. Please contact administrator.")
-        except Exception as e:
-            await placeholder.edit(content=f"❌ Error creating ticket: {e}")
-    else:
-        try:
-            tickets = await query_client_ticket_statuses(category_name)
-            active_tickets = [t for t in tickets if t.get("TicketStatus") not in ["Closed", "Merged", "Resolved"]]
-            if not active_tickets:
-                active_tickets = tickets[:5]
-
-            if not active_tickets:
-                await placeholder.edit(content="You have no active tickets.")
-                return
-
-            response_lines = ["You have:\n"]
-            for t in active_tickets[:10]:
-                response_lines.append(f"{t['TicketID']}: {t['TicketTitle']}")
-
-            await placeholder.edit(content="\n".join(response_lines))
-        except Exception as e:
-            await placeholder.edit(content=f"❌ Error retrieving tickets: {e}")
 
 async def handle_agent_hook_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None):
     """Funnels user inputs directly to the local AGent FastAPI endpoint, streaming response."""
@@ -2265,85 +2035,7 @@ def is_bot_admin(ctx) -> bool:
     return ctx.channel.name == "control-room"
 
 
-@bot.command(name="setup_onboarding")
-@commands.check(is_bot_admin)
-async def setup_onboarding(ctx):
-    """Sends the onboarding role selection message to the welcome-and-roles channel."""
-    guild = ctx.guild
-    portal_guild_id = int(os.environ.get("PORTAL_ONBOARDING_GUILD_ID") or 1418504570170118184)
-    if not guild or guild.id != portal_guild_id:
-        await ctx.send("❌ This command must be run inside the onboarding portal server.")
-        return
-        
-    welcome_channel_id = int(os.environ.get("WELCOME_CHANNEL_ID") or 1418504570941866055)
-    welcome_channel = guild.get_channel(welcome_channel_id)
-    if not welcome_channel:
-        try:
-            welcome_channel = await guild.fetch_channel(welcome_channel_id)
-        except Exception:
-            pass
-        
-    if not welcome_channel:
-        await ctx.send("❌ Could not find `#welcome-and-roles` channel.")
-        return
-        
-    # Clean old messages in that channel
-    try:
-        async for message in welcome_channel.history(limit=100):
-            try:
-                await message.delete()
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"Error cleaning channel: {e}")
 
-    portal_title = os.environ.get("DISCORD_PORTAL_TITLE") or "🪐 Welcome to the Portal"
-    embed = discord.Embed(
-        title=portal_title,
-        description=(
-            "Please select your primary association to request access to the server.\n\n"
-            "---\n\n"
-            "### 👥 Select Your Role:\n"
-            "💼 **Vendor**\n"
-            "*Collaborators, developers, and partners. Grants access to development channels and staging.*\n\n"
-            "🤝 **Client**\n"
-            "*Customers and external stakeholders. Grants access to client-facing rooms and status feeds.*\n\n"
-            "---\n\n"
-            "### 🛡️ What Happens Next?\n"
-            "Once you click a role below:\n"
-            "1. You will be assigned the **Staging** role and placed in <#1447881745092313259> (`#be-with-you-shortly`).\n"
-            "2. Our administrative team will verify your request and manually approve your entry."
-        ),
-        color=discord.Color.from_rgb(139, 92, 246)
-    )
-    
-    image_path = Path(__file__).parent / "welcome.jpg"
-    file = None
-    if image_path.exists():
-        file = discord.File(image_path, filename="welcome.jpg")
-        embed.set_image(url="attachment://welcome.jpg")
-        
-    class OnboardingView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-            self.add_item(discord.ui.Button(
-                label="Vendor",
-                style=discord.ButtonStyle.primary,
-                custom_id="select_vendor",
-                emoji="💼"
-            ))
-            self.add_item(discord.ui.Button(
-                label="Client",
-                style=discord.ButtonStyle.success,
-                custom_id="select_client",
-                emoji="🤝"
-            ))
-            
-    if file:
-        await welcome_channel.send(file=file, embed=embed, view=OnboardingView())
-    else:
-        await welcome_channel.send(embed=embed, view=OnboardingView())
-    await ctx.send(f"✅ Onboarding role selection message posted in {welcome_channel.mention}!")
 
 
 @bot.command(name="post_resource")
