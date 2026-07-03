@@ -412,8 +412,8 @@ class OrchestrationService:
         roleplay: bool = False,
         workspaces: Optional[List[str]] = None,
         auto_approve: bool = False,
-        prompt: Optional[str] = None,
-        custom_approval_handler: Optional[Callable[[ToolCall], Any]] = None
+        custom_approval_handler: Optional[Callable[[ToolCall], Any]] = None,
+        agent_profile: Optional[str] = None
     ) -> Any:
         """Acquires a new or existing agent instance configured via the orchestrator config payload.
 
@@ -430,6 +430,7 @@ class OrchestrationService:
             auto_approve: If True, tool executions are auto-approved.
             prompt: Initial execution query/prompt.
             custom_approval_handler: User confirmation prompt callback.
+            agent_profile: Optional specialist profile identifier.
 
         Returns:
             The configured KeylessAgyAgent instance.
@@ -488,6 +489,17 @@ class OrchestrationService:
                         new_uuid = str(uuid.uuid4())
                         session_mappings[session_id] = new_uuid
                         memory.update_key_value("session_mappings", session_mappings)
+                        
+                        # Store session metadata for listing
+                        session_metadata = mem.setdefault("key_value", {}).setdefault("session_metadata", {})
+                        from datetime import datetime
+                        session_metadata[new_uuid] = {
+                            "title": f"[{agent_profile.upper() if agent_profile else 'COORDINATOR'}] Discord Channel",
+                            "profile": agent_profile or "coordinator",
+                            "created_at": datetime.now().isoformat()
+                        }
+                        memory.update_key_value("session_metadata", session_metadata)
+                        
                     resolved_conv_id = session_mappings[session_id]
                 else:
                     resolved_conv_id = session_id

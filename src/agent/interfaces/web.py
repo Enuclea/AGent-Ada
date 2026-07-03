@@ -421,7 +421,8 @@ async def get_or_create_agent(
         disable_tools=disable_tools,
         roleplay=roleplay,
         prompt=prompt,
-        auto_approve=auto_approve
+        auto_approve=auto_approve,
+        agent_profile=agent_profile
     )
 
 @app.post("/api/chat")
@@ -481,6 +482,7 @@ async def chat_endpoint(req: ChatRequest):
             req.disable_tools,
             req.roleplay,
             req.prompt,
+            agent_profile=req.agent_profile
         )
     except Exception as e:
         import traceback
@@ -928,23 +930,38 @@ class SpawnSubagentRequest(BaseModel):
     stub_files: Optional[List[str]] = None
     agent_profile: Optional[str] = None
 
-@app.post("/api/subagents/spawn")
-async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
-    import uuid
+def setup_sandbox_sync(
+    current_workspace: str,
+    sandbox_dir: Path,
+    target_files: Optional[List[str]],
+    stub_files: Optional[List[str]]
+):
     import shutil
-    from pathlib import Path
+    from agent.tools import generate_interface_stub
     
-    sandbox_id = str(uuid.uuid4())
-    sandbox_dir = Path("/tmp") / f"subagent_sandbox_{sandbox_id}"
-    sandbox_dir.mkdir(parents=True, exist_ok=True)
-    
-    current_workspace = os.getcwd()
-    
+    def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
+        try:
+            resolved = (base_path / rel_str).resolve()
+            return base_path == resolved or base_path in resolved.parents
+        except Exception:
+            return False
+
+    base_ws = Path(current_workspace).resolve()
+    dest_base = sandbox_dir.resolve()
+
     # 1. Clone target files/directories if specified
-    if req.target_files:
-        for rel_path in req.target_files:
-            src = Path(current_workspace) / rel_path
-            dest = sandbox_dir / rel_path
+    if target_files:
+        for rel_path in target_files:
+            if not is_safe_relative_path(base_ws, rel_path):
+                continue
+            src = (base_ws / rel_path).resolve()
+            dest = (sandbox_dir / rel_path).resolve()
+            # Verify destination is within sandbox boundary
+            try:
+                if not (dest_base == dest or dest_base in dest.parents):
+                    continue
+            except Exception:
+                continue
             if src.exists():
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 try:
@@ -956,11 +973,18 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
                     pass
                     
     # 2. Generate and copy stubs if specified
-    if req.stub_files:
-        from agent.tools import generate_interface_stub
-        for rel_path in req.stub_files:
-            src = Path(current_workspace) / rel_path
-            dest = sandbox_dir / rel_path
+    if req_stub_files := stub_files:
+        for rel_path in req_stub_files:
+            if not is_safe_relative_path(base_ws, rel_path):
+                continue
+            src = (base_ws / rel_path).resolve()
+            dest = (sandbox_dir / rel_path).resolve()
+            # Verify destination is within sandbox boundary
+            try:
+                if not (dest_base == dest or dest_base in dest.parents):
+                    continue
+            except Exception:
+                continue
             if src.exists() and src.is_file():
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 try:
@@ -971,8 +995,8 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
                     pass
                     
     # 3. Fallback: If neither target_files nor stub_files are specified, copy entire workspace (backward compatibility)
-    if not req.target_files and not req.stub_files:
-        for item in Path(current_workspace).iterdir():
+    if not target_files and not stub_files:
+        for item in base_ws.iterdir():
             if item.name in (".git", ".venv", "__pycache__", ".agents", ".pytest_cache"):
                 continue
             try:
@@ -982,6 +1006,27 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
                     shutil.copy2(item, sandbox_dir / item.name)
             except Exception:
                 pass
+
+
+@app.post("/api/subagents/spawn")
+async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
+    import uuid
+    from pathlib import Path
+    
+    sandbox_id = str(uuid.uuid4())
+    sandbox_dir = Path("/tmp") / f"subagent_sandbox_{sandbox_id}"
+    await asyncio.to_thread(sandbox_dir.mkdir, parents=True, exist_ok=True)
+    
+    current_workspace = os.getcwd()
+    
+    # Run sandbox filesystem setup in a worker thread to keep the event loop non-blocking
+    await asyncio.to_thread(
+        setup_sandbox_sync,
+        current_workspace,
+        sandbox_dir,
+        req.target_files,
+        req.stub_files
+    )
                 
     memory.log_subagent_message(req.subagent_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {req.prompt}", parent_session_id=req.parent_session_id)
     
@@ -1076,6 +1121,12 @@ async def sessions_endpoint():
     entries = []
     seen = set()
     
+    from agent import memory
+    mem = memory.load_memory()
+    session_metadata = mem.get("key_value", {}).get("session_metadata", {})
+    if not isinstance(session_metadata, dict):
+        session_metadata = {}
+    
     for folder in [save_dir, keyless_dir]:
         if folder.exists() and folder.is_dir():
             for entry in folder.iterdir():
@@ -1086,8 +1137,14 @@ async def sessions_endpoint():
                 if name in seen:
                     continue
                 seen.add(name)
+                
+                # Resolve title from metadata, fall back to UUID
+                meta = session_metadata.get(name, {})
+                title = meta.get("title") or name
+                
                 entries.append({
                     "session_id": name,
+                    "title": title,
                     "last_active": datetime.fromtimestamp(stat.st_mtime).isoformat()
                 })
     entries.sort(key=lambda x: x["last_active"], reverse=True)

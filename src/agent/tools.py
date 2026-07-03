@@ -920,6 +920,11 @@ async def run_command(command: str) -> str:
             
         command = _sandbox_command_if_possible(command)
             
+    # Print real-time progress update to stdout so it streams to the client
+    print(f"\n⚙️ Running shell command: {command}...")
+    import sys
+    sys.stdout.flush()
+
     proc = await asyncio.create_subprocess_shell(
         command,
         stdout=asyncio.subprocess.PIPE,
@@ -1097,22 +1102,42 @@ async def spawn_subagent(
     profile_prefix = f"{agent_profile}-" if agent_profile else "sub-"
     subagent_session = f"subagent-{profile_prefix}{uuid.uuid4().hex[:8]}"
     
+    # Print real-time progress update to stdout so it streams to the client
+    print(f"\n🚀 Spawning tooled subagent ({agent_profile or 'generic'}) in the background...")
+    import sys
+    sys.stdout.flush()
+
     # Log start
     from agent.memory import active_session_id_var
     parent_session_id = active_session_id_var.get()
     memory.log_subagent_message(subagent_session, "parent", f"Spawning tooled subagent ({agent_profile or 'generic'}) with prompt: {prompt}", parent_session_id=parent_session_id)
     
     # Build enriched prompt with file context
+    base_ws = Path(os.getcwd()).resolve()
+    
+    def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
+        try:
+            resolved = (base_path / rel_str).resolve()
+            return base_path == resolved or base_path in resolved.parents
+        except Exception:
+            return False
+
     enriched_prompt = prompt
     if target_files:
-        enriched_prompt += f"\n\n[TARGET FILES]\nThe following files are relevant to this task:\n" + "\n".join([f"- {f}" for f in target_files]) + "\n[END TARGET FILES]"
+        safe_targets = [f for f in target_files if is_safe_relative_path(base_ws, f)]
+        if safe_targets:
+            enriched_prompt += f"\n\n[TARGET FILES]\nThe following files are relevant to this task:\n" + "\n".join([f"- {f}" for f in safe_targets]) + "\n[END TARGET FILES]"
+            
     if stub_files:
+        import asyncio
         stub_context = []
         for rel_path in stub_files:
-            src = Path(os.getcwd()) / rel_path
+            if not is_safe_relative_path(base_ws, rel_path):
+                continue
+            src = (base_ws / rel_path).resolve()
             if src.exists() and src.is_file():
                 try:
-                    stub_content = generate_interface_stub(str(src))
+                    stub_content = await asyncio.to_thread(generate_interface_stub, str(src))
                     stub_context.append(f"### {rel_path}\n```\n{stub_content}\n```")
                 except Exception:
                     pass
@@ -1208,6 +1233,7 @@ async def run_boardroom(
     """
     import uuid
     import shutil
+    import asyncio
     from agent.keyless import KeylessAgyAgent
     from agent.core.registry import tool_registry
     from agent.memory import active_session_id_var
@@ -1215,33 +1241,52 @@ async def run_boardroom(
     parent_session_id = active_session_id_var.get()
     boardroom_id = str(uuid.uuid4())
     sandbox_dir = Path("/tmp") / f"boardroom_sandbox_{boardroom_id}"
-    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(sandbox_dir.mkdir, parents=True, exist_ok=True)
     
     current_workspace = os.getcwd()
+    base_ws = Path(current_workspace).resolve()
+    dest_base = sandbox_dir.resolve()
     
+    def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
+        try:
+            resolved = (base_path / rel_str).resolve()
+            return base_path == resolved or base_path in resolved.parents
+        except Exception:
+            return False
+
     # 1. Setup Sandbox Workspace (copy target files)
-    if target_files:
-        for rel_path in target_files:
-            src = Path(current_workspace) / rel_path
-            dest = sandbox_dir / rel_path
-            if src.exists():
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if src.is_dir():
-                    shutil.copytree(src, dest, symlinks=True)
-                else:
-                    shutil.copy2(src, dest)
-    else:
-        # Fallback to copying everything except ignores
-        for item in Path(current_workspace).iterdir():
-            if item.name in (".git", ".venv", "__pycache__", ".agents", ".pytest_cache"):
-                continue
-            try:
-                if item.is_dir():
-                    shutil.copytree(item, sandbox_dir / item.name, symlinks=True)
-                else:
-                    shutil.copy2(item, sandbox_dir / item.name)
-            except Exception:
-                pass
+    def setup_sandbox_sync():
+        if target_files:
+            for rel_path in target_files:
+                if not is_safe_relative_path(base_ws, rel_path):
+                    continue
+                src = (base_ws / rel_path).resolve()
+                dest = (sandbox_dir / rel_path).resolve()
+                try:
+                    if not (dest_base == dest or dest_base in dest.parents):
+                        continue
+                except Exception:
+                    continue
+                if src.exists():
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if src.is_dir():
+                        shutil.copytree(src, dest, symlinks=True)
+                    else:
+                        shutil.copy2(src, dest)
+        else:
+            # Fallback to copying everything except ignores
+            for item in base_ws.iterdir():
+                if item.name in (".git", ".venv", "__pycache__", ".agents", ".pytest_cache"):
+                    continue
+                try:
+                    if item.is_dir():
+                        shutil.copytree(item, sandbox_dir / item.name, symlinks=True)
+                    else:
+                        shutil.copy2(item, sandbox_dir / item.name)
+                except Exception:
+                    pass
+
+    await asyncio.to_thread(setup_sandbox_sync)
                 
     # 2. Iterate through boardroom members for consensus debate
     current_solution = f"Initial Task Request: {task_description}"
@@ -1252,13 +1297,17 @@ async def run_boardroom(
     # Max rounds to prevent infinite loops
     max_rounds = 3
     for round_idx in range(1, max_rounds + 1):
+        # Print round progress update to stdout so it streams to the client
+        print(f"\n💬 [Boardroom] Starting Round {round_idx} of consensus discussion with members: {', '.join(expert_profiles)}...")
+        import sys
+        sys.stdout.flush()
+        
         round_approvals = 0
-        for profile in expert_profiles:
-            # Resolve instructions for the current expert
+        
+        async def run_expert(profile):
             specialist_inst = tool_registry.resolve_subagent_profile(profile)
             system_instructions = specialist_inst or f"You are the {profile} specialist agent."
             
-            # Subagent system prompt formatting
             subagent_sys = (
                 f"{system_instructions}\n\n"
                 "You are participating in a multi-agent Boardroom consensus discussion. Your goal is to review, "
@@ -1301,31 +1350,49 @@ async def run_boardroom(
                         output += chunk
                         
                     memory.log_subagent_message(subagent_id, "subagent", f"[SUCCESS] Boardroom contribution from {profile}: {output}", parent_session_id=parent_session_id)
-                    
-                    # Parse contribution
-                    try:
-                        res_data = _extract_json_block(output)
-                        if not res_data:
-                            raise ValueError("No valid JSON block found in output.")
-                        approved = res_data.get("approved", False)
-                        if approved:
-                            round_approvals += 1
-                        critique = res_data.get("critique_or_comments", "")
-                        summary = res_data.get("updated_solution_summary", "")
-                        mod_files = res_data.get("files_modified", [])
-                        
-                        # Merge files modified
-                        for f in mod_files:
-                            if f not in files_modified:
-                                files_modified.append(f)
-                                
-                        current_solution = f"Latest Solution Summary: {summary}\nCritique/Comments from {profile}: {critique}"
-                        summary_history.append(f"[{profile}] Approved: {approved}. Summary: {summary}")
-                        
-                    except Exception as parse_err:
-                        memory.log_subagent_message(subagent_id, "subagent", f"[FAILED] Failed to parse boardroom contribution JSON: {parse_err}", parent_session_id=parent_session_id)
+                    return profile, True, output, None, subagent_id
             except Exception as e:
                 memory.log_subagent_message(subagent_id, "subagent", f"[FAILED] Boardroom agent error: {e}", parent_session_id=parent_session_id)
+                return profile, False, "", e, subagent_id
+
+        # Run all experts concurrently in this round using asyncio.gather
+        tasks = [run_expert(profile) for profile in expert_profiles]
+        round_results = await asyncio.gather(*tasks)
+        
+        for profile, success, output, err, subagent_id in round_results:
+            if not success:
+                print(f"❌ [Boardroom] Expert {profile} failed to contribute: {err}")
+                import sys
+                sys.stdout.flush()
+                continue
+                
+            # Parse contribution
+            try:
+                res_data = _extract_json_block(output)
+                if not res_data:
+                    raise ValueError("No valid JSON block found in output.")
+                approved = res_data.get("approved", False)
+                if approved:
+                    round_approvals += 1
+                critique = res_data.get("critique_or_comments", "")
+                summary = res_data.get("updated_solution_summary", "")
+                mod_files = res_data.get("files_modified", [])
+                
+                # Print progress to client
+                print(f"👥 [Boardroom] Expert {profile} contribution analyzed (Approved: {approved})")
+                import sys
+                sys.stdout.flush()
+                
+                # Merge files modified
+                for f in mod_files:
+                    if f not in files_modified:
+                        files_modified.append(f)
+                        
+                current_solution = f"Latest Solution Summary: {summary}\nCritique/Comments from {profile}: {critique}"
+                summary_history.append(f"[{profile}] Approved: {approved}. Summary: {summary}")
+                
+            except Exception as parse_err:
+                memory.log_subagent_message(subagent_id, "subagent", f"[FAILED] Failed to parse boardroom contribution JSON: {parse_err}", parent_session_id=parent_session_id)
                 
         # If all experts approved in this round, consensus reached!
         if round_approvals == len(expert_profiles):
@@ -1336,7 +1403,7 @@ async def run_boardroom(
     if not consensus_reached:
         print(f"[BOARDROOM] Consensus not reached after {max_rounds} rounds. Aborting changes.")
         try:
-            shutil.rmtree(sandbox_dir)
+            await asyncio.to_thread(shutil.rmtree, sandbox_dir)
         except Exception:
             pass
         return json.dumps({
@@ -1348,13 +1415,24 @@ async def run_boardroom(
         })
                 
     # 3. Apply final accepted files back to the main workspace
-    for rel_path in files_modified:
-        sandbox_file = sandbox_dir / rel_path
-        workspace_file = Path(current_workspace) / rel_path
-        if sandbox_file.exists() and sandbox_file.is_file():
-            workspace_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(sandbox_file, workspace_file)
-            print(f"[BOARDROOM] Copied accepted boardroom modifications: {rel_path}")
+    def apply_changes_back_sync():
+        for rel_path in files_modified:
+            if not is_safe_relative_path(base_ws, rel_path):
+                continue
+            sandbox_file = sandbox_dir / rel_path
+            workspace_file = Path(current_workspace) / rel_path
+            try:
+                resolved_wf = workspace_file.resolve()
+                if not (base_ws == resolved_wf or base_ws in resolved_wf.parents):
+                    continue
+            except Exception:
+                continue
+            if sandbox_file.exists() and sandbox_file.is_file():
+                workspace_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(sandbox_file, workspace_file)
+                print(f"[BOARDROOM] Copied accepted boardroom modifications: {rel_path}")
+
+    await asyncio.to_thread(apply_changes_back_sync)
             
     return json.dumps({
         "status": "success",
