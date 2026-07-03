@@ -36,10 +36,15 @@ class AgyRoute(BaseRoute):
         if system_instructions:
             full_prompt = f"[System Instructions]\n{system_instructions}\n\n[User Prompt]\n{prompt}"
 
-        cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions"]
+        # Use stdbuf to disable stdout/stderr buffering in the subprocess
+        cmd = ["stdbuf", "-oL", "-eL", harness_path, "-p", full_prompt, "--dangerously-skip-permissions"]
         if conversation_id:
             cmd.extend(["--conversation", conversation_id])
         cmd.extend(["--model", model])
+
+        # Prepare unbuffered environment
+        sub_env = dict(os.environ)
+        sub_env["PYTHONUNBUFFERED"] = "1"
 
         # If it is streaming (timeout > 30s), return the subprocess for streaming consumption
         if timeout is not None and timeout > 30.0:
@@ -48,7 +53,8 @@ class AgyRoute(BaseRoute):
                     *cmd,
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
+                    env=sub_env
                 )
                 return proc
             except Exception as e:
@@ -66,7 +72,8 @@ class AgyRoute(BaseRoute):
                     *cmd,
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
+                    env=sub_env
                 )
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout or 120.0)
                 if proc.returncode == 0:
