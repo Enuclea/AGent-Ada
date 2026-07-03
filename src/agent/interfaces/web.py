@@ -787,21 +787,22 @@ async def chat_endpoint(req: ChatRequest):
     )
 
 @app.get("/api/status")
-async def status_endpoint():
+async def status_endpoint(session_id: Optional[str] = None):
     global active_agents
+    lookup_id = session_id or "default"
     try:
-        agent = await get_or_create_agent()
+        agent = await get_or_create_agent(session_id=session_id)
     except Exception as e:
-        active_agents.pop("default", None)
+        active_agents.pop(lookup_id, None)
         raise HTTPException(status_code=500, detail=f"Agent connection error: {e}")
     
     from agent.core.registry import tool_registry
     skills = tool_registry.discover_skills()
     skills_list = [{"name": s.name, "description": s.description} for s in skills]
                         
-    session_data = active_agents.get("default", {})
+    session_data = active_agents.get(lookup_id, {})
     return {
-        "status": "busy" if get_session_lock("default")._locked else "ready",
+        "status": "busy" if get_session_lock(lookup_id)._locked else "ready",
         "version": __version__,
         "model": session_data.get("model", "gemini-3.5-flash"),
         "workspace": os.getcwd(),

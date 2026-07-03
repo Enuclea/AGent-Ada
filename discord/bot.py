@@ -445,11 +445,15 @@ async def enqueue_task(priority: int, task_type: str, message: discord.Message, 
     }
     await task_queue.put((priority, task_counter, task_data))
 
-async def is_backend_busy() -> bool:
-    """Checks if the backend is currently busy processing a task."""
+async def is_backend_busy(session_id: Optional[str] = None) -> bool:
+    """Checks if the backend is currently busy processing a task for a given session."""
     try:
+        url = f"{AGENT_API_BASE}/api/status"
+        if session_id:
+            import urllib.parse
+            url += f"?session_id={urllib.parse.quote(session_id)}"
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{AGENT_API_BASE}/api/status", timeout=1.0) as resp:
+            async with session.get(url, timeout=1.0) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("status") == "busy"
@@ -461,26 +465,27 @@ async def queue_worker():
     print("[QUEUE] Serialized task queue worker started.")
     while True:
         try:
-            # Check if the backend is busy before popping a task
-            if task_queue.empty():
-                # Block until a task is available
-                priority, timestamp, task_data = await task_queue.get()
-                # If backend is busy, wait here before executing it
-                while await is_backend_busy():
-                    await asyncio.sleep(1)
-            else:
-                # Queue is not empty. If backend is busy, sleep and loop to allow priorities to resolve
-                if await is_backend_busy():
-                    await asyncio.sleep(1)
-                    continue
-                priority, timestamp, task_data = await task_queue.get()
-
+            # Block until a task is available
+            priority, timestamp, task_data = await task_queue.get()
+            
             task_id = task_data.get("id")
             task_type = task_data["type"]
             message = task_data["message"]
             prompt_text = task_data["prompt_text"]
             placeholder = task_data["placeholder"]
             typing_task = task_data["typing_task"]
+            
+            # Resolve session ID for this specific task/channel to check lock status
+            channel = message.channel
+            session_id = get_channel_session_id(channel.id)
+            if hasattr(channel, "name") and channel.name:
+                profile_name = get_specialist_profile_for_channel(channel.name)
+                if profile_name:
+                    session_id = f"discord-session-specialist-{channel.id}"
+            
+            # If the backend is currently busy with this specific session, wait
+            while await is_backend_busy(session_id):
+                await asyncio.sleep(1)
             
             if task_id:
                 bot_queue.update_task_status(task_id, 'processing')

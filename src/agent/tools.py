@@ -1147,9 +1147,11 @@ async def spawn_subagent(
                 # Log success
                 memory.log_subagent_message(subagent_session, "subagent", f"[SPAWNED] Subagent successfully spawned in background. Sandbox: {sandbox_dir}")
                 
-                # Exit the active execution loop immediately
-                import sys
-                sys.exit(0)
+                return json.dumps({
+                    "status": "spawned",
+                    "sandbox_dir": sandbox_dir,
+                    "summary": f"Subagent successfully spawned in background. Sandbox: {sandbox_dir}"
+                })
                 
     except Exception as e:
         err_msg = f"[FAILED] Subagent execution failed: {e}"
