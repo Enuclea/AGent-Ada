@@ -1223,7 +1223,7 @@ def get_specialist_profile_for_channel(channel_name: str) -> Optional[str]:
         return "solar_monitor"
     if "lacie" in c_name or "architect" in c_name:
         return "lacie"
-    if "qa" in c_name or "test" in c_name:
+    if "qa" in c_name or "test" in c_name or "val" in c_name:
         return "qa_specialist"
     return None
 
