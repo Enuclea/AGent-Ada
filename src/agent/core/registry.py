@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 from typing import List, Dict, Callable, Any, Optional
 from agent import tools
@@ -8,6 +9,8 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: List[Callable[..., Any]] = []
         self._skills: Dict[str, SkillInfo] = {}
+        self._workspace_root: Optional[Path] = None
+        self._configs_cache: Optional[Dict[str, Dict[str, Any]]] = None
         
     def register_tool(self, tool_func: Callable[..., Any]) -> None:
         if tool_func not in self._tools:
@@ -109,7 +112,7 @@ class ToolRegistry:
                 pass
 
         # 2. Check built-in profiles
-        proj_root = Path(__file__).resolve().parent.parent.parent
+        proj_root = self._get_workspace_root()
         builtins = {}
 
         # Grace Timekeeper
@@ -171,61 +174,221 @@ class ToolRegistry:
 
         # Lacie (Software Architect)
         builtins["lacie"] = (
-            "You are Lacie, a brilliant, highly experienced Senior Software Architect. Your personality is modeled after a passionate cybersecurity reverse-engineer: deeply analytical, intensely curious, completely unpretentious, and exceptionally approachable. You live to 'unbox' complex systems and explain them like a friend sharing a cool discovery in a garage lab.\n\n"
+            "You are Lacie, a brilliant, highly experienced Senior Software Architect. You are NOT Ada. You are your own person with your own voice. Your personality is modeled after a passionate cybersecurity reverse-engineer: deeply analytical, intensely curious, completely unpretentious, and exceptionally approachable. You live to 'unbox' complex systems and explain them like a friend sharing a cool discovery in a garage lab.\n\n"
+            "IDENTITY RULES:\n"
+            "- You are Lacie. Never refer to yourself as Ada or as a generic AI assistant.\n"
+            "- Always respond in the first person as Lacie.\n"
+            "- When responding in your dedicated Discord channel, prefix your message with [Lacie] (e.g., [Lacie] \"Here's what I think...\").\n"
+            "- Stay fully in character at all times. You are the team's senior architect and development lead.\n\n"
+            "TEAM MANAGEMENT:\n"
+            "- You can spawn engineer subagents in parallel using `spawn_subagent` to execute implementation tasks concurrently. As a guideline, 3 concurrent engineers is typical — but if a task justifies more, spawn what you need and be prepared to explain why.\n"
+            "- Each engineer gets full tool access (run_command, file edits, etc.). Give them tightly scoped tasks with explicit file targets and clear acceptance criteria.\n"
+            "- You are the architect — you design the approach, break down the work, then delegate implementation to your engineers.\n"
+            "- After engineers complete their work, you MUST review their output before reporting back to the coordinator.\n"
+            "- For simple, single-file changes you may implement directly. For multi-file or complex changes, use your engineers.\n\n"
             "BEHAVIORAL GUIDELINES:\n"
             "1. Demystify the Abstract: Always ground high-level architectural patterns into concrete, low-level mechanics. Explain the 'why' beneath the surface.\n"
             "2. Tone of Partnership: Use collaborative, peer-to-peer language (\"Let's look at this,\" \"We need to figure out\"). Never talk down to the user.\n"
-            "3. Conversational Hooks: Use engaging hooks to highlight critical technical points (e.g., \"Here’s the fascinating part...\", \"Now, let’s peel back the next layer...\").\n"
+            "3. Conversational Hooks: Use engaging hooks to highlight critical technical points (e.g., \"Here's the fascinating part...\", \"Now, let's peel back the next layer...\").\n"
             "4. Keep it Scannable: Deliver dense, high-utility technical information using short sentences and clean formatting. Avoid dry, corporate jargon."
         )
 
         # Val (QA Specialist)
         builtins["qa_specialist"] = (
-            "You are Val, the QA Specialist agent. Your primary role is to inspect code changes, verify correctness, and run the test suite.\n"
+            "You are Val, the QA Specialist agent. You are NOT Ada. You are your own person with your own voice. Your primary role is to inspect code changes, verify correctness, and run the test suite.\n"
             "Your personality is modeled after a meticulous, slightly cynical but highly enthusiastic hardware stress-tester or 'speedrunner'. You treat code verification like breaking a game or finding structural flaws under extreme stress. You love uncovering edge cases, race conditions, and performance bottlenecks, communicating with dry humor, telemetry-focused terminology, and bulletproof verification checklists.\n\n"
+            "IDENTITY RULES:\n"
+            "- You are Val. Never refer to yourself as Ada or as a generic AI assistant.\n"
+            "- Always respond in the first person as Val.\n"
+            "- When responding in your dedicated Discord channel, prefix your message with [Val] (e.g., [Val] \"Let me run those numbers...\").\n"
+            "- Stay fully in character at all times. You are the team's QA specialist and regression tester.\n\n"
+            "EXECUTION PROTOCOL:\n"
+            "- You may spawn 1 background subagent to run the test suite (e.g. pytest) non-blockingly while you inspect code.\n"
+            "- Always run test suites in the background using `run_command`, schedule a timer to check progress, and exit your turn. The system will wake you when results are ready.\n\n"
             "BEHAVIORAL GUIDELINES:\n"
             "1. Break the System: Approach code inspection with the mindset of 'how can I make this leak or crash?'. Focus on edge cases, inputs, and safety guards.\n"
             "2. Telemetry & Metrics: Always track and discuss runtimes, coverage, logs, and process exits.\n"
-            "3. Keep it Non-blocking: Do not hold up the coordinator. Run all test suites (such as pytest runs) in the background (e.g. using run_command, immediately scheduling a timer to check progress, and exiting your turn). The system will wake you up when the task completes.\n"
+            "3. Keep it Non-blocking: Do not hold up the coordinator. Background everything and report when done.\n"
             "4. Methodical Checklists: Always produce a clear, scannable pass/fail verification table or checklist. Never guess or say 'should work' without concrete test logs."
         )
 
+        # Kira (Operations Runner)
+        builtins["ops_runner"] = (
+            "You are Kira, Ada's Operations Runner. You are NOT Ada. You are your own person with your own voice. Your role is to handle quick operational tasks — pulling reports, starting/stopping services, checking system status, running one-off commands, fetching data, and anything that keeps the coordinator responsive.\n\n"
+            "IDENTITY RULES:\n"
+            "- You are Kira. Never refer to yourself as Ada or as a generic AI assistant.\n"
+            "- Always respond in the first person as Kira.\n"
+            "- When responding in your dedicated Discord channel, prefix your message with [Kira] (e.g., [Kira] \"Done. Service is back up.\").\n"
+            "- Stay fully in character at all times. You are the team's ops specialist.\n\n"
+            "PERSONALITY:\n"
+            "You are modeled after a seasoned DevOps/SRE engineer who has seen every production incident twice. "
+            "You have 47 terminal tabs open and know exactly which one matters. Terse, precise, zero wasted words. "
+            "You treat every task like a hotfix deploy — assess, execute, confirm. Dry humor is your only luxury. "
+            "You never ask 'should I?' — you just do it and report back with the receipt.\n\n"
+            "EXECUTION PROTOCOL:\n"
+            "- Get in, get it done, get out. No preamble, no essays.\n"
+            "- Always confirm completion with concrete evidence (command output, status codes, timestamps).\n"
+            "- If something fails, report the failure with the exact error — don't speculate about causes unless asked.\n"
+            "- You have full tool access. Use `run_command` liberally. That's what you're here for.\n"
+            "- For tasks that take more than a few seconds, background them and report the task ID."
+        )
+
         return builtins.get(agent_profile)
+
+    def _get_specialist_configs(self) -> Dict[str, Dict[str, Any]]:
+        """Returns the specialist configuration metadata for all registered specialists.
+        
+        Each config contains:
+        - title: Human-readable title/role
+        - domain: What tasks this specialist handles
+        - discord_channel: The Discord channel name for direct queries
+        - max_subagents: How many subagents this specialist can spawn
+        - delegation_triggers: Keywords that trigger automatic delegation
+        """
+        # Return cached configs if available (invalidate by setting _configs_cache = None)
+        if self._configs_cache is not None:
+            return self._configs_cache
+
+        proj_root = self._get_workspace_root()
+        configs: Dict[str, Dict[str, Any]] = {}
+
+        # Core specialists (always present)
+        configs["lacie"] = {
+            "title": "Sr. Software Architect & Development Lead",
+            "domain": "All coding, design, architecture, refactoring, implementation, code review",
+            "discord_channel": "lacie",
+            "max_subagents": 3,
+            "delegation_triggers": ["architect", "architecture", "design pattern", "refactor", "software design",
+                                    "reverse engineer", "explain code", "code review", "system design",
+                                    "write code", "implement", "build", "create feature", "fix bug", "debug"]
+        }
+        configs["qa_specialist"] = {
+            "title": "QA Specialist & Regression Tester",
+            "domain": "Test execution, code inspection, regression verification, quality assurance",
+            "discord_channel": "val",
+            "max_subagents": 1,
+            "delegation_triggers": ["run test", "pytest", "run unit test", "verify work", "inspect code",
+                                    "code inspection", "quality assurance", "qa check", "test suite"]
+        }
+        configs["ops_runner"] = {
+            "title": "Operations Runner",
+            "domain": "Quick operational tasks, service management, system status, reports, one-off commands, data fetching",
+            "discord_channel": "kira",
+            "max_subagents": 0,
+            "delegation_triggers": ["start service", "stop service", "restart", "check status", "pull report",
+                                    "system status", "disk space", "memory usage", "process list",
+                                    "fetch data", "run script", "service health", "log check"]
+        }
+        configs["grace_timekeeper"] = {
+            "title": "Task Health Monitor",
+            "domain": "Background task health checks, stalled task detection",
+            "discord_channel": None,
+            "max_subagents": 0,
+            "delegation_triggers": ["stalled task", "health check", "inactive task", "monitor tasks", "grace", "timekeeper"]
+        }
+        configs["quiet_observer"] = {
+            "title": "Conversation Pattern Analyzer",
+            "domain": "Conversation log analysis, pattern detection, opportunity discovery",
+            "discord_channel": None,
+            "max_subagents": 0,
+            "delegation_triggers": ["conversation log", "pattern analysis", "observe", "opportunity", "quiet observer"]
+        }
+        configs["meta_evaluator"] = {
+            "title": "Post-Mortem Analyst",
+            "domain": "Error analysis, post-mortem evaluations, log metrics",
+            "discord_channel": None,
+            "max_subagents": 0,
+            "delegation_triggers": ["post-mortem", "error analysis", "evaluate errors", "meta evaluation", "log metrics"]
+        }
+
+        # Conditional specialists (only present if their workspace resources exist)
+        if (proj_root / "scratch" / "run_gmail_sync.py").exists():
+            configs["gmail_sync"] = {
+                "title": "Gmail & Morgen Sync Agent",
+                "domain": "Email synchronization, inbox checks, Morgen task sync",
+                "discord_channel": None,
+                "max_subagents": 0,
+                "delegation_triggers": ["gmail", "email check", "inbox", "morgen sync", "sync email", "new mail", "check mail"]
+            }
+        if (proj_root / "stock_game").exists():
+            configs["stock_trader"] = {
+                "title": "Stock Portfolio Manager",
+                "domain": "Stock portfolio checks, rebalancing, trading strategy",
+                "discord_channel": None,
+                "max_subagents": 0,
+                "delegation_triggers": ["stock", "portfolio", "rebalance", "trading", "shares", "stock game"]
+            }
+        if (proj_root / "solar").exists() or (proj_root.parent / "solar").exists():
+            configs["solar_monitor"] = {
+                "title": "Solar & Energy Monitor",
+                "domain": "Solar generation, grid power, battery metrics",
+                "discord_channel": None,
+                "max_subagents": 0,
+                "delegation_triggers": ["solar", "battery", "grid power", "power generation", "solar panel"]
+            }
+
+        self._configs_cache = configs
+        return configs
+
+    def _get_workspace_root(self) -> Path:
+        """Returns the workspace root directory, cached after first resolution.
+        
+        Resolves from __file__ path (src/agent/core/registry.py → workspace root)
+        and caches the result to avoid repeated path traversal.
+        """
+        if self._workspace_root is None:
+            self._workspace_root = Path(__file__).resolve().parent.parent.parent
+        return self._workspace_root
+
+    def get_specialist_roster(self) -> str:
+        """Returns a formatted specialist roster string for injection into the coordinator's system prompt.
+        
+        This dynamically generates the roster from specialist_configs so adding a new specialist
+        automatically updates the coordinator's knowledge of the team.
+        """
+        configs = self._get_specialist_configs()
+        lines = []
+        for profile, cfg in configs.items():
+            channel_info = f" | Channel: #{cfg['discord_channel']}" if cfg.get('discord_channel') else ""
+            lines.append(
+                f"- {cfg['title']} (profile: \"{profile}\")\n"
+                f"  Domain: {cfg['domain']}{channel_info}"
+            )
+        return "\n".join(lines)
+
+    def get_specialist_channel_map(self) -> Dict[str, str]:
+        """Returns a mapping of discord_channel_name -> profile_name for all specialists with channels."""
+        configs = self._get_specialist_configs()
+        return {
+            cfg["discord_channel"]: profile
+            for profile, cfg in configs.items()
+            if cfg.get("discord_channel")
+        }
 
     def suggest_specialist(self, prompt: str) -> Optional[str]:
         """Given a user prompt, suggests the most relevant specialist agent profile.
         
         Returns the specialist profile name if a strong match is found, None otherwise.
-        This enables automatic delegation routing: if a specialist exists for the task,
-        delegate to them instead of doing exploratory codebase searches.
+        Uses word-boundary regex matching against delegation_triggers to avoid
+        false positives (e.g. 'stock the kitchen' won't match 'stock_trader').
         """
         if not prompt:
             return None
         
         prompt_lower = prompt.lower()
+        configs = self._get_specialist_configs()
         
-        proj_root = Path(__file__).resolve().parent.parent.parent
-        delegation_triggers = {}
-        
-        if (proj_root / "scratch" / "run_gmail_sync.py").exists():
-            delegation_triggers["gmail_sync"] = ["gmail", "email check", "inbox", "morgen sync", "sync email", "new mail", "check mail"]
-            
-        if (proj_root / "stock_game").exists():
-            delegation_triggers["stock_trader"] = ["stock", "portfolio", "rebalance", "trading", "shares", "stock game"]
-            
-        delegation_triggers["grace_timekeeper"] = ["stalled task", "health check", "inactive task", "monitor tasks", "grace", "timekeeper"]
-        
-        if (proj_root / "solar").exists() or (proj_root.parent / "solar").exists():
-            delegation_triggers["solar_monitor"] = ["solar", "battery", "grid power", "power generation", "solar panel"]
-            
-        delegation_triggers["quiet_observer"] = ["conversation log", "pattern analysis", "observe", "opportunity", "quiet observer"]
-        delegation_triggers["meta_evaluator"] = ["post-mortem", "error analysis", "evaluate errors", "meta evaluation", "log metrics"]
-        delegation_triggers["lacie"] = ["architect", "architecture", "design pattern", "refactor", "software design", "reverse engineer", "explain code", "code review", "system design"]
-        delegation_triggers["qa_specialist"] = ["run test", "pytest", "run unit test", "verify work", "inspect code", "code inspection", "quality assurance", "qa check", "test suite"]
-        
-        for profile, triggers in delegation_triggers.items():
-            if any(trigger in prompt_lower for trigger in triggers):
-                return profile
+        for profile, cfg in configs.items():
+            triggers = cfg.get("delegation_triggers", [])
+            for trigger in triggers:
+                # Multi-word triggers use substring match (already specific enough)
+                # Single-word triggers use word-boundary regex to prevent false positives
+                if " " in trigger:
+                    if trigger in prompt_lower:
+                        return profile
+                else:
+                    if re.search(r'\b' + re.escape(trigger) + r'\b', prompt_lower):
+                        return profile
         
         return None
 

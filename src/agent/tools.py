@@ -1078,128 +1078,98 @@ async def spawn_subagent(
     stub_files: Optional[List[str]] = None,
     agent_profile: Optional[str] = None
 ) -> str:
-    """Spawns an isolated subagent inside a sandbox to perform a coding task.
-    The tool waits for the subagent to complete and returns its summary report.
+    """Spawns a subagent with full tool access to perform a task in the workspace.
+    
+    The subagent runs through the full Ada Task Engine pipeline with real tools
+    (run_command, file edits, etc.) and works directly in the workspace. It waits
+    for the subagent to complete and returns its response.
     
     Args:
         prompt: Detailed instructions for the subagent's task.
-        target_files: Relative paths of files the subagent needs to modify or read.
-        stub_files: Relative paths of files whose signatures/interfaces are needed as context.
-        agent_profile: Optional profile name (e.g. grace_timekeeper) to load specialized instructions.
+        target_files: File paths to include as context in the prompt (informational only — the subagent has full workspace access).
+        stub_files: File paths whose interfaces should be summarized as context.
+        agent_profile: Optional profile name (e.g. 'lacie', 'qa_specialist') to load specialized personality and instructions.
     """
     import uuid
-    import shutil
-    from agent.keyless import KeylessAgyAgent
+    import aiohttp
     from agent.core.registry import tool_registry
     
-    profile_prefix = f"{agent_profile}-" if agent_profile else ""
-    sandbox_id = f"{profile_prefix}{uuid.uuid4()}"
-    sandbox_dir = Path("/tmp") / f"subagent_sandbox_{sandbox_id}"
-    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    profile_prefix = f"{agent_profile}-" if agent_profile else "sub-"
+    subagent_session = f"subagent-{profile_prefix}{uuid.uuid4().hex[:8]}"
     
-    current_workspace = os.getcwd()
-    
-    # 1. Copy target files/folders fully
-    if target_files:
-        for rel_path in target_files:
-            src = Path(current_workspace) / rel_path
-            dest = sandbox_dir / rel_path
-            if src.exists():
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    if src.is_dir():
-                        shutil.copytree(src, dest, symlinks=True)
-                    else:
-                        shutil.copy2(src, dest)
-                except Exception as e:
-                    print(f"[SPAWN_SUBAGENT] Error copying target {rel_path}: {e}")
-                    
-    # 2. Copy stubs
-    if stub_files:
-        for rel_path in stub_files:
-            src = Path(current_workspace) / rel_path
-            dest = sandbox_dir / rel_path
-            if src.exists() and src.is_file():
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    stub_content = generate_interface_stub(str(src))
-                    with open(dest, "w", encoding="utf-8") as f:
-                        f.write(stub_content)
-                except Exception as e:
-                    print(f"[SPAWN_SUBAGENT] Error stubbing {rel_path}: {e}")
-                    
-    # 3. Log start
+    # Log start
     from agent.memory import active_session_id_var
     parent_session_id = active_session_id_var.get()
-    memory.log_subagent_message(sandbox_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {prompt}", parent_session_id=parent_session_id)
+    memory.log_subagent_message(subagent_session, "parent", f"Spawning tooled subagent ({agent_profile or 'generic'}) with prompt: {prompt}", parent_session_id=parent_session_id)
     
-    # 4. Resolve system instructions based on agent_profile
-    specialist_inst = tool_registry.resolve_subagent_profile(agent_profile)
-    if specialist_inst:
-        subagent_system_instructions = (
-            f"{specialist_inst}\n\n"
-            "CONTRACT: You MUST return your final response ONLY as a raw JSON object matching the following structure:\n"
-            "{\n"
-            '  "status": "success" | "failed",\n'
-            '  "files_modified": ["list of modified files"],\n'
-            '  "summary_of_changes": "short description of changes",\n'
-            '  "validation_result": "output of run tests/validation"\n'
-            "}\n"
-            "Do not wrap your response in markdown code blocks. Output ONLY raw JSON."
-        )
-    else:
-        subagent_system_instructions = (
-            "You are a subagent working in an isolated sandbox. Complete the requested task.\n"
-            "CONTRACT: You MUST return your final response ONLY as a raw JSON object matching the following structure:\n"
-            "{\n"
-            '  "status": "success" | "failed",\n'
-            '  "files_modified": ["list of modified files"],\n'
-            '  "summary_of_changes": "short description of changes",\n'
-            '  "validation_result": "output of run tests/validation"\n'
-            "}\n"
-            "Do not wrap your response in markdown code blocks. Output ONLY raw JSON."
-        )
+    # Build enriched prompt with file context
+    enriched_prompt = prompt
+    if target_files:
+        enriched_prompt += f"\n\n[TARGET FILES]\nThe following files are relevant to this task:\n" + "\n".join([f"- {f}" for f in target_files]) + "\n[END TARGET FILES]"
+    if stub_files:
+        stub_context = []
+        for rel_path in stub_files:
+            src = Path(os.getcwd()) / rel_path
+            if src.exists() and src.is_file():
+                try:
+                    stub_content = generate_interface_stub(str(src))
+                    stub_context.append(f"### {rel_path}\n```\n{stub_content}\n```")
+                except Exception:
+                    pass
+        if stub_context:
+            enriched_prompt += "\n\n[INTERFACE STUBS]\n" + "\n".join(stub_context) + "\n[END INTERFACE STUBS]"
     
-    agent = KeylessAgyAgent(
-        model="gemini-1.5-flash",
-        system_instructions=subagent_system_instructions,
-        conversation_id=sandbox_id,
-        cwd=str(sandbox_dir),
-        timeout=300.0
-    )
+    # Build API payload — uses the full /api/chat pipeline with real tools
+    payload = {
+        "prompt": enriched_prompt,
+        "session_id": subagent_session
+    }
+    if agent_profile:
+        payload["agent_profile"] = agent_profile
     
     try:
-        async with agent as sub_conn:
-            response = await sub_conn.chat(prompt)
-            output = ""
-            async for chunk in response:
-                output += chunk
-            memory.log_subagent_message(sandbox_id, "subagent", f"[SUCCESS] Subagent completed: {output}")
-            
-            # Copy modified files back to the main workspace on success
-            try:
-                res_data = _extract_json_block(output)
-                if res_data and res_data.get("status") == "success":
-                    files_to_copy = res_data.get("files_modified", [])
-                    for rel_path in files_to_copy:
-                        sandbox_file = sandbox_dir / rel_path
-                        workspace_file = Path(current_workspace) / rel_path
-                        if sandbox_file.exists() and sandbox_file.is_file():
-                            workspace_file.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(sandbox_file, workspace_file)
-                            print(f"[SPAWN_SUBAGENT] Copied modified file back to workspace: {rel_path}")
-            except Exception as e:
-                print(f"[SPAWN_SUBAGENT] Warning: failed to copy back modified files: {e}")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600.0)) as session:
+            async with session.post("http://localhost:8050/api/chat", json=payload) as resp:
+                if resp.status != 200:
+                    err_text = await resp.text()
+                    err_msg = f"[FAILED] Subagent API returned HTTP {resp.status}: {err_text}"
+                    memory.log_subagent_message(subagent_session, "subagent", err_msg)
+                    return json.dumps({
+                        "status": "failed",
+                        "summary": err_msg
+                    })
                 
-            return output
+                # Stream SSE response and collect the final text
+                response_text = ""
+                async for line in resp.content:
+                    line_str = line.decode("utf-8").strip()
+                    if not line_str.startswith("data: "):
+                        continue
+                    data_payload = line_str[6:].strip()
+                    if data_payload == "[DONE]":
+                        break
+                    try:
+                        event_data = json.loads(data_payload)
+                        if event_data.get("type") == "chunk":
+                            response_text += event_data.get("content", "")
+                        elif event_data.get("type") == "error":
+                            response_text = f"[ERROR] {event_data.get('content', 'Unknown error')}"
+                            break
+                    except Exception:
+                        pass
+                
+                if not response_text:
+                    response_text = "Subagent completed but returned no output."
+                
+                memory.log_subagent_message(subagent_session, "subagent", f"[SUCCESS] Subagent completed: {response_text[:500]}")
+                return response_text
+                
     except Exception as e:
         err_msg = f"[FAILED] Subagent execution failed: {e}"
-        memory.log_subagent_message(sandbox_id, "subagent", err_msg)
+        memory.log_subagent_message(subagent_session, "subagent", err_msg)
         return json.dumps({
             "status": "failed",
-            "files_modified": [],
-            "summary_of_changes": "",
-            "validation_result": err_msg
+            "summary": err_msg
         })
 
 

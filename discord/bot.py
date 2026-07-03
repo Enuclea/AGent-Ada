@@ -1223,8 +1223,10 @@ def get_specialist_profile_for_channel(channel_name: str) -> Optional[str]:
         return "solar_monitor"
     if "lacie" in c_name or "architect" in c_name:
         return "lacie"
-    if "qa" in c_name or "test" in c_name or "val" in c_name:
+    if "qa" in c_name or "val" in c_name:
         return "qa_specialist"
+    if "kira" in c_name or "ops" in c_name:
+        return "ops_runner"
     return None
 
 async def handle_agent_hook_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None):
@@ -1247,7 +1249,7 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     chan_cfg = bot_config.get_channel_config(channel_id_str) if channel_id_str else None
     channel_purpose = chan_cfg.get("purpose") if chan_cfg else None
 
-    is_control_room = (message.guild is None) or (channel_purpose == "developer-assistant") or (channel.name in ["control-room", "bot-admin", "🤖・bot-admin", "lacie", "val", "qa"])
+    is_control_room = (message.guild is None) or (channel_purpose == "developer-assistant") or (channel.name in ["control-room", "bot-admin", "🤖・bot-admin", "lacie", "val", "qa", "kira"])
     full_tooling_authorized = is_boss and is_control_room
 
     session_id = get_channel_session_id(channel.id)
@@ -1271,7 +1273,14 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     is_specialist = (profile_name is not None)
     if placeholder is None:
         if is_specialist:
-            placeholder_text = "*Lacie is looking over the system...*" if profile_name == "lacie" else "*Val is booting up the test harness...*"
+            if profile_name == "lacie":
+                placeholder_text = "*Lacie is looking over the system...*"
+            elif profile_name == "qa_specialist":
+                placeholder_text = "*Val is booting up the test harness...*"
+            elif profile_name == "ops_runner":
+                placeholder_text = "*Kira is pulling up a terminal...*"
+            else:
+                placeholder_text = "*Specialist is connecting...*"
         else:
             placeholder_text = "🔄 **Acknowledged**: Received command. Connecting to local AGent daemon..."
         placeholder = await channel.send(placeholder_text)
