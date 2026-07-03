@@ -121,7 +121,8 @@ def log_subagent_message(
         timestamp = datetime.now(timezone.utc).isoformat()
         
         if not parent_session_id:
-            parent_session_id = _db.active_session_id_var.get()
+            import os
+            parent_session_id = _db.active_session_id_var.get() or os.environ.get("ACTIVE_SESSION_ID")
             
         if parent_session_id:
             cursor.execute(

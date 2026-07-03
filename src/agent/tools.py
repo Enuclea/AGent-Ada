@@ -1109,7 +1109,7 @@ async def spawn_subagent(
 
     # Log start
     from agent.memory import active_session_id_var
-    parent_session_id = active_session_id_var.get()
+    parent_session_id = active_session_id_var.get() or os.environ.get("ACTIVE_SESSION_ID")
     memory.log_subagent_message(subagent_session, "parent", f"Spawning tooled subagent ({agent_profile or 'generic'}) with prompt: {prompt}", parent_session_id=parent_session_id)
     
     # Build enriched prompt with file context
@@ -1299,7 +1299,7 @@ async def run_boardroom(
     from agent.core.registry import tool_registry
     from agent.memory import active_session_id_var
     
-    parent_session_id = active_session_id_var.get()
+    parent_session_id = active_session_id_var.get() or os.environ.get("ACTIVE_SESSION_ID")
     boardroom_id = str(uuid.uuid4())
     sandbox_dir = Path("/tmp") / f"boardroom_sandbox_{boardroom_id}"
     await asyncio.to_thread(sandbox_dir.mkdir, parents=True, exist_ok=True)

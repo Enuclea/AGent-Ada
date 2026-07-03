@@ -177,6 +177,14 @@ class KeylessAgyResponse:
                     task_manager.update_active_task_status(self.task_id, "failed")
                 except Exception:
                     pass
+        except asyncio.CancelledError:
+            if self.task_id:
+                try:
+                    from agent.core import task_manager
+                    task_manager.update_active_task_status(self.task_id, "failed")
+                except Exception:
+                    pass
+            raise
         except Exception as e:
             self.stdout_lines.append(f"\n[Error: {e}]\n")
             if self.task_id:
@@ -269,6 +277,14 @@ class KeylessAgyResponse:
                     except Exception:
                         pass
                 yield err_msg
+            except asyncio.CancelledError:
+                if self.task_id:
+                    try:
+                        from agent.core import task_manager
+                        task_manager.update_active_task_status(self.task_id, "failed")
+                    except Exception:
+                        pass
+                raise
             except Exception as e:
                 if self.task_id:
                     try:
