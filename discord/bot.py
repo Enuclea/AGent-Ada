@@ -1233,7 +1233,7 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     chan_cfg = bot_config.get_channel_config(channel_id_str) if channel_id_str else None
     channel_purpose = chan_cfg.get("purpose") if chan_cfg else None
 
-    is_control_room = (message.guild is None) or (channel_purpose == "developer-assistant") or (channel.name in ["control-room", "bot-admin", "🤖・bot-admin"])
+    is_control_room = (message.guild is None) or (channel_purpose == "developer-assistant") or (channel.name in ["control-room", "bot-admin", "🤖・bot-admin", "lacie"])
     full_tooling_authorized = is_boss and is_control_room
 
     session_id = get_channel_session_id(channel.id)
