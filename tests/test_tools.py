@@ -8,14 +8,23 @@ from agent import tools
 @pytest.fixture
 def temp_skills_dir():
     """Fixture that redirects SKILLS_DIR to a temporary directory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        with mock.patch("agent.tools.SKILLS_DIR", tmp_path), \
-             mock.patch("agent.tools.WORKSPACE_SKILLS_DIR", tmp_path / "workspace_skills"), \
-             mock.patch("agent.tools.OPENCLAW_EXTS_DIR", tmp_path / "openclaw_exts"), \
-             mock.patch("agent.tools.OPENCLAW_SKILLS_DIR", tmp_path / "openclaw_skills"), \
-             mock.patch("agent.tools.HERMES_SKILLS_DIR", tmp_path / "hermes_skills"):
-            yield tmp_path
+    import os
+    old_env = os.environ.get("ADA_SKILL_INSTALL_CONFIRMED")
+    os.environ["ADA_SKILL_INSTALL_CONFIRMED"] = "1"
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            with mock.patch("agent.tools.SKILLS_DIR", tmp_path), \
+                 mock.patch("agent.tools.WORKSPACE_SKILLS_DIR", tmp_path / "workspace_skills"), \
+                 mock.patch("agent.tools.OPENCLAW_EXTS_DIR", tmp_path / "openclaw_exts"), \
+                 mock.patch("agent.tools.OPENCLAW_SKILLS_DIR", tmp_path / "openclaw_skills"), \
+                 mock.patch("agent.tools.HERMES_SKILLS_DIR", tmp_path / "hermes_skills"):
+                yield tmp_path
+    finally:
+        if old_env is None:
+            os.environ.pop("ADA_SKILL_INSTALL_CONFIRMED", None)
+        else:
+            os.environ["ADA_SKILL_INSTALL_CONFIRMED"] = old_env
 
 def test_create_and_list_skills(temp_skills_dir):
     """Test creating a skill and listing it afterwards."""
@@ -288,7 +297,8 @@ def test_repository_skills(temp_skills_dir, mock_external_dirs):
     assert "Instructions here." in view_res
     
     # Verify install_repository_skill
-    install_res = tools.install_repository_skill("apple-notes")
+    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
+        install_res = tools.install_repository_skill("apple-notes")
     assert "Successfully downloaded and installed skill" in install_res
     
     installed_skill_folder = temp_skills_dir / "apple-notes"
@@ -296,6 +306,242 @@ def test_repository_skills(temp_skills_dir, mock_external_dirs):
     assert (installed_skill_folder / "SKILL.md").exists()
     with open(installed_skill_folder / "SKILL.md", "r") as f:
         assert "Manage Apple Notes" in f.read()
+
+
+def test_is_safe_path(temp_skills_dir):
+    """Test the _is_safe_path helper function."""
+    base = temp_skills_dir / "base"
+    base.mkdir()
+    
+    # Safe path
+    safe_child = base / "child"
+    assert tools._is_safe_path(base, safe_child)
+    
+    # Unsafe paths
+    assert not tools._is_safe_path(base, base)
+    assert not tools._is_safe_path(base, base / ".." / "other")
+    assert not tools._is_safe_path(base, "/etc/passwd")
+
+
+def test_path_traversal_discovery(temp_skills_dir, mock_external_dirs):
+    """Test directory traversal detection during repository skills discovery."""
+    hermes_path = mock_external_dirs["hermes_skills"]
+    
+    # Set up a malicious Herms skill escaping directory
+    skill_folder = hermes_path / ".." / "malicious"
+    skill_folder.mkdir(parents=True, exist_ok=True)
+    skill_md_content = "---\nname: malicious\ndescription: Malicious\n---\n# Malicious"
+    with open(skill_folder / "SKILL.md", "w") as f:
+        f.write(skill_md_content)
+        
+    # The discovery process should skip this skill because its parent folder is not strictly inside HERMES_SKILLS_DIR
+    skills = tools._find_repository_skills()
+    assert "malicious" not in skills
+
+
+def test_view_repository_skill_code_traversal(temp_skills_dir, mock_external_dirs):
+    """Test view_repository_skill_code traversal detection."""
+    hermes_path = mock_external_dirs["hermes_skills"]
+    skill_folder = hermes_path / "malicious"
+    skill_folder.mkdir(parents=True, exist_ok=True)
+    skill_md_content = "---\nname: malicious\ndescription: Malicious\n---\n# Malicious"
+    with open(skill_folder / "SKILL.md", "w") as f:
+        f.write(skill_md_content)
+        
+    # Modify the cached path under mock to force a traversal path view attempt
+    results = tools._find_repository_skills()
+    results["malicious"] = {
+        "name": "malicious",
+        "type": "hermes",
+        "path": hermes_path / ".." / "malicious",
+        "description": "Malicious"
+    }
+    
+    with mock.patch("agent.tools._find_repository_skills", return_value=results):
+        res = tools.view_repository_skill_code("malicious")
+        assert "Error: Directory traversal attempt detected." in res
+
+
+def test_install_repository_skill_traversal(temp_skills_dir, mock_external_dirs):
+    """Test install_repository_skill traversal detection on dest_folder."""
+    hermes_path = mock_external_dirs["hermes_skills"]
+    skill_folder = hermes_path / "good-skill"
+    skill_folder.mkdir(parents=True, exist_ok=True)
+    skill_md_content = "---\nname: good-skill\ndescription: Good\n---\n# Good"
+    with open(skill_folder / "SKILL.md", "w") as f:
+        f.write(skill_md_content)
+        
+    # Attempt to install to traversal location via skill name
+    # We mock _find_repository_skills to return a skill whose name has traversal elements
+    results = tools._find_repository_skills()
+    results["../malicious"] = {
+        "name": "../malicious",
+        "type": "hermes",
+        "path": skill_folder,
+        "description": "Good"
+    }
+    with mock.patch("agent.tools._find_repository_skills", return_value=results):
+        res = tools.install_repository_skill("../malicious")
+        assert "Error: Directory traversal attempt detected." in res
+
+
+def test_install_repository_skill_hitl(temp_skills_dir, mock_external_dirs):
+    """Test Human-in-the-loop (HITL) prompt and confirmation mechanism."""
+    hermes_path = mock_external_dirs["hermes_skills"]
+    skill_folder = hermes_path / "test-hitl"
+    skill_folder.mkdir(parents=True, exist_ok=True)
+    skill_md_content = "---\nname: test-hitl\ndescription: Test HITL\n---\n# Test HITL"
+    with open(skill_folder / "SKILL.md", "w") as f:
+        f.write(skill_md_content)
+        
+    # Case 1: ADA_SKILL_INSTALL_CONFIRMED = "1" -> Installs immediately
+    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
+        res = tools.install_repository_skill("test-hitl")
+        assert "Successfully downloaded and installed" in res
+        
+    # Cleanup
+    import shutil
+    shutil.rmtree(temp_skills_dir / "test-hitl", ignore_errors=True)
+
+    # Case 2: ADA_SKILL_INSTALL_CONFIRMED != "1" and sys.stdin.isatty() is True
+    # User confirms 'y'
+    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
+         mock.patch("sys.stdin.isatty", return_value=True), \
+         mock.patch("builtins.input", return_value="y") as mock_input:
+        res = tools.install_repository_skill("test-hitl")
+        assert "Successfully downloaded and installed" in res
+        mock_input.assert_called_once()
+        
+    shutil.rmtree(temp_skills_dir / "test-hitl", ignore_errors=True)
+    
+    # Case 3: User denies 'n'
+    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
+         mock.patch("sys.stdin.isatty", return_value=True), \
+         mock.patch("builtins.input", return_value="n") as mock_input:
+        res = tools.install_repository_skill("test-hitl")
+        assert "Error: Skill installation cancelled by user." in res
+        
+    # Case 4: ADA_SKILL_INSTALL_CONFIRMED != "1" and sys.stdin.isatty() is False
+    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
+         mock.patch("sys.stdin.isatty", return_value=False):
+        res = tools.install_repository_skill("test-hitl")
+        assert "Error: Explicit out-of-band human confirmation required" in res
+
+
+def test_run_command_environment_scrubbing():
+    """Test scrubbing sensitive tokens in run_command when active skills directories are referenced."""
+    import asyncio
+    
+    async def run_test():
+        env_vars = {
+            "DISCORD_BOT_TOKEN": "secret-discord",
+            "MAGICA_API": "secret-magica",
+            "GEMINI_API_KEY": "secret-gemini",
+            "OPENAI_API_KEY": "secret-openai",
+            "ANTHROPIC_API_KEY": "secret-anthropic",
+            "SAFE_VAR": "keep-me"
+        }
+        
+        mock_proc = mock.AsyncMock()
+        mock_proc.communicate.return_value = (b"output", b"")
+        
+        with mock.patch("asyncio.create_subprocess_shell", new_callable=mock.AsyncMock) as mock_shell, \
+             mock.patch.dict("os.environ", env_vars):
+             
+            mock_shell.return_value = mock_proc
+            
+            # Scenario A: Command does not reference skills paths -> env passed is None (inherits)
+            await tools.run_command("echo hello")
+            mock_shell.assert_called_with("echo hello", stdout=mock.ANY, stderr=mock.ANY, env=None)
+            
+            # Scenario B: Command references skills paths -> env passed has keys scrubbed
+            mock_shell.reset_mock()
+            await tools.run_command("python .agent/skills/my-skill/run.py")
+            
+            called_args, called_kwargs = mock_shell.call_args
+            passed_env = called_kwargs.get("env")
+            assert passed_env is not None
+            assert "SAFE_VAR" in passed_env
+            assert passed_env["SAFE_VAR"] == "keep-me"
+            
+            for key in ["DISCORD_BOT_TOKEN", "MAGICA_API", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]:
+                assert key not in passed_env
+                
+    asyncio.run(run_test())
+
+
+def test_create_and_improve_skill_hitl_confirmations(temp_skills_dir):
+    """Test that create_agent_skill and improve_agent_skill require HITL confirmation when not confirmed."""
+    import os
+    from unittest.mock import patch
+    
+    # Temporarily remove environmental confirmation
+    with patch.dict(os.environ, {}):
+        if "ADA_SKILL_INSTALL_CONFIRMED" in os.environ:
+            del os.environ["ADA_SKILL_INSTALL_CONFIRMED"]
+            
+        # 1. Non-interactive (sys.stdin.isatty() is False)
+        with patch("sys.stdin.isatty", return_value=False):
+            res_create = tools.create_agent_skill(
+                skill_name="test-hitl",
+                description="test description",
+                instructions="test instructions"
+            )
+            assert "out-of-band human confirmation required" in res_create
+            
+            # Since skill wasn't created, we can't improve it, but let's test improve with a mock/existing folder
+            (temp_skills_dir / "test-hitl").mkdir(parents=True, exist_ok=True)
+            res_improve = tools.improve_agent_skill(
+                skill_name="test-hitl",
+                description="new description"
+            )
+            assert "out-of-band human confirmation required" in res_improve
+
+        # 2. Interactive (sys.stdin.isatty() is True) - User declines
+        with patch("sys.stdin.isatty", return_value=True), \
+             patch("builtins.input", return_value="n"):
+            res_create = tools.create_agent_skill(
+                skill_name="test-hitl-decline",
+                description="test description",
+                instructions="test instructions"
+            )
+            assert "cancelled by user" in res_create
+            
+            res_improve = tools.improve_agent_skill(
+                skill_name="test-hitl",
+                description="new description"
+            )
+            assert "cancelled by user" in res_improve
+
+        # 3. Interactive (sys.stdin.isatty() is True) - User accepts
+        with patch("sys.stdin.isatty", return_value=True), \
+             patch("builtins.input", return_value="y"):
+            res_create = tools.create_agent_skill(
+                skill_name="test-hitl-accept",
+                description="test description",
+                instructions="test instructions"
+            )
+            assert "Successfully created skill" in res_create
+            
+            res_improve = tools.improve_agent_skill(
+                skill_name="test-hitl-accept",
+                description="new description"
+            )
+            assert "Successfully updated skill" in res_improve
+
+
+def test_subprocess_sandboxing_landlock():
+    """Test that commands referencing skill paths are wrapped in the sandbox and executed."""
+    import asyncio
+    
+    async def run_test():
+        cmd = "python3 -c 'import os; print(\"landlock_test_ok\")' # .agent/skills"
+        res = await tools.run_command(cmd)
+        assert "landlock_test_ok" in res
+
+    asyncio.run(run_test())
+
+
 
 
 

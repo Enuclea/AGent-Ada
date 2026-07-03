@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import agent.db as _db
+import agent.storage.db as _db
 
 
 def add_active_task(task_id: str, name: str, details: str) -> None:
@@ -240,7 +240,7 @@ def ensure_plugin_scheduled_task(name: str, prompt: str, cron_expr: str) -> None
     import uuid
     
     try:
-        from agent.web import get_next_cron_run
+        from agent.interfaces.web import get_next_cron_run
         next_run_dt = get_next_cron_run(cron_expr, datetime.now(timezone.utc))
         next_run = next_run_dt.isoformat()
     except Exception:

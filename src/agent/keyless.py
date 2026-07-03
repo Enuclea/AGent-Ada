@@ -75,7 +75,33 @@ def get_harness_path() -> Optional[str]:
     # Check system PATH for 'agy'
     agy_path = shutil.which("agy")
     if agy_path:
-        return agy_path
+        try:
+            cwd_path = Path.cwd().resolve()
+            resolved_path = Path(agy_path).resolve()
+            
+            is_in_cwd = cwd_path in resolved_path.parents or resolved_path == cwd_path
+            
+            trusted_dirs = [
+                Path("/usr/bin").resolve(),
+                Path("/usr/local/bin").resolve(),
+                Path("/bin").resolve(),
+                Path("/sbin").resolve(),
+                Path("~/.local/bin").expanduser().resolve(),
+                Path("~/.gemini/antigravity-cli/bin").expanduser().resolve(),
+            ]
+            is_trusted_parent = resolved_path.parent in trusted_dirs
+            
+            if is_in_cwd or not is_trusted_parent:
+                import logging
+                logging.warning(
+                    f"agy binary path {agy_path} (resolved to {resolved_path}) failed security check. "
+                    f"is_in_cwd={is_in_cwd}, is_trusted_parent={is_trusted_parent}."
+                )
+            else:
+                return agy_path
+        except Exception as e:
+            import logging
+            logging.warning(f"Error resolving agy path: {e}")
         
     # Fallback to standard local bin paths
     user_home = Path.home()

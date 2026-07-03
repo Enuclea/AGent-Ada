@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.markup import escape
 
-from agent import agent_loop
+from agent.core import agent_loop
 
 console = Console()
 

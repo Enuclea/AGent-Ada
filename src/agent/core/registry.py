@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Callable, Any, Optional
 from agent import tools
-from agent.agent_types import SkillInfo
+from agent.core.agent_types import SkillInfo
 
 class ToolRegistry:
     def __init__(self) -> None:
@@ -66,6 +66,8 @@ class ToolRegistry:
             if path.exists() and path.is_dir():
                 for folder in path.iterdir():
                     if folder.is_dir():
+                        if not tools._is_safe_path(path, folder):
+                            continue
                         folder_resolved = str(folder.resolve())
                         if folder_resolved in seen_paths:
                             continue

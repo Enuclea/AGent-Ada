@@ -89,3 +89,42 @@ async def test_grok_final_fallback():
         
         response = await agent.chat("everything is down")
         assert response.text == "Grok response fallback"
+
+
+def test_get_harness_path_security():
+    """Verify security boundaries of the agy binary path returned by get_harness_path."""
+    from agent.keyless import get_harness_path
+    from unittest.mock import patch
+    
+    # Bypass ANTIGRAVITY_HARNESS_PATH env var
+    with patch.dict(os.environ, {}):
+        if "ANTIGRAVITY_HARNESS_PATH" in os.environ:
+            del os.environ["ANTIGRAVITY_HARNESS_PATH"]
+            
+        # Case 1: shutil.which returns a safe path (e.g. /usr/bin/agy)
+        with patch("shutil.which", return_value="/usr/bin/agy"), \
+             patch("pathlib.Path.exists", return_value=True):
+            res = get_harness_path()
+            assert res == "/usr/bin/agy"
+            
+        # Case 2: shutil.which returns an unsafe path inside working directory (workspace)
+        cwd = os.getcwd()
+        unsafe_workspace_path = os.path.join(cwd, "agy")
+        with patch("shutil.which", return_value=unsafe_workspace_path), \
+             patch("pathlib.Path.exists", return_value=False):
+            res = get_harness_path()
+            assert res is None
+            
+        # Case 3: shutil.which returns an unsafe path in an untrusted directory (e.g. /tmp/agy)
+        with patch("shutil.which", return_value="/tmp/agy"), \
+             patch("pathlib.Path.exists", return_value=False):
+            res = get_harness_path()
+            assert res is None
+            
+        # Case 4: shutil.which returns a safe path under ~/.local/bin/agy
+        local_bin_path = os.path.expanduser("~/.local/bin/agy")
+        with patch("shutil.which", return_value=None), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.is_file", return_value=True):
+            res = get_harness_path()
+            assert res == local_bin_path

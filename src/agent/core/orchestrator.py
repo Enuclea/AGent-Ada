@@ -3,7 +3,7 @@ import asyncio
 from pathlib import Path
 from typing import List, Dict, Callable, Any, Optional
 from agent import memory, tools
-from agent.registry import tool_registry
+from agent.core.registry import tool_registry
 from agent.keyless import KeylessGeminiAPIEndpoint, setup_keyless_environment, KeylessAgyAgent
 from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import policy, hooks
@@ -137,7 +137,7 @@ class OrchestrationService:
 
             # 3b. Inject active checkpoint resume context
             try:
-                from agent.task_manager import get_active_checkpoints, auto_abandon_stale_checkpoints
+                from agent.core.task_manager import get_active_checkpoints, auto_abandon_stale_checkpoints
                 # Auto-abandon checkpoints older than 24h
                 abandoned = auto_abandon_stale_checkpoints(max_age_hours=24)
                 if abandoned > 0:

@@ -46,6 +46,15 @@ def _parse_frontmatter(content: str) -> dict:
             result[k.strip().lower()] = v.strip()
     return result
 
+def _is_safe_path(base_dir, path) -> bool:
+    """Helper that resolves absolute paths and verifies that target path resides strictly within base_dir."""
+    try:
+        base_path = Path(base_dir).resolve()
+        target_path = Path(path).resolve()
+        return base_path in target_path.parents
+    except Exception:
+        return False
+
 def record_memory_fact(fact: str) -> str:
     """Records a new fact, note, or piece of knowledge about the user, project, or task.
     
@@ -92,6 +101,18 @@ def create_agent_skill(
         return "Error: skill_name must contain alphanumeric characters or hyphens."
         
     skill_path = SKILLS_DIR / normalized_name
+    if not _is_safe_path(SKILLS_DIR, skill_path):
+        return "Error: Directory traversal attempt detected."
+        
+    if os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "1":
+        import sys
+        if sys.stdin.isatty():
+            ans = input(f"Explicit human confirmation required to create skill '{skill_name}'. Proceed? [y/N]: ")
+            if ans.strip().lower() not in ("y", "yes"):
+                return "Error: Skill creation cancelled by user."
+        else:
+            return f"Error: Explicit out-of-band human confirmation required to create skill '{skill_name}'."
+        
     skill_path.mkdir(parents=True, exist_ok=True)
     
     # Write SKILL.md with YAML frontmatter
@@ -146,6 +167,8 @@ def get_installed_skills_list() -> List[dict]:
         # 1. Scan recursively for Hermes/AntiGravity style SKILL.md
         for skill_md in path.rglob("SKILL.md"):
             if skill_md.is_file():
+                if not _is_safe_path(path, skill_md.parent):
+                    continue
                 try:
                     with open(skill_md, "r", encoding="utf-8") as f:
                         content = f.read()
@@ -159,6 +182,8 @@ def get_installed_skills_list() -> List[dict]:
         # 2. Scan recursively for OpenClaw extensions (package.json / openclaw.plugin.json)
         for package_json in path.rglob("package.json"):
             if package_json.is_file():
+                if not _is_safe_path(path, package_json.parent):
+                    continue
                 try:
                     with open(package_json, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -206,8 +231,20 @@ def improve_agent_skill(
     """
     normalized_name = re.sub(r"[^a-z0-9\-]", "", skill_name.lower().replace(" ", "-"))
     skill_path = SKILLS_DIR / normalized_name
+    if not _is_safe_path(SKILLS_DIR, skill_path):
+        return "Error: Directory traversal attempt detected."
+        
     if not skill_path.exists():
         return f"Error: Skill '{normalized_name}' does not exist. Use create_agent_skill first."
+
+    if os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "1":
+        import sys
+        if sys.stdin.isatty():
+            ans = input(f"Explicit human confirmation required to modify skill '{skill_name}'. Proceed? [y/N]: ")
+            if ans.strip().lower() not in ("y", "yes"):
+                return "Error: Skill modification cancelled by user."
+        else:
+            return f"Error: Explicit out-of-band human confirmation required to modify skill '{skill_name}'."
 
     skill_md = skill_path / "SKILL.md"
     current_desc = ""
@@ -315,6 +352,8 @@ def _find_repository_skills() -> dict:
     if hermes_dir.is_dir():
         for skill_md in hermes_dir.rglob("SKILL.md"):
             if skill_md.is_file():
+                if not _is_safe_path(HERMES_SKILLS_DIR, skill_md.parent):
+                    continue
                 try:
                     with open(skill_md, "r", encoding="utf-8") as f:
                         content = f.read()
@@ -335,6 +374,8 @@ def _find_repository_skills() -> dict:
     if openclaw_dir.is_dir():
         for package_json in openclaw_dir.rglob("package.json"):
             if package_json.is_file():
+                if not _is_safe_path(OPENCLAW_EXTS_DIR, package_json.parent):
+                    continue
                 try:
                     with open(package_json, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -393,6 +434,10 @@ def view_repository_skill_code(skill_name: str) -> str:
     info = repo_skills[skill_name]
     folder = info["path"]
     
+    base_dir = HERMES_SKILLS_DIR if info.get("type") == "hermes" else OPENCLAW_EXTS_DIR
+    if not _is_safe_path(base_dir, folder):
+        return "Error: Directory traversal attempt detected."
+        
     output = [f"=== Skill: {skill_name} ({info['type']}) ===", f"Location: {folder}\n"]
     
     # Read files in the skill directory
@@ -401,6 +446,8 @@ def view_repository_skill_code(skill_name: str) -> str:
         if p.is_file() and p.suffix.lower() in (".md", ".json", ".txt", ".py", ".js", ".ts", ".sh"):
             # Avoid reading very large node_modules or build folders if any
             if "node_modules" in p.parts or ".git" in p.parts:
+                continue
+            if not _is_safe_path(folder, p):
                 continue
             try:
                 # Read file content
@@ -431,6 +478,18 @@ def install_repository_skill(skill_name: str) -> str:
     src_folder = info["path"]
     dest_folder = SKILLS_DIR / skill_name
     
+    if not _is_safe_path(SKILLS_DIR, dest_folder):
+        return "Error: Directory traversal attempt detected."
+        
+    import sys
+    if os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "1":
+        if sys.stdin.isatty():
+            ans = input(f"Explicit human confirmation required to install skill '{skill_name}'. Proceed? [y/N]: ")
+            if ans.strip().lower() not in ("y", "yes"):
+                return "Error: Skill installation cancelled by user."
+        else:
+            return f"Error: Explicit out-of-band human confirmation required to install skill '{skill_name}'."
+            
     import shutil
     try:
         if dest_folder.exists():
@@ -467,6 +526,8 @@ def get_relevant_skills(prompt: Optional[str] = None) -> str:
         paths.extend([p for p in WORKSPACE_SKILLS_DIR.iterdir() if p.is_dir()])
 
     for folder in paths:
+        if not (_is_safe_path(SKILLS_DIR, folder) or _is_safe_path(WORKSPACE_SKILLS_DIR, folder)):
+            continue
         skill_md = folder / "SKILL.md"
         if skill_md.exists() and skill_md.is_file():
             try:
@@ -714,7 +775,7 @@ def schedule_task(name: str, prompt: str, cron_expr: str) -> str:
     from agent import memory
     
     try:
-        from agent.web import get_next_cron_run
+        from agent.interfaces.web import get_next_cron_run
     except ImportError:
         from datetime import timedelta
         def get_next_cron_run(expr, from_dt):
@@ -769,6 +830,68 @@ def delete_scheduled_task(task_id: str) -> str:
         return f"Error deleting scheduled task: {e}"
 
 
+def _sandbox_command_if_possible(command: str) -> str:
+    """Wraps a shell command in bubblewrap or Landlock sandbox if available on Linux.
+    
+    Isolates file write access to the workspace and /tmp directories, and restricts
+    access to sensitive system files.
+    """
+    import sys
+    import shutil
+    import shlex
+    
+    if sys.platform != "linux":
+        return command
+        
+    workspace_dir = Path.cwd().resolve()
+    
+    # 1. Try Bubblewrap (bwrap)
+    bwrap_path = shutil.which("bwrap")
+    if bwrap_path:
+        bwrap_args = [
+            bwrap_path,
+            "--ro-bind", "/usr", "/usr",
+            "--ro-bind", "/lib", "/lib",
+            "--ro-bind", "/lib64", "/lib64",
+            "--ro-bind", "/bin", "/bin",
+            "--ro-bind", "/sbin", "/sbin",
+            "--ro-bind", "/etc/alternatives", "/etc/alternatives",
+            "--dir", "/tmp",
+            "--dir", "/var",
+            "--proc", "/proc",
+            "--dev", "/dev",
+            "--bind", str(workspace_dir), str(workspace_dir),
+            "--chdir", str(workspace_dir),
+            "--unshare-all",
+            "--die-with-parent"
+        ]
+        bwrap_cmd_str = " ".join(shlex.quote(arg) for arg in bwrap_args)
+        return f"{bwrap_cmd_str} -- bash -c {shlex.quote(command)}"
+        
+    # 2. Try Landlock
+    try:
+        import ctypes
+        import ctypes.util
+        libc_path = ctypes.util.find_library("c")
+        if libc_path:
+            libc = ctypes.CDLL(libc_path, use_errno=True)
+            # Check SYS_LANDLOCK_CREATE_RULESET (syscall 445) support
+            abi = libc.syscall(445, 0, 0, 1 << 0)
+            if abi > 0:
+                python_exe = sys.executable or "python3"
+                landlock_runner = [
+                    python_exe,
+                    "-m", "agent.core.landlock",
+                    str(workspace_dir),
+                    "bash", "-c", command
+                ]
+                return " ".join(shlex.quote(arg) for arg in landlock_runner)
+    except Exception:
+        pass
+        
+    return command
+
+
 async def run_command(command: str) -> str:
     """Runs a shell command in the workspace with a timeout limit of 60 seconds.
     
@@ -776,10 +899,31 @@ async def run_command(command: str) -> str:
         command: The command to execute in the shell.
     """
     import asyncio
+    
+    skills_dir_str = str(SKILLS_DIR.resolve())
+    workspace_skills_dir_str = str(WORKSPACE_SKILLS_DIR.resolve())
+    
+    references_skills = (
+        ".agent/skills" in command or 
+        ".agents/skills" in command or 
+        skills_dir_str in command or 
+        workspace_skills_dir_str in command
+    )
+    
+    env = None
+    if references_skills:
+        env = dict(os.environ)
+        keys_to_scrub = ["DISCORD_BOT_TOKEN", "MAGICA_API", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+        for key in keys_to_scrub:
+            env.pop(key, None)
+            
+        command = _sandbox_command_if_possible(command)
+            
     proc = await asyncio.create_subprocess_shell(
         command,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        stderr=asyncio.subprocess.PIPE,
+        env=env
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
@@ -945,7 +1089,7 @@ async def spawn_subagent(
     import uuid
     import shutil
     from agent.keyless import KeylessAgyAgent
-    from agent.registry import tool_registry
+    from agent.core.registry import tool_registry
     
     profile_prefix = f"{agent_profile}-" if agent_profile else ""
     sandbox_id = f"{profile_prefix}{uuid.uuid4()}"
@@ -1104,7 +1248,7 @@ async def run_boardroom(
     import uuid
     import shutil
     from agent.keyless import KeylessAgyAgent
-    from agent.registry import tool_registry
+    from agent.core.registry import tool_registry
     from agent.memory import active_session_id_var
     
     parent_session_id = active_session_id_var.get()
@@ -1347,7 +1491,7 @@ def checkpoint_task(
     Returns:
         JSON confirmation with the checkpoint ID.
     """
-    from agent.task_manager import save_checkpoint, complete_checkpoint
+    from agent.core.task_manager import save_checkpoint, complete_checkpoint
     
     if phase == "completed":
         success = complete_checkpoint(task_name)
@@ -1396,7 +1540,7 @@ def get_task_checkpoint(task_name: str) -> str:
         JSON with checkpoint data if an in-progress checkpoint exists,
         or {"status": "none"} if no resumable checkpoint is found.
     """
-    from agent.task_manager import get_checkpoint
+    from agent.core.task_manager import get_checkpoint
     
     checkpoint = get_checkpoint(task_name)
     if not checkpoint:

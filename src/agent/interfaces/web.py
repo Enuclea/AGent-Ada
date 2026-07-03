@@ -343,7 +343,7 @@ app = FastAPI(title="Ada Task Engine Dashboard", lifespan=lifespan)
 # Load dynamically registered plugins at module import time
 load_plugins(app)
 
-from agent.orchestrator import orchestration_service
+from agent.core.orchestrator import orchestration_service
 
 # Global state to maintain active session
 active_agents = orchestration_service.active_agents
@@ -720,7 +720,7 @@ async def status_endpoint():
         active_agents.pop("default", None)
         raise HTTPException(status_code=500, detail=f"Agent connection error: {e}")
     
-    from agent.registry import tool_registry
+    from agent.core.registry import tool_registry
     skills = tool_registry.discover_skills()
     skills_list = [{"name": s.name, "description": s.description} for s in skills]
                         
@@ -736,7 +736,7 @@ async def status_endpoint():
 
 @app.get("/api/skills")
 async def get_skills_endpoint():
-    from agent.registry import tool_registry
+    from agent.core.registry import tool_registry
     try:
         skills = tool_registry.discover_skills()
         return {"status": "success", "skills": [s.model_dump() for s in skills]}
@@ -912,7 +912,7 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
     async def run_subagent_background():
         try:
             from agent.keyless import KeylessAgyAgent
-            from agent.registry import tool_registry
+            from agent.core.registry import tool_registry
             
             # Resolve specialist system instructions if agent_profile is specified
             specialist_inst = tool_registry.resolve_subagent_profile(req.agent_profile)
@@ -1443,7 +1443,7 @@ async def execute_scheduled_task(name: str, prompt: str):
     """Executes a scheduled task using an isolated agent instance (not the shared default)."""
     if name == "Meta-Evaluation":
         try:
-            from agent.meta_evaluation import run_meta_evaluation
+            from agent.evaluation.meta_evaluation import run_meta_evaluation
             conversation_id = "meta-eval-run-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
             memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
             
@@ -1458,7 +1458,7 @@ async def execute_scheduled_task(name: str, prompt: str):
 
     if name == "Quiet Observer":
         try:
-            from agent.quiet_observer import run_quiet_observer
+            from agent.observability.quiet_observer import run_quiet_observer
             conversation_id = "quiet-observer-run-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
             memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
             
@@ -1561,7 +1561,7 @@ async def execute_scheduled_task(name: str, prompt: str):
 
     conversation_id = f"sched-{name.lower().replace(' ', '-')}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     try:
-        from agent.registry import tool_registry
+        from agent.core.registry import tool_registry
         profile_name = name.lower().replace(" ", "_").replace("-", "_")
         specialist_inst = tool_registry.resolve_subagent_profile(profile_name)
         if not specialist_inst:
@@ -1571,7 +1571,7 @@ async def execute_scheduled_task(name: str, prompt: str):
 
         # Check for resumable checkpoint
         try:
-            from agent.task_manager import get_checkpoint
+            from agent.core.task_manager import get_checkpoint
             task_key = name.lower().replace(" ", "_").replace("-", "_")
             checkpoint = get_checkpoint(task_key)
             if checkpoint and checkpoint['status'] == 'in_progress':

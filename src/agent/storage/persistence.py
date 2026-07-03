@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-import agent.db as _db
+import agent.storage.db as _db
 
 MEMORY_FILE_PATH = Path.home() / ".agent" / "memory.json"
 
@@ -24,6 +24,7 @@ def load_memory() -> Dict[str, Any]:
     _db.init_db()
     
     # 1. Try to read from SQLite
+    data = {"facts": [], "key_value": {}}
     conn = sqlite3.connect(_db.DB_FILE_PATH)
     try:
         cursor = conn.cursor()
@@ -31,11 +32,9 @@ def load_memory() -> Dict[str, Any]:
         row = cursor.fetchone()
         if row:
             try:
-                data = json.loads(row[0])
-                if isinstance(data, dict):
-                    data.setdefault("facts", [])
-                    data.setdefault("key_value", {})
-                    return data
+                loaded = json.loads(row[0])
+                if isinstance(loaded, dict):
+                    data = loaded
             except json.JSONDecodeError:
                 pass
     except Exception:
@@ -45,15 +44,12 @@ def load_memory() -> Dict[str, Any]:
 
     # 2. Check for migration from legacy memory.json
     legacy_path = get_memory_file()
-    data = {"facts": [], "key_value": {}}
     if legacy_path.exists():
         try:
             with open(legacy_path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
                 if isinstance(loaded, dict):
                     data = loaded
-                    data.setdefault("facts", [])
-                    data.setdefault("key_value", {})
             # Save migrated memory to SQLite
             save_memory(data)
             # Safe deletion of legacy file
@@ -64,6 +60,33 @@ def load_memory() -> Dict[str, Any]:
         except Exception:
             pass
             
+    data.setdefault("facts", [])
+    data.setdefault("key_value", {})
+    
+    # 3. Merge individual key-values from SQLite (excluding special/structural keys)
+    conn = sqlite3.connect(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM persistent_memory")
+        for key, val_str in cursor.fetchall():
+            if key not in ("global_memory", "last_compaction", "session_mappings", "discord_config", "discord_members", "contacts"):
+                try:
+                    data["key_value"][key] = json.loads(val_str)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    finally:
+        conn.close()
+        
+    # 4. Merge active in-memory cache items (these are the most recent)
+    try:
+        from agent.memory import global_cache
+        for k, v in global_cache.cache.items():
+            data["key_value"][k] = v
+    except (ImportError, AttributeError):
+        pass
+        
     return data
 
 def save_memory(memory_dict: Dict[str, Any]) -> None:
@@ -95,9 +118,13 @@ def add_fact(fact: str) -> str:
 
 def update_key_value(key: str, value: Any) -> str:
     """Updates or sets a key-value pair in persistent memory."""
-    mem = load_memory()
-    mem["key_value"][key] = value
-    save_memory(mem)
+    try:
+        from agent.memory import global_cache
+        global_cache.set(key, value)
+    except (ImportError, AttributeError):
+        mem = load_memory()
+        mem["key_value"][key] = value
+        save_memory(mem)
     return f"Successfully set memory key '{key}' to '{value}'"
 
 def get_fact_summary() -> str:

@@ -8,13 +8,17 @@ from agent import memory
 @pytest.fixture
 def temp_memory_file():
     """Fixture that redirects MEMORY_FILE_PATH and DB_FILE_PATH to temporary files."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir) / "memory.json"
-        tmp_db_path = Path(tmpdir) / "history.db"
-        with mock.patch("agent.persistence.MEMORY_FILE_PATH", tmp_path), \
-             mock.patch("agent.db.DB_FILE_PATH", tmp_db_path):
-            memory.init_db()
-            yield tmp_path
+    memory.global_cache.clear()
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir) / "memory.json"
+            tmp_db_path = Path(tmpdir) / "history.db"
+            with mock.patch("agent.persistence.MEMORY_FILE_PATH", tmp_path), \
+                 mock.patch("agent.db.DB_FILE_PATH", tmp_db_path):
+                memory.init_db()
+                yield tmp_path
+    finally:
+        memory.global_cache.clear()
 
 def test_load_memory_empty(temp_memory_file):
     """Test loading memory when the file does not exist."""
@@ -169,5 +173,57 @@ async def test_get_auto_rag_context(temp_db_file):
     context = await memory.get_auto_rag_context("FTS5")
     assert "[AUTO-RAG: RELEVANT HISTORICAL INTERACTIONS]" in context
     assert "FTS5 search works wonderfully" in context or "unit test on FTS5" in context
+
+
+def test_tiered_lru_cache_overflow(temp_memory_file):
+    """Test the tiered LRU memory cache and SQLite overflow behavior."""
+    # Clear the global cache and set capacity to 3 for testing
+    memory.global_cache.clear()
+    memory.global_cache.capacity = 3
+    
+    # 1. Fill cache to capacity
+    memory.update_key_value("k1", "v1")
+    memory.update_key_value("k2", "v2")
+    memory.update_key_value("k3", "v3")
+    
+    assert len(memory.global_cache.cache) == 3
+    assert "k1" in memory.global_cache.cache
+    assert "k2" in memory.global_cache.cache
+    assert "k3" in memory.global_cache.cache
+    
+    # 2. Exceed capacity -> should evict LRU (k1) and overflow it to SQLite
+    memory.update_key_value("k4", "v4")
+    
+    # Cache should only contain k2, k3, k4
+    assert len(memory.global_cache.cache) == 3
+    assert "k1" not in memory.global_cache.cache
+    assert "k2" in memory.global_cache.cache
+    assert "k3" in memory.global_cache.cache
+    assert "k4" in memory.global_cache.cache
+    
+    # load_memory should dynamically merge both cache and overflowed DB entries
+    mem = memory.load_memory()
+    assert mem["key_value"]["k1"] == "v1"
+    assert mem["key_value"]["k2"] == "v2"
+    assert mem["key_value"]["k3"] == "v3"
+    assert mem["key_value"]["k4"] == "v4"
+    
+    # Retrieve "k1" using global_cache.get(key) -> should fetch from DB and insert to cache
+    val = memory.global_cache.get("k1")
+    assert val == "v1"
+    
+    # Cache now contains k3, k4, k1. "k2" should be evicted and overflowed to DB
+    assert "k2" not in memory.global_cache.cache
+    assert "k1" in memory.global_cache.cache
+    
+    # Check that cache get updates access order (k3 is LRU now)
+    memory.global_cache.get("k3")
+    memory.update_key_value("k5", "v5") # cache exceeds, evicts k4
+    assert "k4" not in memory.global_cache.cache
+    assert "k3" in memory.global_cache.cache
+    
+    # Cleanup / reset capacity
+    memory.global_cache.capacity = 5
+
 
 

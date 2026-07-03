@@ -11,19 +11,19 @@ Existing code using `from agent import memory; memory.add_fact(...)` continues
 to work unchanged. New code should import from the specific module.
 """
 
-import agent.db as _db
+import agent.storage.db as _db
 
 # --- Database layer ---
 # DB_FILE_PATH and init_db are accessed via __getattr__ below for
 # late-binding (so test patches on agent.db.DB_FILE_PATH propagate).
-from agent.db import (  # noqa: F401
+from agent.storage.db import (  # noqa: F401
     init_db,
     custom_sqlite3_connect,
     active_session_id_var,
 )
 
 # --- Persistence (facts, KV, roleplay) ---
-from agent.persistence import (  # noqa: F401
+from agent.storage.persistence import (  # noqa: F401
     MEMORY_FILE_PATH,
     get_memory_file,
     load_memory,
@@ -39,14 +39,14 @@ from agent.persistence import (  # noqa: F401
 )
 
 # --- Conversation history & search ---
-from agent.conversation import (  # noqa: F401
+from agent.storage.conversation import (  # noqa: F401
     log_conversation_step,
     search_conversations,
     get_auto_rag_context,
 )
 
 # --- Task management ---
-from agent.task_manager import (  # noqa: F401
+from agent.core.task_manager import (  # noqa: F401
     add_active_task,
     update_active_task_status,
     get_active_tasks,
@@ -74,7 +74,7 @@ from agent.task_manager import (  # noqa: F401
 )
 
 # --- Telemetry, quotas, subagents, workers ---
-from agent.telemetry import (  # noqa: F401
+from agent.observability.telemetry import (  # noqa: F401
     log_token_usage,
     get_token_usage_telemetry,
     log_telemetry_event,
@@ -95,3 +95,74 @@ def __getattr__(name):
     if name == "DB_FILE_PATH":
         return _db.DB_FILE_PATH
     raise AttributeError(f"module 'agent.memory' has no attribute {name!r}")
+
+
+from collections import OrderedDict
+from typing import Any
+
+class TieredLRUCache:
+    def __init__(self, capacity: int = 5):
+        self.capacity = capacity
+        self.cache = OrderedDict()
+        
+    def clear(self) -> None:
+        self.cache.clear()
+        
+    def get(self, key: str) -> Any:
+        # 1. Check in-memory cache
+        if key in self.cache:
+            self.cache.move_to_end(key)
+            return self.cache[key]
+            
+        # 2. Check SQLite persistent_memory table
+        import sqlite3
+        import json
+        from agent.storage.db import DB_FILE_PATH, init_db
+        init_db()
+        conn = sqlite3.connect(DB_FILE_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM persistent_memory WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if row:
+                val = json.loads(row[0])
+                # Put in cache, which might trigger eviction/overflow of another item
+                self.set(key, val, persist_evicted=True)
+                return val
+        except Exception:
+            pass
+        finally:
+            conn.close()
+            
+        return None
+        
+    def set(self, key: str, value: Any, persist_evicted: bool = True) -> None:
+        if key in self.cache:
+            self.cache[key] = value
+            self.cache.move_to_end(key)
+            return
+            
+        self.cache[key] = value
+        if len(self.cache) > self.capacity:
+            # Evict least recently used item
+            evicted_key, evicted_val = self.cache.popitem(last=False)
+            if persist_evicted:
+                import sqlite3
+                import json
+                from agent.storage.db import DB_FILE_PATH, init_db
+                init_db()
+                conn = sqlite3.connect(DB_FILE_PATH)
+                try:
+                    cursor = conn.cursor()
+                    val_str = json.dumps(evicted_val, ensure_ascii=False)
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO persistent_memory (key, value) VALUES (?, ?)",
+                        (evicted_key, val_str)
+                    )
+                    conn.commit()
+                except Exception as e:
+                    print(f"Warning: Failed to overflow cache to SQLite: {e}")
+                finally:
+                    conn.close()
+
+global_cache = TieredLRUCache(capacity=5)

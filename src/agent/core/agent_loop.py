@@ -37,7 +37,7 @@ async def run_agent(
 ) -> None:
     """Orchestrates the agent session and handles the CLI execution modes."""
     import uuid
-    from agent.orchestrator import orchestration_service
+    from agent.core.orchestrator import orchestration_service
     
     model = model or "gemini-3.5-flash"
     if not workspaces:

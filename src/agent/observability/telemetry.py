@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import agent.db as _db
+import agent.storage.db as _db
 
 
 def log_token_usage(session_id: str, model_name: str, input_tokens: int, output_tokens: int, cost: float) -> None:
