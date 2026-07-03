@@ -449,19 +449,24 @@ async def chat_endpoint(req: ChatRequest):
             }
         )
 
-    try:
-        kwargs = {}
-        if req.agent_profile is not None:
-            kwargs["agent_profile"] = req.agent_profile
+    # Resolve specialist profile to system_instructions ONCE at the top.
+    # All subsequent get_or_create_agent calls (plan steps, fallback, stuck prevention)
+    # must use this resolved value so the specialist identity is never destroyed.
+    resolved_system_instructions = req.system_instructions
+    if req.agent_profile and not resolved_system_instructions:
+        from agent.core.registry import tool_registry
+        specialist_inst = tool_registry.resolve_subagent_profile(req.agent_profile)
+        if specialist_inst:
+            resolved_system_instructions = specialist_inst
 
+    try:
         agent = await get_or_create_agent(
             req.model,
             req.session_id,
-            req.system_instructions,
+            resolved_system_instructions,
             req.disable_tools,
             req.roleplay,
             req.prompt,
-            **kwargs
         )
     except Exception as e:
         import traceback
@@ -640,7 +645,7 @@ async def chat_endpoint(req: ChatRequest):
                     
                     step_failed = False
                     try:
-                        active_agent = await get_or_create_agent(primary_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
+                        active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
                         async for item in stream_agent_response(active_agent, driver_prompt):
                             yield f"data: {json.dumps(item)}\n\n"
                         
@@ -665,7 +670,7 @@ async def chat_endpoint(req: ChatRequest):
                         )
                         try:
                             active_agents.pop(lookup_id, None)
-                            fallback_agent = await get_or_create_agent(fallback_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
+                            fallback_agent = await get_or_create_agent(fallback_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
                             async for item in stream_agent_response(fallback_agent, fallback_prompt):
                                 yield f"data: {json.dumps(item)}\n\n"
                             step_failed = False
@@ -679,7 +684,7 @@ async def chat_endpoint(req: ChatRequest):
             else:
                 # Fallback to single call with fallback model routing & stuck prevention
                 try:
-                    active_agent = await get_or_create_agent(primary_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
+                    active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=req.prompt)
                     async for item in stream_agent_response(active_agent, req.prompt):
                         yield f"data: {json.dumps(item)}\n\n"
                 except Exception as first_error:
@@ -694,7 +699,7 @@ async def chat_endpoint(req: ChatRequest):
                     fallback_prompt = f"The previous model run got stuck/encountered an error. Please analyze and solve it.\n\nOriginal prompt: {req.prompt}"
                     
                     try:
-                        fallback_agent = await get_or_create_agent(fallback_model, req.session_id, req.system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
+                        fallback_agent = await get_or_create_agent(fallback_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
                         async for item in stream_agent_response(fallback_agent, fallback_prompt):
                             yield f"data: {json.dumps(item)}\n\n"
                     except Exception as second_error:
