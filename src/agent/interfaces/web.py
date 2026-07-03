@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -269,7 +270,7 @@ async def run_quota_refresh_loop():
         await asyncio.sleep(15 * 60)
 
 def load_plugins(app: FastAPI) -> None:
-    """Dynamically loads core integrations and web routes from the plugins directory."""
+    """Dynamically loads core integrations and web routes from the plugins directories."""
     import sys
     import importlib.util
     
@@ -278,39 +279,51 @@ def load_plugins(app: FastAPI) -> None:
     if _root not in sys.path:
         sys.path.append(_root)
 
-    plugins_dir = Path(__file__).parent.parent / "plugins"
-    if not plugins_dir.exists() or not plugins_dir.is_dir():
-        return
+    # Try importing agent.plugins to get its __path__
+    try:
+        import agent.plugins
+        plugin_paths = list(agent.plugins.__path__)
+    except ImportError:
+        # Fallback to local plugins folder if package structure is not initialized
+        plugin_paths = [str(Path(__file__).parent.parent / "plugins")]
         
-    for item in plugins_dir.iterdir():
-        if item.is_dir() and (item / "__init__.py").exists():
-            try:
-                # Dynamic import package __init__.py
-                spec = importlib.util.spec_from_file_location(f"agent.plugins.{item.name}", item / "__init__.py")
-                module = importlib.util.module_from_spec(spec)
-                import sys
-                # Ensure the intermediate 'agent.plugins' package is registered
-                if "agent.plugins" not in sys.modules:
-                    try:
-                        import agent.plugins
-                        sys.modules["agent.plugins"] = agent.plugins
-                    except ImportError:
-                        pass
-                sys.modules[f"agent.plugins.{item.name}"] = module
-                spec.loader.exec_module(module)
-                
-                # Execute setup contract
-                if hasattr(module, "setup_plugin"):
-                    module.setup_plugin(
-                        app=app,
-                        register_tools=tools.register_plugin_tools,
-                        register_scheduled_task=memory.ensure_plugin_scheduled_task
-                    )
-                    print(f"[PLUGINS] Successfully loaded plugin package '{item.name}'")
-            except Exception as e:
-                import traceback
-                print(f"[PLUGINS] Failed to load plugin package '{item.name}': {e}")
-                traceback.print_exc()
+    loaded_plugin_names = set()
+    for path_str in plugin_paths:
+        plugins_dir = Path(path_str)
+        if not plugins_dir.exists() or not plugins_dir.is_dir():
+            continue
+        for item in plugins_dir.iterdir():
+            if item.is_dir() and (item / "__init__.py").exists():
+                if item.name in loaded_plugin_names:
+                    continue
+                try:
+                    # Dynamic import package __init__.py
+                    spec = importlib.util.spec_from_file_location(f"agent.plugins.{item.name}", item / "__init__.py")
+                    module = importlib.util.module_from_spec(spec)
+                    
+                    # Ensure the intermediate 'agent.plugins' package is registered
+                    if "agent.plugins" not in sys.modules:
+                        try:
+                            import agent.plugins
+                            sys.modules["agent.plugins"] = agent.plugins
+                        except ImportError:
+                            pass
+                    sys.modules[f"agent.plugins.{item.name}"] = module
+                    spec.loader.exec_module(module)
+                    
+                    # Execute setup contract
+                    if hasattr(module, "setup_plugin"):
+                        module.setup_plugin(
+                            app=app,
+                            register_tools=tools.register_plugin_tools,
+                            register_scheduled_task=memory.ensure_plugin_scheduled_task
+                        )
+                        print(f"[PLUGINS] Successfully loaded plugin package '{item.name}'")
+                    loaded_plugin_names.add(item.name)
+                except Exception as e:
+                    import traceback
+                    print(f"[PLUGINS] Failed to load plugin package '{item.name}': {e}")
+                    traceback.print_exc()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

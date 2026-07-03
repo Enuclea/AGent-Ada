@@ -68,13 +68,13 @@ class AgyRoute(BaseRoute):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout or 30.0)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout or 120.0)
                 if proc.returncode == 0:
                     return stdout.decode("utf-8", errors="replace").strip()
                 else:
                     last_err = stderr.decode("utf-8", errors="replace").strip() or "Empty response"
             except asyncio.TimeoutError:
-                last_err = f"Timeout after {timeout or 30.0} seconds"
+                last_err = f"Timeout after {timeout or 120.0} seconds"
                 try:
                     proc.kill()
                     await proc.wait()

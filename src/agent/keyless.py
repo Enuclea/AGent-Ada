@@ -517,7 +517,7 @@ class KeylessAgyAgent:
                 result = await routing_engine.execute(
                     prompt=full_prompt,
                     model=current_model,
-                    timeout=timeout_val,
+                    timeout=self.timeout,
                     conversation_id=self.conversation_id,
                     task_priority=self.task_priority
                 )

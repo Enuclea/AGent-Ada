@@ -37,3 +37,6 @@ src/agent_ada.egg-info/
 
 # Custom modules (private extensions)
 discord/custom_modules/
+
+# Local custom plugins
+/plugins/
