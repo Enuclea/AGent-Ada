@@ -929,24 +929,27 @@ async def on_message(message: discord.Message):
 
     is_client_support_channel = False
     is_lacie_channel = False
+    is_val_channel = False
     if message.guild:
         channel_name = message.channel.name if hasattr(message.channel, "name") else ""
         if channel_name in ["support-triage", "ticket-status"]:
             is_client_support_channel = True
         if channel_name == "lacie":
             is_lacie_channel = True
+        if channel_name in ["val", "qa"]:
+            is_val_channel = True
 
     author_id = message.author.id
     is_boss = (author_id in [405566743415750656, 1418503476857540739]) or (hasattr(bot, "owner_id") and author_id == bot.owner_id)
     is_mod = is_user_moderator(author_id, message.guild.id if message.guild else None)
     is_author_admin = is_user_admin(author_id)
-    is_exempt = is_boss or is_mod or is_client_support_channel or is_lacie_channel
+    is_exempt = is_boss or is_mod or is_client_support_channel or is_lacie_channel or is_val_channel
 
     # Channel configurations
     channel_id_str = str(message.channel.id) if message.guild else None
     chan_cfg = bot_config.get_channel_config(channel_id_str) if channel_id_str else None
-    is_configured = (chan_cfg is not None) or is_client_support_channel or is_lacie_channel
-    channel_purpose = chan_cfg.get("purpose") if chan_cfg else ("client-support" if is_client_support_channel else ("developer-assistant" if is_lacie_channel else None))
+    is_configured = (chan_cfg is not None) or is_client_support_channel or is_lacie_channel or is_val_channel
+    channel_purpose = chan_cfg.get("purpose") if chan_cfg else ("client-support" if is_client_support_channel else ("developer-assistant" if (is_lacie_channel or is_val_channel) else None))
     chan_prefix = chan_cfg.get("prefix") if chan_cfg else None
     chan_on_mention = chan_cfg.get("on_mention", True) if chan_cfg else True
 
@@ -954,7 +957,7 @@ async def on_message(message: discord.Message):
     is_called = False
     trigger_prompt = None
 
-    if is_lacie_channel:
+    if is_lacie_channel or is_val_channel:
         is_called = True
         trigger_prompt = message.content.strip()
         if bot.user in message.mentions:
@@ -1220,6 +1223,8 @@ def get_specialist_profile_for_channel(channel_name: str) -> Optional[str]:
         return "solar_monitor"
     if "lacie" in c_name or "architect" in c_name:
         return "lacie"
+    if "qa" in c_name or "test" in c_name:
+        return "qa_specialist"
     return None
 
 async def handle_agent_hook_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None):
@@ -1242,7 +1247,7 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     chan_cfg = bot_config.get_channel_config(channel_id_str) if channel_id_str else None
     channel_purpose = chan_cfg.get("purpose") if chan_cfg else None
 
-    is_control_room = (message.guild is None) or (channel_purpose == "developer-assistant") or (channel.name in ["control-room", "bot-admin", "🤖・bot-admin", "lacie"])
+    is_control_room = (message.guild is None) or (channel_purpose == "developer-assistant") or (channel.name in ["control-room", "bot-admin", "🤖・bot-admin", "lacie", "val", "qa"])
     full_tooling_authorized = is_boss and is_control_room
 
     session_id = get_channel_session_id(channel.id)
