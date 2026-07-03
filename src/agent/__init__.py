@@ -25,13 +25,6 @@ sys.modules['agent.db'] = db
 sys.modules['agent.persistence'] = persistence
 sys.modules['agent.conversation'] = conversation
 
-# Interfaces sub-package
-from agent.interfaces import cli as cli
-from agent.interfaces import web as web
-
-sys.modules['agent.cli'] = cli
-sys.modules['agent.web'] = web
-
 # Observability sub-package
 from agent.observability import telemetry as telemetry
 from agent.observability import quiet_observer as quiet_observer
@@ -45,3 +38,10 @@ sys.modules['agent.grace_monitor'] = grace_monitor
 from agent.evaluation import meta_evaluation as meta_evaluation
 
 sys.modules['agent.meta_evaluation'] = meta_evaluation
+
+# Interfaces sub-package
+from agent.interfaces import cli as cli
+from agent.interfaces import web as web
+
+sys.modules['agent.cli'] = cli
+sys.modules['agent.web'] = web

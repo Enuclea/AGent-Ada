@@ -1702,7 +1702,7 @@ async def run_scheduler():
         await asyncio.sleep(5)
 
 # Mount static files directory
-static_dir = Path(__file__).parent / "static"
+static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():
     app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
 
