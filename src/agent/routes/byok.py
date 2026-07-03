@@ -1,7 +1,27 @@
 import os
+import json
 import aiohttp
+from pathlib import Path
 from typing import List, Optional
 from agent.routes.base import BaseRoute, RouteStatus
+
+def load_api_keys() -> None:
+    config_path = Path("config/api_keys.json")
+    if not config_path.exists():
+        home_config = Path.home() / ".agent" / "api_keys.json"
+        if home_config.exists():
+            config_path = home_config
+        else:
+            return
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            for k, v in data.items():
+                if v and k not in os.environ and not str(v).endswith("-here"):
+                    os.environ[k] = str(v)
+    except Exception as e:
+        print(f"[ROUTE: byok] Failed to load keys from {config_path}: {e}")
 
 class BYOKRoute(BaseRoute):
     @property
@@ -23,6 +43,7 @@ class BYOKRoute(BaseRoute):
         return ["gemini", "claude", "sonnet", "gpt"]
 
     def supports_model(self, model: str) -> bool:
+        load_api_keys()
         model_lower = model.lower()
         if "gemini" in model_lower:
             return bool(os.environ.get("GEMINI_API_KEY"))
@@ -42,6 +63,7 @@ class BYOKRoute(BaseRoute):
         timeout: Optional[float] = None,
         conversation_id: Optional[str] = None,
     ) -> Optional[str]:
+        load_api_keys()
         model_lower = model.lower()
         full_prompt = prompt
         if system_instructions:

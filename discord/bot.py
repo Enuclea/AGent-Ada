@@ -3132,6 +3132,42 @@ if __name__ == "__main__":
         from dotenv import load_dotenv
         load_dotenv(dotenv_path)
 
+    # Load API keys from config/api_keys.json if it exists
+    keys_config = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+    
+    # Auto-generate keys config if not present
+    if not keys_config.parent.exists():
+        try:
+            keys_config.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        
+    if not keys_config.exists():
+        default_keys = {
+            "DISCORD_BOT_TOKEN": "your-discord-bot-token-here",
+            "GEMINI_API_KEY": "your-gemini-api-key-here",
+            "ANTHROPIC_API_KEY": "your-anthropic-api-key-here",
+            "OPENAI_API_KEY": "your-openai-api-key-here"
+        }
+        try:
+            with open(keys_config, "w", encoding="utf-8") as f:
+                json.dump(default_keys, f, indent=2)
+            print(f"[INFO] Auto-generated keys configuration template at {keys_config}")
+        except Exception as e:
+            print(f"[WARNING] Could not generate keys config template: {e}")
+
+    # Read from config/api_keys.json
+    if keys_config.exists():
+        try:
+            with open(keys_config, "r", encoding="utf-8") as f:
+                keys_data = json.load(f)
+                for k, v in keys_data.items():
+                    if v and not str(v).endswith("-here") and k not in os.environ:
+                        os.environ[k] = str(v)
+            print(f"[INFO] Loaded configured keys from: {keys_config}")
+        except Exception as e:
+            print(f"[WARNING] Failed to load keys config {keys_config}: {e}")
+
     token = os.environ.get("DISCORD_BOT_TOKEN")
     if not token:
         # Fallback to general system env config
@@ -3141,7 +3177,7 @@ if __name__ == "__main__":
         token = os.environ.get("DISCORD_BOT_TOKEN")
         
     if not token:
-        print("[CRITICAL] DISCORD_BOT_TOKEN is not configured inside ~/AGent/discord/.env. Cannot start.")
+        print("[CRITICAL] DISCORD_BOT_TOKEN is not configured inside config/api_keys.json or .env. Cannot start.")
         sys.exit(1)
 
     # Auto-start AGent daemon if not running
