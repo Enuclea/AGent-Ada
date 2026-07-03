@@ -569,30 +569,32 @@ class KeylessAgyAgent:
                 # All circuits open — force-try primary model anyway
                 failover_sequence = [primary_model]
 
-        timeout_val = self.timeout if self.timeout is not None else 30.0
+        timeout_val = self.timeout if self.timeout is not None else 120.0
         harness_path = get_harness_path() or "agy"
         last_error = "All agy execution attempts failed."
 
         for current_model in failover_sequence:
             if current_model.startswith("ollama/"):
                 import aiohttp
-                url = "http://10.200.0.4:11434/api/generate"
+                urls = ["http://10.200.0.4:11434/api/generate", "http://10.200.0.3:11434/api/generate"]
                 payload = {
                     "model": current_model.replace("ollama/", ""),
                     "prompt": full_prompt,
                     "stream": False
                 }
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.post(url, json=payload, timeout=self.timeout or 60.0) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                return KeylessAgyResponse(data["response"])
-                            else:
-                                raise RuntimeError(f"Ollama Mac Mini returned status {resp.status}")
-                except Exception as e:
-                    print(f"[FAILOVER] Ollama Mac Mini call failed: {e}")
-                    continue
+                success = False
+                for url in urls:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(url, json=payload, timeout=self.timeout or 60.0) as resp:
+                                if resp.status == 200:
+                                    data = await resp.json()
+                                    return KeylessAgyResponse(data["response"])
+                                else:
+                                    raise RuntimeError(f"Ollama Mac Mini returned status {resp.status}")
+                    except Exception as e:
+                        print(f"[FAILOVER] Ollama Mac Mini call to {url} failed: {e}")
+                continue
 
             cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions"]
             if self.conversation_id:
@@ -600,7 +602,7 @@ class KeylessAgyAgent:
             cmd.extend(["--model", current_model])
 
             # For long-running user chats (timeout > 30s), run primary model only with streaming
-            if timeout_val > 30.0:
+            if self.timeout is not None and self.timeout > 30.0:
                 try:
                     proc = await asyncio.create_subprocess_exec(
                         *cmd,

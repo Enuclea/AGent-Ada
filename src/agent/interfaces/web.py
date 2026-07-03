@@ -922,7 +922,8 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
                 model="gemini-1.5-flash",
                 system_instructions=system_instructions,
                 conversation_id=req.subagent_id,
-                cwd=str(sandbox_dir)
+                cwd=str(sandbox_dir),
+                timeout=300.0
             )
             async with agent as sub_conn:
                 response = await sub_conn.chat(req.prompt)

@@ -65,31 +65,36 @@ def get_healthy_workers(
 async def check_worker_health(worker: Dict[str, Any]) -> bool:
     """Pings a worker's /health endpoint. Returns True if reachable."""
     import httpx
-    host = worker.get("host", "")
-    if not host:
+    raw_host = worker.get("host", "")
+    if not raw_host:
         return False
 
-    # Ensure http:// prefix
-    url = host if host.startswith("http") else f"http://{host}"
+    hosts = [raw_host]
+    if "10.200.0.4" in raw_host:
+        hosts.append(raw_host.replace("10.200.0.4", "10.200.0.3"))
+
     api_key = os.environ.get("WORKER_API_KEY", "")
     headers = {}
     if api_key:
         headers["X-Worker-Key"] = api_key
 
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{url}/health", headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                # Update worker stats in DB
-                memory.update_worker_health(
-                    worker["worker_id"],
-                    status="online",
-                    active_tasks=data.get("active_tasks", 0),
-                )
-                return True
-    except Exception:
-        pass
+    for host in hosts:
+        # Ensure http:// prefix
+        url = host if host.startswith("http") else f"http://{host}"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{url}/health", headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Update worker stats in DB
+                    memory.update_worker_health(
+                        worker["worker_id"],
+                        status="online",
+                        active_tasks=data.get("active_tasks", 0),
+                    )
+                    return True
+        except Exception:
+            pass
 
     memory.update_worker_health(worker["worker_id"], status="offline")
     return False
@@ -199,10 +204,13 @@ class RemoteWorkerAgent:
         """POST a prompt to a remote worker and collect the streamed response."""
         import httpx
 
-        host = worker.get("host", "")
-        if not host:
+        raw_host = worker.get("host", "")
+        if not raw_host:
             return None
-        url = host if host.startswith("http") else f"http://{host}"
+
+        hosts = [raw_host]
+        if "10.200.0.4" in raw_host:
+            hosts.append(raw_host.replace("10.200.0.4", "10.200.0.3"))
 
         api_key = os.environ.get("WORKER_API_KEY", "")
         headers = {"Content-Type": "application/json"}
@@ -217,40 +225,46 @@ class RemoteWorkerAgent:
             "system_instructions": self.system_instructions,
         }
 
-        result_chunks = []
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout + 10) as client:
-                async with client.stream(
-                    "POST", f"{url}/execute", json=payload, headers=headers
-                ) as resp:
-                    if resp.status_code != 200:
-                        error_body = await resp.aread()
-                        raise RuntimeError(
-                            f"Worker returned HTTP {resp.status_code}: {error_body.decode()}"
-                        )
+        last_err = None
+        for host in hosts:
+            url = host if host.startswith("http") else f"http://{host}"
+            result_chunks = []
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout + 10) as client:
+                    async with client.stream(
+                        "POST", f"{url}/execute", json=payload, headers=headers
+                    ) as resp:
+                        if resp.status_code != 200:
+                            error_body = await resp.aread()
+                            raise RuntimeError(
+                                f"Worker returned HTTP {resp.status_code}: {error_body.decode()}"
+                            )
 
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data_str = line[6:]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            event = json.loads(data_str)
-                            if event.get("type") == "chunk":
-                                result_chunks.append(event.get("content", ""))
-                            elif event.get("type") == "error":
-                                raise RuntimeError(
-                                    f"Worker error: {event.get('content', 'unknown')}"
-                                )
-                        except json.JSONDecodeError:
-                            continue
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data_str = line[6:]
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                event = json.loads(data_str)
+                                if event.get("type") == "chunk":
+                                    result_chunks.append(event.get("content", ""))
+                                elif event.get("type") == "error":
+                                    raise RuntimeError(
+                                        f"Worker error: {event.get('content', 'unknown')}"
+                                    )
+                            except json.JSONDecodeError:
+                                continue
+                if result_chunks:
+                    return "".join(result_chunks)
+            except httpx.TimeoutException:
+                last_err = RuntimeError(f"Worker {worker['worker_id']} timed out")
+            except Exception as e:
+                last_err = e
 
-        except httpx.TimeoutException:
-            raise RuntimeError(f"Worker {worker['worker_id']} timed out")
-
-        if result_chunks:
-            return "".join(result_chunks)
+        if last_err:
+            raise last_err
         return None
 
 

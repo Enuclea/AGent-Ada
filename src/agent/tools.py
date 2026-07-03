@@ -1163,7 +1163,8 @@ async def spawn_subagent(
         model="gemini-1.5-flash",
         system_instructions=subagent_system_instructions,
         conversation_id=sandbox_id,
-        cwd=str(sandbox_dir)
+        cwd=str(sandbox_dir),
+        timeout=300.0
     )
     
     try:
@@ -1328,7 +1329,8 @@ async def run_boardroom(
                 model="gemini-1.5-flash",
                 system_instructions=subagent_sys,
                 conversation_id=subagent_id,
-                cwd=str(sandbox_dir)
+                cwd=str(sandbox_dir),
+                timeout=300.0
             )
             
             try:
