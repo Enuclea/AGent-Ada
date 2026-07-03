@@ -824,7 +824,7 @@ async function pollPlanAndTelemetry() {
                         let iconHtml = '';
                         if (step.status === 'completed') {
                             iconHtml = '<i class="fa-solid fa-circle-check" style="color: var(--accent-mint);"></i>';
-                        } else if (step.status === 'running') {
+                        } else if (step.status === 'running' || step.status === 'delegated') {
                             iconHtml = '<i class="fa-solid fa-circle-notch fa-spin" style="color: var(--accent-orchid);"></i>';
                         } else if (step.status === 'failed') {
                             iconHtml = '<i class="fa-solid fa-circle-xmark" style="color: #ef4444;"></i>';
@@ -1190,7 +1190,6 @@ async function init() {
     await pollTasks();
     await pollPlanAndTelemetry();
     await pollQuotas();
-    await pollSubagents();
     setupCollapsibleWidgets();
     
     // Polling schedules and active tasks
@@ -1199,7 +1198,6 @@ async function init() {
     setInterval(loadSessions, 10000);
     setInterval(pollPlanAndTelemetry, 3000);
     setInterval(pollQuotas, 30000);
-    setInterval(pollSubagents, 3000);
 }
 
 document.addEventListener('DOMContentLoaded', init);

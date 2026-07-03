@@ -121,3 +121,50 @@ def send_discord_alert(text: str, channel_name: str = "control-room") -> bool:
     except Exception as e:
         print(f"[NOTIFICATIONS] Failed to send Discord alert: {e}", file=sys.stderr)
         return False
+
+
+def send_direct_discord_message(channel_id: int, text: str) -> bool:
+    """Send a message (potentially chunked) to a specific Discord channel ID via the Bot API."""
+    token: Optional[str] = get_bot_token()
+    if not token:
+        print("[NOTIFICATIONS] No Discord bot token found.")
+        return False
+
+    url: str = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+    headers: Dict[str, str] = {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json",
+        "User-Agent": "DiscordBot (https://github.com/Rapptz/discord.py 2.3.2) Python/3.10"
+    }
+
+    # Helper to chunk text safely for Discord's 2000 character maximum limit
+    chunks = []
+    lines = text.splitlines()
+    current_chunk = []
+    current_len = 0
+    for line in lines:
+        if current_len + len(line) + 1 > 1950:
+            if current_chunk:
+                chunks.append("\n".join(current_chunk))
+            current_chunk = [line]
+            current_len = len(line)
+        else:
+            current_chunk.append(line)
+            current_len += len(line) + 1
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    success = True
+    for chunk in chunks:
+        if not chunk.strip():
+            continue
+        data_payload: bytes = json.dumps({"content": chunk}).encode("utf-8")
+        req_post: urllib.request.Request = urllib.request.Request(url, data=data_payload, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req_post) as resp:
+                if resp.getcode() != 200:
+                    success = False
+        except Exception as e:
+            print(f"[NOTIFICATIONS] Failed to send chunk to channel {channel_id}: {e}", file=sys.stderr)
+            success = False
+    return success

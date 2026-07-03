@@ -112,6 +112,7 @@ class KeylessAgyResponse:
         timeout_val: Optional[float] = None,
         agent: Optional[Any] = None,
         prev_newest: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> None:
         """Initialize response wrapper.
 
@@ -122,6 +123,7 @@ class KeylessAgyResponse:
             prev_newest: The previously newest conversation ID.
         """
         import asyncio
+        self.task_id = task_id
         if isinstance(text_or_proc, str):
             self.text: str = text_or_proc
             self._chunks: List[str] = [text_or_proc]
@@ -133,6 +135,12 @@ class KeylessAgyResponse:
             self.stderr_lines: List[str] = []
             self._completed_event: asyncio.Event = asyncio.Event()
             self._completed_event.set()
+            if task_id:
+                try:
+                    from agent.core import task_manager
+                    task_manager.update_active_task_status(task_id, "completed")
+                except Exception:
+                    pass
         else:
             self.proc = text_or_proc
             self.timeout_val = timeout_val
@@ -151,10 +159,10 @@ class KeylessAgyResponse:
             return
         try:
             while True:
-                line: bytes = await asyncio.wait_for(self.proc.stdout.readline(), timeout=self.timeout_val)
-                if not line:
+                chunk_bytes: bytes = await asyncio.wait_for(self.proc.stdout.read(4096), timeout=self.timeout_val)
+                if not chunk_bytes:
                     break
-                decoded: str = line.decode("utf-8", errors="replace")
+                decoded: str = chunk_bytes.decode("utf-8", errors="replace")
                 self.stdout_lines.append(decoded)
         except asyncio.TimeoutError:
             try:
@@ -163,8 +171,20 @@ class KeylessAgyResponse:
             except Exception:
                 pass
             self.stdout_lines.append(f"\n[Timeout after {self.timeout_val} seconds]\n")
+            if self.task_id:
+                try:
+                    from agent.core import task_manager
+                    task_manager.update_active_task_status(self.task_id, "failed")
+                except Exception:
+                    pass
         except Exception as e:
             self.stdout_lines.append(f"\n[Error: {e}]\n")
+            if self.task_id:
+                try:
+                    from agent.core import task_manager
+                    task_manager.update_active_task_status(self.task_id, "failed")
+                except Exception:
+                    pass
             
         try:
             stderr_data: bytes = await self.proc.stderr.read()
@@ -188,6 +208,13 @@ class KeylessAgyResponse:
 
         self.text = "".join(self.stdout_lines)
         self._completed_event.set()
+        if self.task_id:
+            try:
+                from agent.core import task_manager
+                if task_manager.get_active_task_status(self.task_id) == "running":
+                    task_manager.update_active_task_status(self.task_id, "completed")
+            except Exception:
+                pass
 
     @property
     def thoughts(self) -> AsyncIterator[str]:
@@ -215,10 +242,10 @@ class KeylessAgyResponse:
                     # Use a short timeout of 15 seconds to yield keep-alive pings
                     chunk_timeout: float = min(15.0, remaining)
                     try:
-                        line: bytes = await asyncio.wait_for(self.proc.stdout.readline(), timeout=chunk_timeout)
-                        if not line:
+                        chunk_bytes: bytes = await asyncio.wait_for(self.proc.stdout.read(4096), timeout=chunk_timeout)
+                        if not chunk_bytes:
                             break
-                        decoded: str = line.decode("utf-8", errors="replace")
+                        decoded: str = chunk_bytes.decode("utf-8", errors="replace")
                         self.stdout_lines.append(decoded)
                         yield decoded
                     except asyncio.TimeoutError:
@@ -235,8 +262,20 @@ class KeylessAgyResponse:
                     pass
                 err_msg: str = f"\n[Timeout after {self.timeout_val} seconds]\n"
                 self.stdout_lines.append(err_msg)
+                if self.task_id:
+                    try:
+                        from agent.core import task_manager
+                        task_manager.update_active_task_status(self.task_id, "failed")
+                    except Exception:
+                        pass
                 yield err_msg
             except Exception as e:
+                if self.task_id:
+                    try:
+                        from agent.core import task_manager
+                        task_manager.update_active_task_status(self.task_id, "failed")
+                    except Exception:
+                        pass
                 yield f"\n[Error: {e}]\n"
 
             try:
@@ -260,6 +299,13 @@ class KeylessAgyResponse:
                     
             self.text = "".join(self.stdout_lines)
             self._completed_event.set()
+            if self.task_id:
+                try:
+                    from agent.core import task_manager
+                    if task_manager.get_active_task_status(self.task_id) == "running":
+                        task_manager.update_active_task_status(self.task_id, "completed")
+                except Exception:
+                    pass
 
         return _stream_thoughts()
 
@@ -565,150 +611,187 @@ class KeylessAgyAgent:
         Returns:
             A KeylessAgyResponse wrapper around the response content.
         """
-        full_prompt: str = prompt
-        if self.system_instructions:
-            full_prompt = f"[System Instructions]\n{self.system_instructions}\n\n[User Prompt]\n{prompt}"
+        import uuid
+        from agent.core import task_manager
+        
+        agent_name = "Ada"
+        if self.conversation_id:
+            parts = self.conversation_id.split("-")
+            if parts:
+                prefix = parts[0]
+                import re
+                if prefix.lower() in ("boardroom", "sched", "task", "subagent") and len(parts) > 1:
+                    prefix = parts[1]
+                if not re.match(r"^[0-9a-fA-F]{8}$", prefix) and not re.match(r"^[0-9a-fA-F]{12}$", prefix):
+                    agent_name = prefix.replace("_", " ").title()
+                    
+        # Check system instructions override
+        sys_inst = self.system_instructions or ""
+        if "Lacie" in sys_inst:
+            agent_name = "Lacie"
+        elif "Kira" in sys_inst:
+            agent_name = "Kira"
+        elif "Val" in sys_inst:
+            agent_name = "Val"
 
-        # If response_schema is specified, request JSON format
-        if self.response_schema:
-            schema_instructions: str = (
-                "\n\nYou MUST return the response ONLY as a raw JSON object. Do not include markdown code block formatting (such as ```json). "
-                "Do not include any explanation or extra text. The JSON object structure MUST match:\n"
-            )
-            if hasattr(self.response_schema, "model_fields"):
-                schema_fields: Dict[str, Any] = self.response_schema.model_fields
-            elif hasattr(self.response_schema, "__fields__"):
-                schema_fields = self.response_schema.__fields__
-            else:
-                schema_fields = {}
+        task_id = f"task-agent-{uuid.uuid4()}"
+        snippet = prompt.strip().split("\n")[0]
+        if len(snippet) > 80:
+            snippet = snippet[:77] + "..."
             
-            sample_dict: Dict[str, Any] = {}
-            for name, field in schema_fields.items():
-                annotation: Any = getattr(field, "annotation", str)
-                if annotation is bool:
-                    sample_dict[name] = True
-                elif annotation is int:
-                    sample_dict[name] = 0
-                else:
-                    sample_dict[name] = "string"
-            schema_instructions += json.dumps(sample_dict, indent=2)
-            full_prompt += schema_instructions
+        task_manager.add_active_task(task_id, agent_name, f"Executing: {snippet}")
 
-        # --- Pre-flight quota-aware model routing ---
-        primary_model: str = self.model or "gemini-3.5-flash"
         try:
-            from agent import memory
-            quotas: List[Dict[str, Any]] = memory.get_model_quotas()
-            gemini_q: Optional[Dict[str, Any]] = next((q for q in quotas if q["model_family"] == "gemini"), None)
-            if gemini_q and primary_model.lower().startswith("gemini"):
-                pct_5h: float = gemini_q.get("pct_5h", 100.0)
-                pct_weekly: float = gemini_q.get("pct_weekly", 100.0)
-                if pct_5h < 15.0 or pct_weekly < 15.0:
-                    print(f"[QUOTA] Gemini remaining low (5h: {pct_5h:.1f}%, weekly: {pct_weekly:.1f}%). Rerouting to 3P pool.")
-                    primary_model = THREE_P_POOL[0]
-        except Exception:
-            pass  # Quota check is best-effort; don't block on failures
+            full_prompt: str = prompt
+            if self.system_instructions:
+                full_prompt = f"[System Instructions]\n{self.system_instructions}\n\n[User Prompt]\n{prompt}"
 
-        # --- Build failover sequence based on task priority and pools ---
-        failover_sequence: List[str] = []
-        if self.roleplay:
-            failover_sequence = [primary_model, "ollama/gemma4:12b"]
-        else:
-            is_primary_gemini: bool = any(primary_model.lower().startswith(g.lower().split("-")[0]) for g in GEMINI_POOL) or primary_model.lower().startswith("gemini")
+            # If response_schema is specified, request JSON format
+            if self.response_schema:
+                schema_instructions: str = (
+                    "\n\nYou MUST return the response ONLY as a raw JSON object. Do not include markdown code block formatting (such as ```json). "
+                    "Do not include any explanation or extra text. The JSON object structure MUST match:\n"
+                )
+                if hasattr(self.response_schema, "model_fields"):
+                    schema_fields: Dict[str, Any] = self.response_schema.model_fields
+                elif hasattr(self.response_schema, "__fields__"):
+                    schema_fields = self.response_schema.__fields__
+                else:
+                    schema_fields = {}
+                
+                sample_dict: Dict[str, Any] = {}
+                for name, field in schema_fields.items():
+                    annotation: Any = getattr(field, "annotation", str)
+                    if annotation is bool:
+                        sample_dict[name] = True
+                    elif annotation is int:
+                        sample_dict[name] = 0
+                    else:
+                        sample_dict[name] = "string"
+                schema_instructions += json.dumps(sample_dict, indent=2)
+                full_prompt += schema_instructions
 
-            if is_primary_gemini:
-                for m in GEMINI_POOL:
-                    if m not in failover_sequence:
-                        failover_sequence.append(m)
-                if self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+            # --- Pre-flight quota-aware model routing ---
+            primary_model: str = self.model or "gemini-3.5-flash"
+            try:
+                from agent import memory
+                quotas: List[Dict[str, Any]] = memory.get_model_quotas()
+                gemini_q: Optional[Dict[str, Any]] = next((q for q in quotas if q["model_family"] == "gemini"), None)
+                if gemini_q and primary_model.lower().startswith("gemini"):
+                    pct_5h: float = gemini_q.get("pct_5h", 100.0)
+                    pct_weekly: float = gemini_q.get("pct_weekly", 100.0)
+                    if pct_5h < 15.0 or pct_weekly < 15.0:
+                        print(f"[QUOTA] Gemini remaining low (5h: {pct_5h:.1f}%, weekly: {pct_weekly:.1f}%). Rerouting to 3P pool.")
+                        primary_model = THREE_P_POOL[0]
+            except Exception:
+                pass  # Quota check is best-effort; don't block on failures
+
+            # --- Build failover sequence based on task priority and pools ---
+            failover_sequence: List[str] = []
+            if self.roleplay:
+                failover_sequence = [primary_model, "ollama/gemma4:12b"]
+            else:
+                is_primary_gemini: bool = any(primary_model.lower().startswith(g.lower().split("-")[0]) for g in GEMINI_POOL) or primary_model.lower().startswith("gemini")
+
+                if is_primary_gemini:
+                    for m in GEMINI_POOL:
+                        if m not in failover_sequence:
+                            failover_sequence.append(m)
+                    if self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+                        for m in THREE_P_POOL:
+                            if m not in failover_sequence:
+                                failover_sequence.append(m)
+                else:
+                    failover_sequence.append(primary_model)
+                    for m in GEMINI_POOL:
+                        if m not in failover_sequence:
+                            failover_sequence.append(m)
                     for m in THREE_P_POOL:
                         if m not in failover_sequence:
                             failover_sequence.append(m)
-            else:
-                failover_sequence.append(primary_model)
-                for m in GEMINI_POOL:
-                    if m not in failover_sequence:
-                        failover_sequence.append(m)
-                for m in THREE_P_POOL:
-                    if m not in failover_sequence:
-                        failover_sequence.append(m)
 
-            if self.task_priority >= TaskPriority.BACKGROUND:
-                failover_sequence = [primary_model]
-            elif self.task_priority >= TaskPriority.SCHEDULED_ROUTINE:
-                if is_primary_gemini:
-                    failover_sequence = [m for m in failover_sequence if m in GEMINI_POOL]
-                else:
+                if self.task_priority >= TaskPriority.BACKGROUND:
+                    failover_sequence = [primary_model]
+                elif self.task_priority >= TaskPriority.SCHEDULED_ROUTINE:
+                    if is_primary_gemini:
+                        failover_sequence = [m for m in failover_sequence if m in GEMINI_POOL]
+                    else:
+                        failover_sequence = [primary_model]
+
+                # Filter out models with open circuits
+                failover_sequence = [m for m in failover_sequence if not _circuit_breaker.is_open(m)]
+                if not failover_sequence:
                     failover_sequence = [primary_model]
 
-            # Filter out models with open circuits
-            failover_sequence = [m for m in failover_sequence if not _circuit_breaker.is_open(m)]
-            if not failover_sequence:
-                failover_sequence = [primary_model]
+            timeout_val: float = self.timeout if self.timeout is not None else 120.0
+            last_error: str = "All execution routes failed."
 
-        timeout_val: float = self.timeout if self.timeout is not None else 120.0
-        last_error: str = "All execution routes failed."
+            for current_model in failover_sequence:
+                prev_newest: Optional[str] = self._get_newest_conversation_id()
+                try:
+                    result: Any = await routing_engine.execute(
+                        prompt=full_prompt,
+                        model=current_model,
+                        timeout=self.timeout,
+                        conversation_id=self.conversation_id,
+                        task_priority=self.task_priority
+                    )
+                    if result is not None:
+                        _circuit_breaker.record_success(current_model)
+                        return KeylessAgyResponse(result, timeout_val, agent=self, prev_newest=prev_newest, task_id=task_id)
+                except Exception as e:
+                    _circuit_breaker.record_failure(current_model)
+                    last_error = str(e)
+                    print(f"[FAILOVER] Model {current_model} failed: {e}. Trying next model...")
 
-        for current_model in failover_sequence:
-            prev_newest: Optional[str] = self._get_newest_conversation_id()
-            try:
-                result: Any = await routing_engine.execute(
-                    prompt=full_prompt,
-                    model=current_model,
-                    timeout=self.timeout,
-                    conversation_id=self.conversation_id,
-                    task_priority=self.task_priority
-                )
-                if result is not None:
-                    _circuit_breaker.record_success(current_model)
-                    return KeylessAgyResponse(result, timeout_val, agent=self, prev_newest=prev_newest)
-            except Exception as e:
-                _circuit_breaker.record_failure(current_model)
-                last_error = str(e)
-                print(f"[FAILOVER] Model {current_model} failed: {e}. Trying next model...")
-
-        # --- Grok fallback (only for INTERACTIVE and SCHEDULED_CRITICAL priority) ---
-        if not self.roleplay and self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
-            grok_path: Optional[str] = get_grok_path()
-            if grok_path:
-                if check_and_record_grok_usage(db_path=self.db_path):
-                    print("[FAILOVER] All models failed. Pivoting to Grok fallback...")
-                    grok_cmd: List[str] = [grok_path, "-p", full_prompt, "--deny", "*", "--no-plan"]
-                    try:
-                        proc: Any = await asyncio.create_subprocess_exec(
-                            *grok_cmd,
-                            stdin=asyncio.subprocess.DEVNULL,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                            cwd=self.cwd
-                        )
-                        stdout: bytes
-                        stderr: bytes
-                        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
-                        response_text: str = stdout.decode("utf-8", errors="replace")
-                        if proc.returncode == 0 and response_text.strip():
-                            return KeylessAgyResponse(response_text)
-                        else:
-                            grok_err: str = stderr.decode("utf-8", errors="replace").strip() or "Empty response from grok"
-                            last_error = f"Grok fallback failed: {grok_err}"
-                    except asyncio.TimeoutError:
-                        last_error = f"Grok fallback timed out after {timeout_val} seconds"
+            # --- Grok fallback (only for INTERACTIVE and SCHEDULED_CRITICAL priority) ---
+            if not self.roleplay and self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+                grok_path: Optional[str] = get_grok_path()
+                if grok_path:
+                    if check_and_record_grok_usage(db_path=self.db_path):
+                        print("[FAILOVER] All models failed. Pivoting to Grok fallback...")
+                        grok_cmd: List[str] = [grok_path, "-p", full_prompt, "--deny", "*", "--no-plan"]
                         try:
-                            proc.kill()
-                            await proc.wait()
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        last_error = f"Grok fallback failed: {e}"
+                            proc: Any = await asyncio.create_subprocess_exec(
+                                *grok_cmd,
+                                stdin=asyncio.subprocess.DEVNULL,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                                cwd=self.cwd
+                            )
+                            stdout: bytes
+                            stderr: bytes
+                            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_val)
+                            response_text: str = stdout.decode("utf-8", errors="replace")
+                            if proc.returncode == 0 and response_text.strip():
+                                return KeylessAgyResponse(response_text, task_id=task_id)
+                            else:
+                                grok_err: str = stderr.decode("utf-8", errors="replace").strip() or "Empty response from grok"
+                                last_error = f"Grok fallback failed: {grok_err}"
+                        except asyncio.TimeoutError:
+                            last_error = f"Grok fallback timed out after {timeout_val} seconds"
+                            try:
+                                proc.kill()
+                                await proc.wait()
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            last_error = f"Grok fallback failed: {e}"
+                    else:
+                        last_error += " (Grok fallback blocked by rate limits)"
                 else:
-                    last_error += " (Grok fallback blocked by rate limits)"
-            else:
-                last_error += " (Grok binary not found)"
+                    last_error += " (Grok binary not found)"
 
-        # --- Direct API fallback (gated behind AGENT_USE_DIRECT_API env flag) ---
-        if os.environ.get("AGENT_USE_DIRECT_API", "").lower() == "true":
-            direct_result: Optional[str] = await self._call_direct_api(primary_model, full_prompt)
-            if direct_result:
-                return KeylessAgyResponse(direct_result)
+            # --- Direct API fallback (gated behind AGENT_USE_DIRECT_API env flag) ---
+            if os.environ.get("AGENT_USE_DIRECT_API", "").lower() == "true":
+                direct_result: Optional[str] = await self._call_direct_api(primary_model, full_prompt)
+                if direct_result:
+                    return KeylessAgyResponse(direct_result, task_id=task_id)
 
-        raise RuntimeError(f"All models in priority failover chain failed. Last error: {last_error}")
+            raise RuntimeError(f"All models in priority failover chain failed. Last error: {last_error}")
+        except Exception as e:
+            try:
+                task_manager.update_active_task_status(task_id, "failed")
+            except Exception:
+                pass
+            raise e
