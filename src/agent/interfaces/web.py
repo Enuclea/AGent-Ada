@@ -76,38 +76,50 @@ def ensure_default_scheduled_tasks(conn=None):
     try:
         cursor = conn.cursor()
         
-        default_tasks = [
-            (
+        proj_root = Path(__file__).resolve().parent.parent.parent.parent
+        default_tasks = []
+        
+        # 1. Gmail Email Check (only if sync script is present)
+        if (proj_root / "scratch" / "run_gmail_sync.py").exists():
+            default_tasks.append((
                 "gmail-check-task-id",
                 "Gmail Email Check",
                 "Check for new Gmail emails since last run, parse them using AI to check importance, and create Morgen tasks for important ones.",
                 "*/5 * * * *",
-            ),
-            (
+            ))
+            
+        # 2. Stock Game Auto Check (only if stock game directory is present)
+        if (proj_root / "stock_game").exists():
+            default_tasks.append((
                 "stock-check-task-id",
                 "Stock Game Auto Check",
                 "Please check the stock game portfolio status using stock_game/portfolio.py status. Run the scan using stock_game/scan.py to identify new signals. If the 3-day cool-off has expired, make the necessary rebalancing adjustments (sell down heavy holdings to keep them under 33% and buy into strong buy tickers like JPM or IWM). Then commit the trades.",
                 "0 15 * * 1-5",
-            ),
-            (
-                "grace-check-task-id",
-                "Grace Timekeeper",
-                "Ada: Run Timekeeper Health Check. Invoke the Grace subagent to check background tasks using src/agent/observability/grace_monitor.py and output the summary report.",
-                "*/5 * * * *",
-            ),
-            (
-                "meta-evaluation-task-id",
-                "Meta-Evaluation",
-                "Ada: Run Meta-Evaluation post-mortem analyzer. Query the failed background tasks and API error logs from the past 24 hours, identify bugs/edge cases, and record memory facts to prevent recurrence.",
-                "0 0 * * *",
-            ),
-            (
-                "quiet-observer-task-id",
-                "Quiet Observer",
-                "Ada: Run Quiet Observer pattern analyzer. Query the conversation history and step logs from the past 24 hours, identify patterns, bottlenecks, or automation opportunities, and write a summary report.",
-                "0 8 * * *",
-            ),
-        ]
+            ))
+            
+        # 3. Grace Timekeeper
+        default_tasks.append((
+            "grace-check-task-id",
+            "Grace Timekeeper",
+            "Ada: Run Timekeeper Health Check. Invoke the Grace subagent to check background tasks using src/agent/observability/grace_monitor.py and output the summary report.",
+            "*/5 * * * *",
+        ))
+        
+        # 4. Meta-Evaluation
+        default_tasks.append((
+            "meta-evaluation-task-id",
+            "Meta-Evaluation",
+            "Ada: Run Meta-Evaluation post-mortem analyzer. Query the failed background tasks and API error logs from the past 24 hours, identify bugs/edge cases, and record memory facts to prevent recurrence.",
+            "0 0 * * *",
+        ))
+        
+        # 5. Quiet Observer
+        default_tasks.append((
+            "quiet-observer-task-id",
+            "Quiet Observer",
+            "Ada: Run Quiet Observer pattern analyzer. Query the conversation history and step logs from the past 24 hours, identify patterns, bottlenecks, or automation opportunities, and write a summary report.",
+            "0 8 * * *",
+        ))
         
         for task_id, name, prompt, cron_expr in default_tasks:
             cursor.execute("SELECT cron_expr FROM scheduled_tasks WHERE id = ?", (task_id,))
@@ -261,7 +273,7 @@ def load_plugins(app: FastAPI) -> None:
     import sys
     import importlib.util
     
-    # Ensure project root is in sys.path for plugin imports (e.g. enuclea)
+    # Ensure project root is in sys.path for plugin imports
     _root = str(Path(__file__).resolve().parent.parent.parent)
     if _root not in sys.path:
         sys.path.append(_root)
@@ -1474,9 +1486,10 @@ async def execute_scheduled_task(name: str, prompt: str):
 
     if name == "Gmail Email Check":
         try:
+            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
             proc = await asyncio.create_subprocess_exec(
-                "/home/dan/AGent/.venv/bin/python", "scratch/run_gmail_sync.py",
-                cwd="/home/dan/AGent",
+                sys.executable or "python3", "scratch/run_gmail_sync.py",
+                cwd=proj_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -1513,9 +1526,10 @@ async def execute_scheduled_task(name: str, prompt: str):
         conversation_id = f"sched-grace-timekeeper-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
         try:
+            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
             proc = await asyncio.create_subprocess_exec(
-                "/home/dan/AGent/.venv/bin/python", "src/agent/observability/grace_monitor.py",
-                cwd="/home/dan/AGent",
+                sys.executable or "python3", "src/agent/observability/grace_monitor.py",
+                cwd=proj_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -1537,12 +1551,13 @@ async def execute_scheduled_task(name: str, prompt: str):
             return
 
     if name == "Stock Game Auto Check":
-        conversation_id = f"sched-stock-check-{datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")}"
+        conversation_id = f"sched-stock-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
         try:
+            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
             proc = await asyncio.create_subprocess_exec(
-                "/home/dan/AGent/.venv/bin/python", "stock_game/strategy.py",
-                cwd="/home/dan/AGent",
+                sys.executable or "python3", "stock_game/strategy.py",
+                cwd=proj_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )

@@ -719,7 +719,8 @@ def youtube_to_mp3(url: str) -> str:
     import urllib.parse
     import yt_dlp
 
-    target_dir = Path("/home/dan/AGent/share/data/mp3")
+    proj_root = Path(__file__).resolve().parent.parent.parent
+    target_dir = proj_root / "share" / "data" / "mp3"
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:

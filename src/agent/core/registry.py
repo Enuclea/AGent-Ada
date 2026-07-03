@@ -109,38 +109,66 @@ class ToolRegistry:
                 pass
 
         # 2. Check built-in profiles
-        builtins = {
-            "grace_timekeeper": (
-                "You are the Grace Timekeeper Specialist agent. Your primary role is to run the timekeeper health check.\n"
-                "The monitor script is located at 'src/agent/observability/grace_monitor.py' in the workspace.\n"
-                "Directly execute this script using python to check background task health. Do not perform generic searches.\n"
-                "Report any stalled or delayed tasks back to the parent agent."
-            ),
-            "gmail_sync": (
+        proj_root = Path(__file__).resolve().parent.parent.parent
+        builtins = {}
+
+        # Grace Timekeeper
+        builtins["grace_timekeeper"] = (
+            "You are the Grace Timekeeper Specialist agent. Your primary role is to run the timekeeper health check.\n"
+            "The monitor script is located at 'src/agent/observability/grace_monitor.py' in the workspace.\n"
+            "Directly execute this script using python to check background task health. Do not perform generic searches.\n"
+            "Report any stalled or delayed tasks back to the parent agent."
+        )
+
+        # Gmail Sync
+        if (proj_root / "scratch" / "run_gmail_sync.py").exists():
+            builtins["gmail_sync"] = (
                 "You are the Gmail & Morgen Sync Specialist agent. Your primary role is to sync incoming Gmail messages and update Morgen tasks.\n"
                 "The sync script is located at 'scratch/run_gmail_sync.py' in the workspace.\n"
                 "Directly execute this script using python to run the synchronization. Do not perform generic searches.\n"
                 "Report a concise summary of synced emails back to the parent agent."
-            ),
-            "quiet_observer": (
-                "You are the Quiet Observer Specialist agent. Your primary role is to analyze conversation logs, user commands, and tool calls to discover patterns and opportunities.\n"
-                "The observer script is located at 'src/agent/quiet_observer.py' in the workspace.\n"
-                "Directly execute this script using python to perform the analysis. Do not perform generic searches.\n"
-                "Report suggestions and memory facts back to the parent agent."
-            ),
-            "meta_evaluator": (
-                "You are the Meta-Evaluation Specialist agent. Your primary role is to analyze recent errors and log metrics.\n"
-                "The evaluation script is located at 'src/agent/meta_evaluation.py' in the workspace.\n"
-                "Directly execute this script using python to perform the post-mortem analysis. Do not perform generic searches.\n"
-                "Report the post-mortem summary back to the parent agent."
-            ),
-            "stock_trader": (
+            )
+
+        # Quiet Observer
+        builtins["quiet_observer"] = (
+            "You are the Quiet Observer Specialist agent. Your primary role is to analyze conversation logs, user commands, and tool calls to discover patterns and opportunities.\n"
+            "The observer script is located at 'src/agent/quiet_observer.py' in the workspace.\n"
+            "Directly execute this script using python to perform the analysis. Do not perform generic searches.\n"
+            "Report suggestions and memory facts back to the parent agent."
+        )
+
+        # Meta Evaluator
+        builtins["meta_evaluator"] = (
+            "You are the Meta-Evaluation Specialist agent. Your primary role is to analyze recent errors and log metrics.\n"
+            "The evaluation script is located at 'src/agent/meta_evaluation.py' in the workspace.\n"
+            "Directly execute this script using python to perform the post-mortem analysis. Do not perform generic searches.\n"
+            "Report the post-mortem summary back to the parent agent."
+        )
+
+        # Stock Trader
+        if (proj_root / "stock_game").exists():
+            builtins["stock_trader"] = (
                 "You are the Stock Game Trading Specialist agent. Your primary role is to check stock portfolios and rebalance holdings.\n"
                 "The trading script is located at 'stock_game/strategy.py' in the workspace.\n"
                 "Directly execute this script using python. Do not perform generic searches.\n"
                 "Report the trade completion and portfolio balance status back to the parent agent."
             )
-        }
+
+        # Solar Monitor
+        if (proj_root / "solar").exists() or (proj_root.parent / "solar").exists():
+            solar_path = proj_root / "solar" / "snapshot.py"
+            if not solar_path.exists():
+                solar_path = proj_root.parent / "solar" / "snapshot.py"
+            solar_venv_py = solar_path.parent / ".venv" / "bin" / "python3"
+            if not solar_venv_py.exists():
+                solar_venv_py = "python3"
+            builtins["solar_monitor"] = (
+                "You are the Solar Monitor Specialist agent. Your primary role is to read real-time solar generation, grid, and battery metrics.\n"
+                f"The solar tool is located at '{solar_path}' in the system.\n"
+                f"Directly execute '{solar_venv_py} {solar_path}' using the run_command tool to get power/generation stats. Do not perform generic codebase searches or bot inspections.\n"
+                "Report the summarized power metrics back to the parent agent."
+            )
+
         return builtins.get(agent_profile)
 
     def suggest_specialist(self, prompt: str) -> Optional[str]:
@@ -155,13 +183,22 @@ class ToolRegistry:
         
         prompt_lower = prompt.lower()
         
-        delegation_triggers = {
-            "gmail_sync": ["gmail", "email check", "inbox", "morgen sync", "sync email", "new mail", "check mail"],
-            "stock_trader": ["stock", "portfolio", "rebalance", "trading", "shares", "stock game"],
-            "grace_timekeeper": ["stalled task", "health check", "inactive task", "monitor tasks", "grace", "timekeeper"],
-            "quiet_observer": ["conversation log", "pattern analysis", "observe", "opportunity", "quiet observer"],
-            "meta_evaluator": ["post-mortem", "error analysis", "evaluate errors", "meta evaluation", "log metrics"],
-        }
+        proj_root = Path(__file__).resolve().parent.parent.parent
+        delegation_triggers = {}
+        
+        if (proj_root / "scratch" / "run_gmail_sync.py").exists():
+            delegation_triggers["gmail_sync"] = ["gmail", "email check", "inbox", "morgen sync", "sync email", "new mail", "check mail"]
+            
+        if (proj_root / "stock_game").exists():
+            delegation_triggers["stock_trader"] = ["stock", "portfolio", "rebalance", "trading", "shares", "stock game"]
+            
+        delegation_triggers["grace_timekeeper"] = ["stalled task", "health check", "inactive task", "monitor tasks", "grace", "timekeeper"]
+        
+        if (proj_root / "solar").exists() or (proj_root.parent / "solar").exists():
+            delegation_triggers["solar_monitor"] = ["solar", "battery", "grid power", "power generation", "solar panel"]
+            
+        delegation_triggers["quiet_observer"] = ["conversation log", "pattern analysis", "observe", "opportunity", "quiet observer"]
+        delegation_triggers["meta_evaluator"] = ["post-mortem", "error analysis", "evaluate errors", "meta evaluation", "log metrics"]
         
         for profile, triggers in delegation_triggers.items():
             if any(trigger in prompt_lower for trigger in triggers):
