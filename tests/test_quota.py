@@ -152,7 +152,7 @@ def test_stuck_prevention_fallback(mock_get_agent):
     mock_agent_claude.usage_metadata = MagicMock(prompt_token_count=10, candidates_token_count=20)
 
     # Configure mock_get_agent side_effect
-    def side_effect(model, session_id, system_instructions=None, disable_tools=False, roleplay=False, prompt=None):
+    def side_effect(model, session_id, system_instructions=None, disable_tools=False, roleplay=False, prompt=None, **kwargs):
         if model and "Claude" in model:
             return mock_agent_claude
         return mock_agent_gemini

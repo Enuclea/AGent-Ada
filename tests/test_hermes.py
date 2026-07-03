@@ -150,7 +150,7 @@ def test_model_fallback_routing(mock_get_or_create_agent):
     mock_agent_fallback.__aiter__ = mock_response_chunks
     mock_agent_fallback.usage_metadata = MagicMock(prompt_token_count=10, candidates_token_count=20)
     
-    def side_effect(model, session_id, system_instructions, disable_tools, roleplay, prompt=None):
+    def side_effect(model, session_id, system_instructions, disable_tools, roleplay, prompt=None, **kwargs):
         if "3.5" in model:
             return mock_agent_primary
         else:

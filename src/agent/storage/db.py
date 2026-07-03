@@ -31,6 +31,7 @@ def custom_sqlite3_connect(database, *args, **kwargs):
 sqlite3.connect = custom_sqlite3_connect
 
 active_session_id_var = contextvars.ContextVar("active_session_id", default=None)
+active_task_id_var = contextvars.ContextVar("active_task_id", default=None)
 
 DB_FILE_PATH = Path(os.getenv("AGENT_DB_PATH", str(Path.home() / ".agent" / "history.db")))
 

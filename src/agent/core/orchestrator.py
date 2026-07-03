@@ -302,6 +302,8 @@ class OrchestrationService:
             
             task_id = str(uuid.uuid4())
             current_active_task_id = task_id
+            from agent.storage.db import active_task_id_var
+            active_task_id_var.set(task_id)
             memory.add_active_task(task_id, tool_call.name, str(tool_call.args))
             memory.log_conversation_step(session_id or "New Session", "tool_call", str(tool_call.args), tool_name=tool_call.name)
             return HookResult(allow=True)
@@ -309,6 +311,8 @@ class OrchestrationService:
         @hooks.post_tool_call
         async def on_post_tool(data: Any) -> None:
             nonlocal current_active_task_id
+            from agent.storage.db import active_task_id_var
+            active_task_id_var.set(None)
             if current_active_task_id:
                 memory.update_active_task_status(current_active_task_id, "completed")
                 current_active_task_id = None
@@ -316,6 +320,8 @@ class OrchestrationService:
         @hooks.on_tool_error
         async def on_tool_err(err: Any) -> None:
             nonlocal current_active_task_id
+            from agent.storage.db import active_task_id_var
+            active_task_id_var.set(None)
             if current_active_task_id:
                 memory.update_active_task_status(current_active_task_id, "failed")
                 current_active_task_id = None
