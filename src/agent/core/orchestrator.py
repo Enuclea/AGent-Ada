@@ -106,20 +106,26 @@ class OrchestrationService:
             if roleplay_mem_list:
                 mem_summary = "\n\n[PERSISTENT ROLEPLAY MEMORIES]\n" + "\n".join([f"- {m['key']}: {m['fact']}" for m in roleplay_mem_list]) + "\n[END OF PERSISTENT ROLEPLAY MEMORIES]"
             full_instructions = (custom_instructions or "") + mem_summary
+        elif custom_instructions:
+            # Specialist mode: personality prompt only, no heavy context injection.
+            # Specialists respond instantly in character with full tool access.
+            # Skip: memory summary, RAG, delegation rules, checkpoints, skills, workers.
+            full_instructions = custom_instructions
         else:
+            # Coordinator mode: full context injection for PM-level situational awareness.
             memory_summary = memory.get_fact_summary()
             skills = tool_registry.discover_skills()
             skills_summary = "Loaded Custom Skills:\n" + "\n".join([f"- {s.name}: {s.description}" for s in skills]) if skills else "No custom skills installed."
             rag_context = await memory.get_auto_rag_context(prompt)
 
-            full_instructions = custom_instructions or base_instructions
+            full_instructions = base_instructions
             if memory_summary:
                 full_instructions += f"\n\n{memory_summary}"
             if rag_context:
                 full_instructions += f"\n\n{rag_context}"
 
-            # 3a. Specialist delegation rule: only inject for coordinator (not when already talking to a specialist)
-            if prompt and not custom_instructions:
+            # 3a. Specialist delegation rule: coordinator only
+            if prompt:
                 suggested_specialist = tool_registry.suggest_specialist(prompt)
                 if suggested_specialist:
                     full_instructions += (

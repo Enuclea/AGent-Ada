@@ -1263,7 +1263,12 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     if hasattr(channel, "name") and channel.name:
         profile_name = get_specialist_profile_for_channel(channel.name)
         if profile_name:
+            # Specialist channels get full tools via agent_profile. The orchestrator's
+            # specialist fast path (custom_instructions branch) skips heavy context injection,
+            # giving instant in-character responses with tools available if work is needed.
             payload["agent_profile"] = profile_name
+            # Use a dedicated session prefix to isolate from old coordinator history
+            payload["session_id"] = f"discord-session-specialist-{channel.id}"
 
     if not full_tooling_authorized:
         payload["disable_tools"] = True
