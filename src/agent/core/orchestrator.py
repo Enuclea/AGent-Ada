@@ -118,8 +118,8 @@ class OrchestrationService:
             if rag_context:
                 full_instructions += f"\n\n{rag_context}"
 
-            # 3a. Specialist delegation rule: if the prompt matches a known specialist, enforce delegation
-            if prompt:
+            # 3a. Specialist delegation rule: only inject for coordinator (not when already talking to a specialist)
+            if prompt and not custom_instructions:
                 suggested_specialist = tool_registry.suggest_specialist(prompt)
                 if suggested_specialist:
                     full_instructions += (
