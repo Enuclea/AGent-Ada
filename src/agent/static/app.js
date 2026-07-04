@@ -3,6 +3,8 @@
 let currentSessionId = null;
 let currentModel = null;
 let activeTasksMap = new Map(); // Keep track of seen tasks and their status
+let delegationPending = false; // Set when a delegation response is received
+let delegationHistoryTimer = null; // Timer to refresh chat after delegation completes
 
 // DOM Elements
 const chatMessages = document.getElementById('chat-messages');
@@ -155,6 +157,11 @@ chatForm.addEventListener('submit', async (e) => {
                             } else if (data.type === 'chunk') {
                                 lastResponseText += data.content;
                                 updateResponseBubble(responseBubble, lastResponseText);
+                                // Detect delegation response — start polling for results
+                                if (data.content && data.content.includes('🚀')) {
+                                    delegationPending = true;
+                                    console.log('[UI] Delegation detected, will poll for background results');
+                                }
                             }
                         } catch (err) {
                             console.error('Failed to parse SSE JSON:', err, rawData);
@@ -567,6 +574,23 @@ async function pollTasks() {
             
             const runningCount = tasks.filter(t => t.status === 'running').length;
             activeTasksCount.textContent = `${runningCount} active`;
+
+            // Auto-refresh chat history when delegation tasks complete
+            if (delegationPending) {
+                const completedCount = tasks.filter(t => t.status === 'completed').length;
+                if (completedCount > 0 || runningCount === 0) {
+                    // Debounce: refresh 5s after last completion detected
+                    if (delegationHistoryTimer) clearTimeout(delegationHistoryTimer);
+                    delegationHistoryTimer = setTimeout(async () => {
+                        console.log('[UI] Refreshing chat history after delegation completed');
+                        await loadHistory();
+                        if (runningCount === 0) {
+                            delegationPending = false;
+                            delegationHistoryTimer = null;
+                        }
+                    }, 5000);
+                }
+            }
 
             const currentTaskIds = new Set(tasks.map(t => t.id));
             
