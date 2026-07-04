@@ -1281,6 +1281,8 @@ async function loadDynamicModules() {
 
 // Init Setup
 async function init() {
+    // Display the session ID generated at module scope
+    headerSessionId.querySelector('.id-val').textContent = currentSessionId;
     await loadStatus();
     await loadSessions();
     await loadHistory();
