@@ -89,6 +89,14 @@ class OrchestrationService:
 
         # 2. Base instructions
         specialist_roster = tool_registry.get_specialist_roster()
+        common_protocol = (
+            "[SYSTEM PROTOCOL - TIMEOUT PREVENTION & YIELDING]\n"
+            "- CRITICAL: Keep your execution turns non-blocking. The system has a strict client/HTTP timeout.\n"
+            "- If you spawn a subagent (`spawn_subagent`) or launch a long-running background command, you MUST schedule a check-in timer using the `schedule` tool and immediately END your turn by returning a progress update. Do NOT call any more tools or run loops in this turn to wait.\n"
+            "- NEVER write loops in your thoughts or tool-calls to poll/wait for background tasks or subagents to finish. Always yield your turn immediately, let the system wake you up via the timer, and check progress on your next turn.\n"
+            "- When checking status of an active task/subagent, perform a single status query, report progress to the user, and if not finished, schedule another check-in timer and yield again.\n"
+            "[END SYSTEM PROTOCOL]\n\n"
+        )
         base_instructions = (
             "You are Ada, the Project Coordinator of the Ada Task Engine, powered by AntiGravity.\n"
             "You are a PROJECT MANAGER — not a developer. You break down user requests into work items, "
@@ -145,12 +153,12 @@ class OrchestrationService:
             mem_summary = ""
             if roleplay_mem_list:
                 mem_summary = "\n\n[PERSISTENT ROLEPLAY MEMORIES]\n" + "\n".join([f"- {m['key']}: {m['fact']}" for m in roleplay_mem_list]) + "\n[END OF PERSISTENT ROLEPLAY MEMORIES]"
-            full_instructions = (custom_instructions or "") + mem_summary
+            full_instructions = common_protocol + (custom_instructions or "") + mem_summary
         elif custom_instructions:
             # Specialist mode: personality prompt only, no heavy context injection.
             # Specialists respond instantly in character with full tool access.
             # Skip: memory summary, RAG, delegation rules, checkpoints, skills, workers.
-            full_instructions = custom_instructions
+            full_instructions = common_protocol + custom_instructions
         else:
             # Coordinator mode: full context injection for PM-level situational awareness.
             memory_summary = memory.get_fact_summary()
@@ -158,7 +166,7 @@ class OrchestrationService:
             skills_summary = "Loaded Custom Skills:\n" + "\n".join([f"- {s.name}: {s.description}" for s in skills]) if skills else "No custom skills installed."
             rag_context = await memory.get_auto_rag_context(prompt)
 
-            full_instructions = base_instructions
+            full_instructions = common_protocol + base_instructions
             if memory_summary:
                 full_instructions += f"\n\n{memory_summary}"
             if rag_context:
