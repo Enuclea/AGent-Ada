@@ -99,6 +99,62 @@ class KeylessGeminiAPIEndpoint(GeminiAPIEndpoint):
         pass
 
 
+def get_process_activity_metrics(pid: int) -> Tuple[int, List[int]]:
+    """Retrieves total user+sys CPU ticks and child process PIDs on Linux.
+
+    Returns:
+        (total_cpu_ticks, child_pids)
+    """
+    total_ticks = 0
+    child_pids = []
+    
+    # 1. Get CPU ticks for the parent PID
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as f:
+            stat_parts = f.read().split()
+            # utime=14, stime=15, cutime=16, cstime=17 (indices 13 to 16 inclusive)
+            if len(stat_parts) >= 17:
+                total_ticks = sum(int(x) for x in stat_parts[13:17])
+    except Exception:
+        pass
+        
+    # 2. Get child PIDs
+    try:
+        for pid_str in os.listdir("/proc"):
+            if not pid_str.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid_str}/stat", "r", encoding="utf-8", errors="replace") as f:
+                    stat_content = f.read()
+                r_paren = stat_content.rfind(")")
+                if r_paren != -1:
+                    after_comm = stat_content[r_paren + 2:].split()
+                    if len(after_comm) >= 2:
+                        parent_pid = int(after_comm[1])
+                        if parent_pid == pid:
+                            child_pids.append(int(pid_str))
+            except Exception:
+                continue
+    except Exception:
+        pass
+        
+    return total_ticks, child_pids
+
+
+def has_pending_approvals() -> bool:
+    """Checks if there are any active tasks waiting for user approval in the database."""
+    try:
+        from agent.storage.db import get_connection, DB_FILE_PATH
+        conn = get_connection(DB_FILE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT count(*) FROM active_tasks WHERE status = 'pending_approval'")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0
+    except Exception:
+        return False
+
+
 class KeylessAgyResponse:
     """Wrapper class representing the response from keyless agent execution.
 
@@ -157,20 +213,56 @@ class KeylessAgyResponse:
         """Consume stdout and stderr of the process asynchronously and update state."""
         if self._completed_event.is_set():
             return
+        
+        start_time = asyncio.get_event_loop().time()
+        last_activity_time = start_time
+        max_duration = self.timeout_val if self.timeout_val is not None else 120.0
+        prev_ticks, _ = get_process_activity_metrics(self.proc.pid) if self.proc else (0, [])
+        idle_timeout = 45.0
+        
         try:
             while True:
-                chunk_bytes: bytes = await asyncio.wait_for(self.proc.stdout.read(4096), timeout=self.timeout_val)
-                if not chunk_bytes:
-                    break
-                decoded: str = chunk_bytes.decode("utf-8", errors="replace")
-                self.stdout_lines.append(decoded)
-        except asyncio.TimeoutError:
+                current_time = asyncio.get_event_loop().time()
+                elapsed = current_time - start_time
+                remaining = max_duration - elapsed
+                if remaining <= 0:
+                    raise asyncio.TimeoutError(f"Overall session timeout of {max_duration} seconds exceeded")
+                    
+                chunk_timeout = min(2.0, remaining)
+                try:
+                    chunk_bytes = await asyncio.wait_for(self.proc.stdout.read(4096), timeout=chunk_timeout)
+                    if not chunk_bytes:
+                        break
+                    decoded = chunk_bytes.decode("utf-8", errors="replace")
+                    self.stdout_lines.append(decoded)
+                    last_activity_time = asyncio.get_event_loop().time()
+                except asyncio.TimeoutError:
+                    if self.proc.returncode is not None:
+                        break
+                        
+                    curr_ticks, children = get_process_activity_metrics(self.proc.pid) if self.proc else (0, [])
+                    ticks_increased = curr_ticks > prev_ticks
+                    prev_ticks = curr_ticks
+                    
+                    is_active = (
+                        ticks_increased or 
+                        len(children) > 0 or 
+                        has_pending_approvals()
+                    )
+                    
+                    if is_active:
+                        last_activity_time = asyncio.get_event_loop().time()
+                    else:
+                        silence_duration = asyncio.get_event_loop().time() - last_activity_time
+                        if silence_duration > idle_timeout:
+                            raise asyncio.TimeoutError(f"Inactivity timeout exceeded: {silence_duration:.1f}s of silence")
+        except asyncio.TimeoutError as e:
             try:
                 self.proc.kill()
                 await self.proc.wait()
             except Exception:
                 pass
-            self.stdout_lines.append(f"\n[Timeout after {self.timeout_val} seconds]\n")
+            self.stdout_lines.append(f"\n[{e}]\n")
             if self.task_id:
                 try:
                     from agent.core import task_manager
@@ -238,17 +330,21 @@ class KeylessAgyResponse:
                 return
                 
             start_time: float = asyncio.get_event_loop().time()
+            last_activity_time: float = start_time
             max_duration: float = self.timeout_val if self.timeout_val is not None else 120.0
+            prev_ticks, _ = get_process_activity_metrics(self.proc.pid) if self.proc else (0, [])
+            idle_timeout: float = 45.0
+            
             try:
                 while True:
-                    # Calculate remaining time for the overall timeout
-                    elapsed: float = asyncio.get_event_loop().time() - start_time
+                    current_time = asyncio.get_event_loop().time()
+                    elapsed: float = current_time - start_time
                     remaining: float = max_duration - elapsed
                     if remaining <= 0:
-                        raise asyncio.TimeoutError()
+                        raise asyncio.TimeoutError(f"Overall session timeout of {max_duration} seconds exceeded")
                         
-                    # Use a short timeout of 15 seconds to yield keep-alive pings
-                    chunk_timeout: float = min(15.0, remaining)
+                    # Use a short timeout of 2.0 seconds to keep polling and check activity metrics
+                    chunk_timeout: float = min(2.0, remaining)
                     try:
                         chunk_bytes: bytes = await asyncio.wait_for(self.proc.stdout.read(4096), timeout=chunk_timeout)
                         if not chunk_bytes:
@@ -256,19 +352,36 @@ class KeylessAgyResponse:
                         decoded: str = chunk_bytes.decode("utf-8", errors="replace")
                         self.stdout_lines.append(decoded)
                         yield decoded
+                        last_activity_time = asyncio.get_event_loop().time()
                     except asyncio.TimeoutError:
-                        # Yield a blank keep-alive chunk to reset connection inactivity timers
-                        if self.proc.returncode is None:
-                            yield ""
-                        else:
+                        if self.proc.returncode is not None:
                             break
-            except asyncio.TimeoutError:
+                        # Yield a blank keep-alive chunk to reset connection inactivity timers
+                        yield ""
+                        
+                        curr_ticks, children = get_process_activity_metrics(self.proc.pid) if self.proc else (0, [])
+                        ticks_increased = curr_ticks > prev_ticks
+                        prev_ticks = curr_ticks
+                        
+                        is_active = (
+                            ticks_increased or 
+                            len(children) > 0 or 
+                            has_pending_approvals()
+                        )
+                        
+                        if is_active:
+                            last_activity_time = asyncio.get_event_loop().time()
+                        else:
+                            silence_duration = asyncio.get_event_loop().time() - last_activity_time
+                            if silence_duration > idle_timeout:
+                                raise asyncio.TimeoutError(f"Inactivity timeout exceeded: {silence_duration:.1f}s of silence")
+            except asyncio.TimeoutError as e:
                 try:
                     self.proc.kill()
                     await self.proc.wait()
                 except Exception:
                     pass
-                err_msg: str = f"\n[Timeout after {self.timeout_val} seconds]\n"
+                err_msg: str = f"\n[{e}]\n"
                 self.stdout_lines.append(err_msg)
                 if self.task_id:
                     try:
