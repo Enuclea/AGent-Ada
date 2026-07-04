@@ -713,6 +713,10 @@ async def chat_endpoint(req: ChatRequest):
 
                 async def stream_agent_response(active_agent, prompt_to_send):
                     nonlocal text_chunks_emitted, thoughts_emitted
+                    # Reset context state to False to prevent session leakage
+                    from agent.tools import yield_requested
+                    yield_requested.set(False)
+
                     response = await active_agent.chat(prompt_to_send)
                     await queue.put({"type": "session_id", "content": active_agent.conversation_id})
                     
@@ -723,17 +727,22 @@ async def chat_endpoint(req: ChatRequest):
                         if thought:
                             thoughts_emitted = True
                             await queue.put({"type": "thought", "content": thought})
+                        if yield_requested.get():
+                            break
                         
                     if thoughts_str:
                         memory.log_conversation_step(active_agent.conversation_id, "thought", thoughts_str)
                         
-                    # Stream response chunks
+                    # Stream response chunks ONLY if a yield has not been requested
                     output_content = ""
-                    async for chunk in response:
-                        output_content += chunk
-                        if chunk:
-                            text_chunks_emitted = True
-                            await queue.put({"type": "chunk", "content": chunk})
+                    if not yield_requested.get():
+                        async for chunk in response:
+                            output_content += chunk
+                            if chunk:
+                                text_chunks_emitted = True
+                                await queue.put({"type": "chunk", "content": chunk})
+                            if yield_requested.get():
+                                break
                         
                     if output_content:
                         memory.log_conversation_step(active_agent.conversation_id, "assistant", output_content)
@@ -1041,7 +1050,7 @@ async def chat_endpoint(req: ChatRequest):
                     if task.done() and queue.empty():
                         break
                     # Send a keep-alive line to prevent HTTP connection timeout
-                    yield ": keep-alive\n\n"
+                    yield f"data: {json.dumps({'type': 'ping', 'content': 'ping'})}\n\n"
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
             print(f"[CHAT] Client disconnected from streaming session {lookup_id}.")
