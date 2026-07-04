@@ -7,4 +7,7 @@
 - Do NOT introduce any hardcoded private integrations, private API keys, credentials, or proprietary configuration files.
 - All private features, local integrations, custom routes, or custom plugins must be decoupled as plugins inside the gitignored `/plugins` directory.
 - Jules must NEVER refactor keyless baseline code to require API credentials, API keys, or hardcoded secrets. Keep all core logic completely generic.
+- Jules must NOT make breaking changes to plugin interfaces, hooks, or dynamic loading paths in core files. Maintain backward compatibility for existing custom/private plugins.
+- Do NOT introduce dependencies, imports, or references to specific private plugins or directories (e.g., `enuclea_plugin`, `multi_tenant_plugin`, `/plugins/*`) into the core public codebase. Core code must remain agnostic of any specific plugin's presence.
+
 
