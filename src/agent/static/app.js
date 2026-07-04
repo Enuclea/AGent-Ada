@@ -1,6 +1,6 @@
 // App JS for Ada Task Engine Dashboard
 
-let currentSessionId = null;
+let currentSessionId = crypto.randomUUID();
 let currentModel = null;
 let activeTasksMap = new Map(); // Keep track of seen tasks and their status
 let delegationPending = false; // Set when a delegation response is received
@@ -67,8 +67,8 @@ modelSelect.addEventListener('change', (e) => {
 sessionSelect.addEventListener('change', async (e) => {
     const sessionId = e.target.value;
     if (sessionId === "") {
-        // Start new session
-        currentSessionId = null;
+        // Start new session — generate a unique ID immediately
+        currentSessionId = crypto.randomUUID();
         chatMessages.innerHTML = `
             <div class="message system-message">
                 <div class="message-avatar">🌸</div>
@@ -77,7 +77,7 @@ sessionSelect.addEventListener('change', async (e) => {
                 </div>
             </div>
         `;
-        headerSessionId.querySelector('.id-val').textContent = 'New Session';
+        headerSessionId.querySelector('.id-val').textContent = currentSessionId;
         await pollPlanAndTelemetry();
     } else {
         await resumeSession(sessionId);
