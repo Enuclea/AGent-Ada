@@ -627,10 +627,10 @@ select:focus {
     padding: 0.45rem;
     border-radius: 6px;
     font-family: monospace;
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 80px;
-    overflow-y: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-height: 1.8em;
 }
 
 /* Card Progress Logs */

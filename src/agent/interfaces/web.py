@@ -719,9 +719,21 @@ async def chat_endpoint(req: ChatRequest):
                 if steps_to_run:
                     total_steps = len(current_plan["steps"])
                     
-                    # Check if any step uses spawn_subagent — if so, consolidate into a single delegation call
-                    delegation_steps = [s for s in steps_to_run if s.get("assigned_tool") in ("spawn_subagent", "invoke_subagent")]
-                    non_delegation_steps = [s for s in steps_to_run if s.get("assigned_tool") not in ("spawn_subagent", "invoke_subagent")]
+                    # Check if the task involves delegation — by assigned_tool, step content, OR prompt content
+                    delegation_tools = {"spawn_subagent", "invoke_subagent"}
+                    delegation_keywords = {"subagent", "lacie", "delegate", "spin up", "assign agent", "assign an engineer"}
+                    
+                    prompt_lower = req.prompt.lower()
+                    prompt_is_delegation = any(kw in prompt_lower for kw in delegation_keywords)
+                    
+                    def is_delegation_step(s):
+                        if s.get("assigned_tool") in delegation_tools:
+                            return True
+                        desc_lower = (s.get("description") or "").lower()
+                        return any(kw in desc_lower for kw in delegation_keywords)
+                    
+                    delegation_steps = [s for s in steps_to_run if is_delegation_step(s)] if not prompt_is_delegation else steps_to_run
+                    non_delegation_steps = [s for s in steps_to_run if s not in delegation_steps]
                     
                     if delegation_steps:
                         # Consolidate ALL delegation steps into a single prompt
@@ -1297,7 +1309,15 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
     # Register the subagent as an active task so it appears in the activity feed immediately
     display_name = req.agent_profile.replace('_', ' ').title() if req.agent_profile else "Subagent"
     task_id = f"task-agent-{req.subagent_id}"
-    memory.add_active_task(task_id, display_name, f"Executing: {req.prompt[:80]}...")
+    # Extract a clean one-liner for the activity feed (strip boilerplate from prompt)
+    prompt_first_line = req.prompt.strip().split("\n")[0].strip()
+    if prompt_first_line.startswith("Hi "):
+        # "Hi Lacie, Please assign..." → skip to after the comma
+        comma_idx = prompt_first_line.find(",")
+        if comma_idx != -1 and comma_idx < 20:
+            prompt_first_line = prompt_first_line[comma_idx + 1:].strip()
+    task_summary = prompt_first_line[:80] + "..." if len(prompt_first_line) > 80 else prompt_first_line
+    memory.add_active_task(task_id, display_name, task_summary)
     
     async def run_subagent_background():
         try:

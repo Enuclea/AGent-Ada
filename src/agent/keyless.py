@@ -651,7 +651,24 @@ class KeylessAgyAgent:
             agent_name = "Val"
 
         task_id = f"task-agent-{uuid.uuid4()}"
-        snippet = prompt.strip().split("\n")[0]
+        # Extract a meaningful one-liner for the activity feed (skip system driver metadata)
+        snippet_lines = prompt.strip().split("\n")
+        snippet = ""
+        skip_prefixes = ("[SYSTEM DRIVER", "[SYSTEM RESUME", "CRITICAL INSTRUCTIONS", "IMPORTANT:", "The recommended tool", "Note:", "Please execute this step")
+        for line in snippet_lines:
+            line = line.strip()
+            if not line or line.startswith(skip_prefixes) or line.startswith("You are executing") or line.startswith("You have ") or line.startswith("Tasks:"):
+                continue
+            if line.startswith("Original user request:"):
+                snippet = line.replace("Original user request:", "").strip()
+                break
+            if line.startswith("- Task "):
+                snippet = line.lstrip("- Task 0123456789: ").strip()
+                break
+            snippet = line
+            break
+        if not snippet:
+            snippet = snippet_lines[0].strip() if snippet_lines else "Processing..."
         if len(snippet) > 80:
             snippet = snippet[:77] + "..."
             
