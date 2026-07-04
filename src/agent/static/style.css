@@ -635,9 +635,8 @@ select:focus {
 
 /* Card Progress Logs */
 .card-logs {
+    display: none;
     font-size: 0.72rem;
-    color: var(--accent-cyan);
-    display: flex;
     flex-direction: column;
     gap: 0.25rem;
     border-left: 2px solid rgba(0, 242, 254, 0.2);
