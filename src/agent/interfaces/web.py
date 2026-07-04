@@ -645,7 +645,7 @@ async def chat_endpoint(req: ChatRequest):
                                 ng = json.dumps(plan_data.get("non_goals") or [])
                                 tasks = plan_data.get("tasks") or []
                                 
-                                memory.add_session_plan(plan_id, lookup_id, title, "pending", goal, ac, ng)
+                                memory.add_session_plan(plan_id, lookup_id, title, "running", goal, ac, ng)
                                 for idx, step in enumerate(tasks):
                                     step_id = f"step-{plan_id}-{idx}"
                                     memory.add_plan_step(
