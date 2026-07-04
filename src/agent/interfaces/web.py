@@ -128,7 +128,7 @@ def ensure_default_scheduled_tasks(conn=None):
         default_tasks.append((
             "nightly-jules-code-review-task-id",
             "Nightly Jules Code Review",
-            "Ada: Run Nightly Jules Code Review. Spawns Jules sessions using create_session in interactive mode to review both public (/home/dan/AGent-Ada) and private (/home/dan/AGent) repositories. Jules must scan for bugs, inefficiencies, and performance gains without refactoring keyless code to use API keys (per the constraints in .julesrules). Do NOT approve the plan; leave the sessions in a stable pending plan state for morning developer review.",
+            "Ada: Run Nightly Jules Code Review. Spawns Jules sessions using create_session in interactive mode to review both public (/home/dan/AGent-Ada) and private (/home/dan/AGent) repositories. Jules must scan for bugs, inefficiencies, and performance gains, adhering to environment-specific rules: in the public repo (/home/dan/AGent-Ada), maintain an extensible keyless baseline (generic only, all private features decoupled as plugins in the gitignored /plugins directory, and no hardcoded private integrations/keys); in the private repo (/home/dan/AGent), allow local/private integrations, custom routes, and plugins to be active with private credentials allowed in config files and custom plugins, keeping keyless quota as a fallback baseline (do NOT purge private integrations/keys). Do NOT approve the plan; leave the sessions in a stable pending plan state for morning developer review.",
             "0 8 * * *",
         ))
         
@@ -613,10 +613,11 @@ async def chat_endpoint(req: ChatRequest):
                     
                     # Fast-path: if the user explicitly names a specialist, skip LLM decomposition
                     # and create a single delegation step. This prevents subagent explosion.
+                    import re
                     prompt_lower = req.prompt.lower()
                     specialist_match = None
                     for name in ["lacie", "val", "kira", "grace"]:
-                        if name in prompt_lower:
+                        if re.search(r"\b" + re.escape(name) + r"\b", prompt_lower):
                             specialist_match = name
                             break
                     
