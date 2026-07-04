@@ -1172,72 +1172,14 @@ async def spawn_subagent(
                 # Log success
                 memory.log_subagent_message(subagent_session, "subagent", f"[SPAWNED] Subagent successfully spawned in background. Sandbox: {sandbox_dir}")
                 
-                if os.environ.get("AGENT_RUN_MODE") == "daemon":
-                    # Running under daemon: return immediately and let the background scheduler handle resumption
-                    return json.dumps({
-                        "status": "spawned",
-                        "sandbox_dir": sandbox_dir,
-                        "summary": f"Subagent successfully spawned in background. Sandbox: {sandbox_dir}"
-                    })
-                
-                # Wait for the subagent to complete, polling the DB periodically
-                import time
-                import sys
-                import asyncio
-                
-                start_time = time.time()
-                last_poll_time = start_time
-                completed = False
-                result_msg = ""
-                
-                while True:
-                    await asyncio.sleep(2)
-                    curr_time = time.time()
-                    elapsed = int(curr_time - start_time)
-                    
-                    # Print keep-alive to stdout every 10 seconds to avoid connection timeout
-                    if curr_time - last_poll_time >= 10.0:
-                        last_poll_time = curr_time
-                        print(f"⏳ Waiting for subagent to complete... (elapsed: {elapsed}s)")
-                        sys.stdout.flush()
-                        
-                    # Check messages from the database
-                    msgs = memory.get_subagent_messages(subagent_session)
-                    # Filter for messages from the subagent itself
-                    sub_msgs = [m for m in msgs if m["role"] == "subagent"]
-                    if sub_msgs:
-                        # Check the latest message from the subagent
-                        latest_msg = sub_msgs[-1]["message"]
-                        if "subagent completed:" in latest_msg.lower() or "completed:" in latest_msg.lower() or latest_msg.startswith("[SUCCESS]"):
-                            completed = True
-                            result_msg = latest_msg
-                            break
-                        elif "subagent failed:" in latest_msg.lower() or "failed:" in latest_msg.lower() or latest_msg.startswith("[FAILED]"):
-                            completed = False
-                            result_msg = latest_msg
-                            break
-                    
-                    if elapsed > 600: # 10 minutes max timeout
-                        completed = False
-                        result_msg = f"Timed out after {elapsed} seconds waiting for subagent."
-                        break
-                
-                if completed:
-                    print(f"✅ Subagent completed: {result_msg}")
-                    sys.stdout.flush()
-                    return json.dumps({
-                        "status": "completed",
-                        "sandbox_dir": sandbox_dir,
-                        "summary": result_msg
-                    })
-                else:
-                    print(f"❌ Subagent failed or timed out: {result_msg}")
-                    sys.stdout.flush()
-                    return json.dumps({
-                        "status": "failed",
-                        "sandbox_dir": sandbox_dir,
-                        "summary": result_msg
-                    })
+                # Always return immediately — subagent runs in the background.
+                # Results are tracked via the activity feed and subagent_messages table.
+                return json.dumps({
+                    "status": "spawned",
+                    "subagent_id": subagent_session,
+                    "sandbox_dir": sandbox_dir,
+                    "summary": f"Subagent ({agent_profile or 'generic'}) spawned successfully. It is running in the background and will report results to the activity feed."
+                })
                 
     except Exception as e:
         err_msg = f"[FAILED] Subagent execution failed: {e}"
