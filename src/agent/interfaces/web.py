@@ -600,8 +600,12 @@ async def chat_endpoint(req: ChatRequest):
                 # 1. Decompose plan steps if enabled and prompt is complex enough
                 enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "true").lower() == "true"
                 existing_plan = memory.get_session_plan(lookup_id)
-                if existing_plan and existing_plan.get("status") == "completed":
-                    existing_plan = None
+                if existing_plan:
+                    plan_status = existing_plan.get("status", "")
+                    steps = existing_plan.get("steps", [])
+                    all_steps_done = steps and all(s.get("status") in ("completed", "failed") for s in steps)
+                    if plan_status == "completed" or all_steps_done:
+                        existing_plan = None
                 plan_min_length = int(os.environ.get("AGENT_PLAN_MIN_LENGTH", "40"))
                 if enable_planning and not existing_plan and len(req.prompt.strip()) > plan_min_length:
                     import uuid
