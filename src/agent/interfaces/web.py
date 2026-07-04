@@ -592,6 +592,8 @@ async def chat_endpoint(req: ChatRequest):
                 # 1. Decompose plan steps if enabled and prompt is complex enough
                 enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "true").lower() == "true"
                 existing_plan = memory.get_session_plan(lookup_id)
+                if existing_plan and existing_plan.get("status") == "completed":
+                    existing_plan = None
                 plan_min_length = int(os.environ.get("AGENT_PLAN_MIN_LENGTH", "40"))
                 if enable_planning and not existing_plan and len(req.prompt.strip()) > plan_min_length:
                     import uuid
@@ -2194,11 +2196,30 @@ async def run_scheduler():
                                             conversation_id=sess_id,
                                             timeout=120.0
                                         )
+                                        # Query the original user prompt to remind the orchestrator of the goal
+                                        original_goal = ""
+                                        try:
+                                            conn_p = get_connection(memory.DB_FILE_PATH)
+                                            cursor_p = conn_p.cursor()
+                                            cursor_p.execute(
+                                                "SELECT content FROM conversation_steps WHERE session_id = ? AND role = 'user' ORDER BY timestamp ASC LIMIT 1",
+                                                (sess_id,)
+                                            )
+                                            row_p = cursor_p.fetchone()
+                                            if row_p:
+                                                original_goal = row_p[0]
+                                            conn_p.close()
+                                        except Exception:
+                                            pass
+
                                         resume_prompt = (
                                             f"[SYSTEM RESUME]\n"
                                             f"Subagent '{sub_id}' has completed the delegated task.\n"
                                             f"Subagent Output: {msg}\n\n"
-                                            f"Please resume execution and report back."
+                                            f"Original User Request: \"{original_goal}\"\n\n"
+                                            f"Please resume execution, review the subagent's output against the original user request, "
+                                            f"complete any remaining goals (such as reading and showing file contents, summarizing results, or answering specific questions), "
+                                            f"and output your final response directly to the user."
                                         )
                                         memory.log_conversation_step(sess_id, "user", resume_prompt)
                                         async with agent as active_agent:
