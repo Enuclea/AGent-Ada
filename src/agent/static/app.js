@@ -583,20 +583,15 @@ async function pollTasks() {
             activeTasksCount.textContent = `${runningCount} active`;
 
             // Auto-refresh chat history when delegation tasks complete
-            if (delegationPending) {
-                const completedCount = tasks.filter(t => t.status === 'completed').length;
-                if (completedCount > 0 || runningCount === 0) {
-                    // Debounce: refresh 5s after last completion detected
-                    if (delegationHistoryTimer) clearTimeout(delegationHistoryTimer);
-                    delegationHistoryTimer = setTimeout(async () => {
-                        console.log('[UI] Refreshing chat history after delegation completed');
-                        await loadHistory();
-                        if (runningCount === 0) {
-                            delegationPending = false;
-                            delegationHistoryTimer = null;
-                        }
-                    }, 5000);
-                }
+            if (delegationPending && runningCount === 0) {
+                // All tasks finished — refresh chat to show background results
+                if (delegationHistoryTimer) clearTimeout(delegationHistoryTimer);
+                delegationHistoryTimer = setTimeout(async () => {
+                    console.log('[UI] Refreshing chat history after delegation completed');
+                    await loadHistory();
+                    delegationPending = false;
+                    delegationHistoryTimer = null;
+                }, 3000);
             }
 
             const currentTaskIds = new Set(tasks.map(t => t.id));
