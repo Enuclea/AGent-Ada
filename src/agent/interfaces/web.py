@@ -716,6 +716,7 @@ async def chat_endpoint(req: ChatRequest):
                     response = await active_agent.chat(prompt_to_send)
                     await queue.put({"type": "session_id", "content": active_agent.conversation_id})
                     
+                    from agent.tools import yield_requested
                     # Stream thoughts
                     thoughts_str = ""
                     async for thought in response.thoughts:
@@ -723,6 +724,8 @@ async def chat_endpoint(req: ChatRequest):
                         if thought:
                             thoughts_emitted = True
                             await queue.put({"type": "thought", "content": thought})
+                        if yield_requested.get():
+                            break
                         
                     if thoughts_str:
                         memory.log_conversation_step(active_agent.conversation_id, "thought", thoughts_str)
@@ -734,6 +737,8 @@ async def chat_endpoint(req: ChatRequest):
                         if chunk:
                             text_chunks_emitted = True
                             await queue.put({"type": "chunk", "content": chunk})
+                        if yield_requested.get():
+                            break
                         
                     if output_content:
                         memory.log_conversation_step(active_agent.conversation_id, "assistant", output_content)
@@ -1041,7 +1046,7 @@ async def chat_endpoint(req: ChatRequest):
                     if task.done() and queue.empty():
                         break
                     # Send a keep-alive line to prevent HTTP connection timeout
-                    yield ": keep-alive\n\n"
+                    yield f"data: {json.dumps({'type': 'ping', 'content': 'ping'})}\n\n"
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
             print(f"[CHAT] Client disconnected from streaming session {lookup_id}.")

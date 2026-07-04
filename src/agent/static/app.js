@@ -152,7 +152,9 @@ chatForm.addEventListener('submit', async (e) => {
 
                         try {
                             const data = JSON.parse(rawData);
-                            if (data.type === 'session_id') {
+                            if (data.type === 'ping') {
+                                // Ignore ping messages, they just keep the connection alive
+                            } else if (data.type === 'session_id') {
                                 if (currentSessionId !== data.content) {
                                     currentSessionId = data.content;
                                     headerSessionId.querySelector('.id-val').textContent = currentSessionId;
