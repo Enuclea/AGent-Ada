@@ -123,6 +123,14 @@ def ensure_default_scheduled_tasks(conn=None):
             "Ada: Run Quiet Observer pattern analyzer. Query the conversation history and step logs from the past 24 hours, identify patterns, bottlenecks, or automation opportunities, and write a summary report.",
             "0 8 * * *",
         ))
+
+        # 6. Nightly Jules Code Review
+        default_tasks.append((
+            "nightly-jules-code-review-task-id",
+            "Nightly Jules Code Review",
+            "Ada: Run Nightly Jules Code Review. Spawns Jules sessions using create_session in interactive mode to review both public (/home/dan/AGent-Ada) and private (/home/dan/AGent) repositories. Jules must scan for bugs, inefficiencies, and performance gains without refactoring keyless code to use API keys (per the constraints in .julesrules). Do NOT approve the plan; leave the sessions in a stable pending plan state for morning developer review.",
+            "0 8 * * *",
+        ))
         
         for task_id, name, prompt, cron_expr in default_tasks:
             cursor.execute("SELECT cron_expr FROM scheduled_tasks WHERE id = ?", (task_id,))

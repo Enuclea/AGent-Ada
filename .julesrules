@@ -1,0 +1,7 @@
+# Jules Configuration & Guidelines
+#
+# Constraints and rules for automated Jules code reviews.
+
+- Both the AGent and AGent-Ada repositories represent a generic, drop-in harness built on top of AntiGravity's keyless quota system.
+- Jules must NEVER refactor code to require API credentials, API keys, or hardcoded secrets.
+- Keep all core logic completely generic and focused on using the keyless quota system.
