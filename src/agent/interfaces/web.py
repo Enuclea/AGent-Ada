@@ -772,40 +772,64 @@ async def chat_endpoint(req: ChatRequest):
                         for s in delegation_steps:
                             memory.update_plan_step_status(s["id"], "running")
                         
-                        # Fire the delegation work as a background task directly on the parent session
-                        # after the request thread releases the lock.
+                        # Fire the delegation work as a background task — call spawn endpoint directly
+                        # instead of spawning an intermediate agy process (saves ~90s startup overhead).
                         async def background_delegation():
-                            await asyncio.sleep(0.5) # Wait for client lock release
+                            await asyncio.sleep(0.5)  # Wait for client lock release
                             from agent.memory import active_session_id_var
+                            from agent.core.registry import tool_registry
                             lock = get_session_lock(lookup_id)
                             token = active_session_id_var.set(lookup_id)
                             try:
                                 await lock.acquire(priority=0)
-                                bg_agent = await get_or_create_agent(
-                                    primary_model,
-                                    lookup_id,
-                                    resolved_system_instructions,
-                                    req.disable_tools,
-                                    req.roleplay,
-                                    prompt=driver_prompt
-                                )
-                                response = await bg_agent.chat(driver_prompt)
-                                # Drain thoughts (required to prevent pipe buffer hang)
-                                thoughts_str = ""
-                                async for thought in response.thoughts:
-                                    thoughts_str += thought
-                                if thoughts_str:
-                                    memory.log_conversation_step(lookup_id, "thought", thoughts_str)
-                                # Drain output
-                                output = ""
-                                async for chunk in response:
-                                    output += chunk
-                                if output:
-                                    memory.log_conversation_step(lookup_id, "assistant", output)
-                                # Mark delegation steps as delegated
-                                for s in delegation_steps:
-                                    memory.update_plan_step_status(s["id"], "delegated")
-                                print(f"[BG DISPATCH] Delegation completed: {output[:200]}")
+                                import uuid
+                                
+                                for step in delegation_steps:
+                                    step_desc = step.get("description", "")
+                                    step_id = step["id"]
+                                    
+                                    # Determine agent profile from step description
+                                    profile = "ops_runner"  # default
+                                    desc_lower = step_desc.lower()
+                                    if "lacie" in desc_lower:
+                                        profile = "lacie"
+                                    elif "val" in desc_lower or "qa" in desc_lower or "verif" in desc_lower:
+                                        profile = "qa_specialist"
+                                    elif "grace" in desc_lower:
+                                        profile = "grace_timekeeper"
+                                    elif "kira" in desc_lower:
+                                        profile = "ops_runner"
+                                    
+                                    subagent_id = f"subagent-{profile}-{uuid.uuid4().hex[:8]}"
+                                    prompt = f"{step_desc}\n\nOriginal user request: {req.prompt}"
+                                    
+                                    # Log the spawn
+                                    memory.log_subagent_message(subagent_id, "parent",
+                                        f"Spawning tooled subagent ({profile}) with prompt: {prompt[:200]}")
+                                    
+                                    # Call spawn endpoint directly (in-process, no extra agy subprocess)
+                                    spawn_req = SpawnSubagentRequest(
+                                        subagent_id=subagent_id,
+                                        prompt=prompt,
+                                        agent_profile=profile,
+                                        parent_session_id=lookup_id,
+                                        target_files=[],
+                                        stub_files=[]
+                                    )
+                                    try:
+                                        await spawn_subagent_endpoint(spawn_req)
+                                        memory.log_subagent_message(subagent_id, "subagent",
+                                            f"[SPAWNED] Subagent successfully spawned in background.")
+                                        memory.update_plan_step_status(step_id, "delegated")
+                                        print(f"[BG DISPATCH] Spawned {profile} ({subagent_id}) for step: {step_desc[:80]}")
+                                    except Exception as spawn_err:
+                                        print(f"[BG DISPATCH] Failed to spawn {profile}: {spawn_err}")
+                                        memory.update_plan_step_status(step_id, "failed", error_message=str(spawn_err))
+                                
+                                # Log summary
+                                summary = f"Dispatched {len(delegation_steps)} subagent(s) directly."
+                                memory.log_conversation_step(lookup_id, "assistant", summary)
+                                print(f"[BG DISPATCH] {summary}")
                             except Exception as bg_err:
                                 print(f"[BG DISPATCH] Delegation failed: {bg_err}")
                                 for s in delegation_steps:
