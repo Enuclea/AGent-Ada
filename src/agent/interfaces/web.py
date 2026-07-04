@@ -2231,46 +2231,174 @@ async def run_scheduler():
                                             send_direct_discord_message(channel_id, f"⚙️ **Plan Resuming**: Subagent `{sub_id}` completed its task. Resuming parent execution...")
 
                                         from agent.keyless import KeylessAgyAgent
-                                        agent = KeylessAgyAgent(
-                                            model="gemini-3.5-flash",
-                                            conversation_id=sess_id,
-                                            timeout=120.0
-                                        )
-                                        # Query the original user prompt to remind the orchestrator of the goal
-                                        original_goal = ""
+
+                                        # Query plan steps for the session
+                                        plan_steps = []
+                                        is_plan_running = False
                                         try:
                                             conn_p = get_connection(memory.DB_FILE_PATH)
                                             cursor_p = conn_p.cursor()
                                             cursor_p.execute(
-                                                "SELECT content FROM conversation_steps WHERE session_id = ? AND role = 'user' ORDER BY timestamp ASC LIMIT 1",
+                                                "SELECT status FROM session_plans WHERE session_id = ?",
                                                 (sess_id,)
                                             )
-                                            row_p = cursor_p.fetchone()
-                                            if row_p:
-                                                original_goal = row_p[0]
+                                            p_row = cursor_p.fetchone()
+                                            if p_row and p_row[0] == "running":
+                                                is_plan_running = True
+                                                cursor_p.execute(
+                                                    "SELECT ps.id, ps.description, ps.status, ps.step_order, ps.assigned_tool "
+                                                    "FROM plan_steps ps JOIN session_plans sp ON ps.plan_id = sp.id "
+                                                    "WHERE sp.session_id = ? ORDER BY ps.step_order ASC",
+                                                    (sess_id,)
+                                                )
+                                                plan_steps = [
+                                                    {"id": r[0], "description": r[1], "status": r[2], "step_order": r[3], "assigned_tool": r[4]}
+                                                    for r in cursor_p.fetchall()
+                                                ]
                                             conn_p.close()
-                                        except Exception:
-                                            pass
+                                        except Exception as pe:
+                                            print(f"Error fetching plan steps for resumption: {pe}")
 
-                                        resume_prompt = (
-                                            f"[SYSTEM RESUME]\n"
-                                            f"Subagent '{sub_id}' has completed the delegated task.\n"
-                                            f"Subagent Output: {msg}\n\n"
-                                            f"Original User Request: \"{original_goal}\"\n\n"
-                                            f"Please resume execution, review the subagent's output against the original user request, "
-                                            f"complete any remaining goals (such as reading and showing file contents, summarizing results, or answering specific questions), "
-                                            f"and output your final response directly to the user."
-                                        )
-                                        memory.log_conversation_step(sess_id, "user", resume_prompt)
-                                        async with agent as active_agent:
-                                            response = await active_agent.chat(resume_prompt)
-                                            output_content = ""
-                                            async for chunk in response:
-                                                output_content += chunk
-                                            if output_content:
-                                                memory.log_conversation_step(sess_id, "assistant", output_content)
-                                                if channel_id:
-                                                    send_direct_discord_message(channel_id, output_content)
+                                        if is_plan_running and plan_steps:
+                                            # Find the first step that is not completed
+                                            steps_to_run = [s for s in plan_steps if s["status"] != "completed"]
+                                            if steps_to_run:
+                                                total_steps = len(plan_steps)
+                                                for step in steps_to_run:
+                                                    step_id = step["id"]
+                                                    step_desc = step["description"]
+                                                    step_tool = step.get("assigned_tool") or "any tool"
+                                                    step_order = step["step_order"]
+                                                    
+                                                    # Update step status to running
+                                                    memory.update_plan_step_status(step_id, "running")
+                                                    
+                                                    resume_prefix = (
+                                                        f"[SYSTEM RESUME]\n"
+                                                        f"Subagent '{sub_id}' has completed the delegated task.\n"
+                                                        f"Subagent Output: {msg}\n\n"
+                                                    )
+                                                    driver_prompt = resume_prefix + (
+                                                        f"[SYSTEM DRIVER]\n"
+                                                        f"You are executing Step {step_order} of {total_steps}: \"{step_desc}\".\n"
+                                                        f"The recommended tool for this step is \"{step_tool}\".\n\n"
+                                                        f"IMPORTANT: If this step requires spawning subagents, you MUST use the `spawn_subagent` tool "
+                                                        f"(NOT the built-in invoke_subagent). The `spawn_subagent` tool runs agents in the background "
+                                                        f"without blocking. Each call returns immediately.\n\n"
+                                                        f"Please execute this step now using your tools. Review the previous conversation history "
+                                                        f"and outputs to obtain any context you need. Once this step is complete, summarize your findings "
+                                                        f"clearly so we can transition to the next step."
+                                                    )
+                                                    
+                                                    memory.log_conversation_step(sess_id, "user", driver_prompt)
+                                                    
+                                                    step_failed = False
+                                                    step_start_time = datetime.now(timezone.utc).isoformat()
+                                                    try:
+                                                        agent = KeylessAgyAgent(
+                                                            model="gemini-3.5-flash",
+                                                            conversation_id=sess_id,
+                                                            timeout=120.0
+                                                        )
+                                                        async with agent as active_agent:
+                                                            response = await active_agent.chat(driver_prompt)
+                                                            
+                                                            thoughts_str = ""
+                                                            async for thought in response.thoughts:
+                                                                thoughts_str += thought
+                                                            if thoughts_str:
+                                                                memory.log_conversation_step(sess_id, "thought", thoughts_str)
+                                                                
+                                                            output = ""
+                                                            async for chunk in response:
+                                                                output += chunk
+                                                            if output:
+                                                                memory.log_conversation_step(sess_id, "assistant", output)
+                                                                if channel_id:
+                                                                    send_direct_discord_message(channel_id, output)
+                                                                    
+                                                        # Check if subagent spawned
+                                                        was_delegated = False
+                                                        conn_c = get_connection(memory.DB_FILE_PATH)
+                                                        try:
+                                                            cursor_c = conn_c.cursor()
+                                                            cursor_c.execute(
+                                                                "SELECT count(*) FROM subagent_messages WHERE parent_session_id = ? AND timestamp >= ?",
+                                                                (sess_id, step_start_time)
+                                                            )
+                                                            count = cursor_c.fetchone()[0]
+                                                            if count > 0:
+                                                                was_delegated = True
+                                                        except Exception as db_err:
+                                                            print(f"Error checking subagent delegation in database: {db_err}")
+                                                        finally:
+                                                            conn_c.close()
+                                                            
+                                                        if was_delegated:
+                                                            memory.update_plan_step_status(step_id, "delegated")
+                                                            # Mark remaining steps as delegated too (subagent handles summary)
+                                                            for remaining in steps_to_run:
+                                                                if remaining["step_order"] > step_order and remaining["status"] != "completed":
+                                                                    memory.update_plan_step_status(remaining["id"], "delegated")
+                                                            break
+                                                            
+                                                        memory.update_plan_step_status(step_id, "completed")
+                                                    except Exception as step_err:
+                                                        print(f"[DRIVER] Resumed Step {step_order} failed: {step_err}")
+                                                        memory.update_plan_step_status(step_id, "failed", error_message=str(step_err))
+                                                        break
+                                            else:
+                                                # Mark plan status as completed
+                                                try:
+                                                    conn_c = get_connection(memory.DB_FILE_PATH)
+                                                    cursor_c = conn_c.cursor()
+                                                    cursor_c.execute("UPDATE session_plans SET status = 'completed' WHERE session_id = ?", (sess_id,))
+                                                    conn_c.commit()
+                                                    conn_c.close()
+                                                except Exception:
+                                                    pass
+                                        else:
+                                            # Fallback to original single conversation step resumption
+                                            agent = KeylessAgyAgent(
+                                                model="gemini-3.5-flash",
+                                                conversation_id=sess_id,
+                                                timeout=120.0
+                                            )
+                                            # Query the original user prompt to remind the orchestrator of the goal
+                                            original_goal = ""
+                                            try:
+                                                conn_p = get_connection(memory.DB_FILE_PATH)
+                                                cursor_p = conn_p.cursor()
+                                                cursor_p.execute(
+                                                    "SELECT content FROM conversation_steps WHERE session_id = ? AND role = 'user' ORDER BY timestamp ASC LIMIT 1",
+                                                    (sess_id,)
+                                                )
+                                                row_p = cursor_p.fetchone()
+                                                if row_p:
+                                                    original_goal = row_p[0]
+                                                conn_p.close()
+                                            except Exception:
+                                                pass
+
+                                            resume_prompt = (
+                                                f"[SYSTEM RESUME]\n"
+                                                f"Subagent '{sub_id}' has completed the delegated task.\n"
+                                                f"Subagent Output: {msg}\n\n"
+                                                f"Original User Request: \"{original_goal}\"\n\n"
+                                                f"Please resume execution, review the subagent's output against the original user request, "
+                                                f"complete any remaining goals (such as reading and showing file contents, summarizing results, or answering specific questions), "
+                                                f"and output your final response directly to the user."
+                                            )
+                                            memory.log_conversation_step(sess_id, "user", resume_prompt)
+                                            async with agent as active_agent:
+                                                response = await active_agent.chat(resume_prompt)
+                                                output_content = ""
+                                                async for chunk in response:
+                                                    output_content += chunk
+                                                if output_content:
+                                                    memory.log_conversation_step(sess_id, "assistant", output_content)
+                                                    if channel_id:
+                                                        send_direct_discord_message(channel_id, output_content)
                                     except Exception as re_err:
                                         print(f"[SCHEDULER] Failed to resume parent session {sess_id}: {re_err}")
                                 

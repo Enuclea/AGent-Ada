@@ -3,8 +3,11 @@ import re
 import json
 from pathlib import Path
 from typing import List, Optional
+from contextvars import ContextVar
 
 from agent import memory
+
+yield_requested = ContextVar("yield_requested", default=False)
 
 SKILLS_DIR = Path.home() / ".agent" / "skills"
 WORKSPACE_SKILLS_DIR = Path(os.getcwd()) / ".agents" / "skills"
@@ -899,6 +902,9 @@ async def run_command(command: str) -> str:
     Args:
         command: The command to execute in the shell.
     """
+    if yield_requested.get():
+        return "[SYSTEM] Tool execution blocked. A subagent has been spawned in this turn. You MUST immediately stop calling tools, return your progress update, and yield your turn. Do NOT attempt to run any more commands or poll for status."
+
     import asyncio
     
     skills_dir_str = str(SKILLS_DIR.resolve())
@@ -1174,6 +1180,7 @@ async def spawn_subagent(
                 
                 # Always return immediately — subagent runs in the background.
                 # Results are tracked via the activity feed and subagent_messages table.
+                yield_requested.set(True)
                 return json.dumps({
                     "status": "spawned",
                     "subagent_id": subagent_session,
