@@ -1,8 +1,11 @@
 import json
 import pytest
 from pathlib import Path
+from fastapi.testclient import TestClient
+from agent.web import app
 
-JSON_PATH = Path(__file__).parent.parent / "src" / "agent" / "static" / "dnd_characters.json"
+client = TestClient(app)
+JSON_PATH = Path(__file__).parent.parent.parent / "src" / "agent" / "static" / "dnd_characters.json"
 
 def test_dnd_characters_json_exists():
     assert JSON_PATH.exists(), "dnd_characters.json file does not exist"
@@ -51,8 +54,6 @@ def test_dnd_characters_suggested_class_validity():
     
     characters = data if isinstance(data, list) else data.get("characters", [])
     
-    # Define mapping of high stats to sensible classes
-    # e.g. Strength -> Fighter/Barbarian/Paladin, Dexterity -> Rogue/Ranger, Intelligence -> Wizard, Wisdom -> Cleric/Druid, Charisma -> Bard/Sorcerer/Warlock
     for idx, char in enumerate(characters):
         assert "suggested_class" in char, f"Character {idx} is missing 'suggested_class'"
         suggested = char["suggested_class"]
@@ -62,16 +63,11 @@ def test_dnd_characters_suggested_class_validity():
         max_val = max(stats.values())
         highest_stats = [k for k, v in stats.items() if v == max_val]
         
-        # Check if the class suggestion is sensible given the highest stats or at least major stats
-        # Bard needs Charisma, Wizard needs Intelligence, Rogue needs Dexterity, etc.
         if suggested == "Bard":
-            # Bard's main stat is Charisma. It should be relatively high (at least >= 10, ideally highest or close to it)
             assert stats["Charisma"] >= 10, f"Bard Charisma should be high, found {stats['Charisma']}"
         elif suggested == "Wizard":
-            # Wizard's main stat is Intelligence.
             assert stats["Intelligence"] >= 10, f"Wizard Intelligence should be high, found {stats['Intelligence']}"
         elif suggested == "Paladin":
-            # Paladin needs Strength and Charisma.
             assert stats["Charisma"] >= 10, f"Paladin Charisma is too low: {stats['Charisma']}"
             assert stats["Strength"] >= 10, f"Paladin Strength is too low: {stats['Strength']}"
         elif suggested == "Fighter" or suggested == "Barbarian":
@@ -80,3 +76,49 @@ def test_dnd_characters_suggested_class_validity():
             assert stats["Dexterity"] >= 10
         elif suggested == "Cleric" or suggested == "Druid":
             assert stats["Wisdom"] >= 10
+
+def test_modules_endpoint_dnd_assertions():
+    response = client.get("/api/modules")
+    assert response.status_code == 200
+    data = response.json()
+    assert "modules" in data
+    modules = data["modules"]
+    assert isinstance(modules, list)
+    # Check if the dnd module is returned
+    dnd_module = next((m for m in modules if m.get("id") == "dnd"), None)
+    assert dnd_module is not None
+    assert dnd_module["name"] == "D&D Character Rolls"
+    assert dnd_module["enabled"] is True
+
+def test_dnd_regenerate_endpoint():
+    # Save the original file contents if it exists
+    original_content = None
+    if JSON_PATH.exists():
+        original_content = JSON_PATH.read_text()
+    
+    try:
+        response = client.post("/api/dnd/regenerate")
+        assert response.status_code == 200
+        data = response.json()
+        assert "characters" in data
+        characters = data["characters"]
+        assert len(characters) == 4
+        
+        # Verify characters list structure
+        for char in characters:
+            assert "name" in char
+            assert "stats" in char
+            assert "suggested_class" in char
+            assert isinstance(char["stats"], dict)
+            assert len(char["stats"]) == 6
+            
+        # Verify the file was written to disk
+        assert JSON_PATH.exists()
+        written_data = json.loads(JSON_PATH.read_text())
+        assert "characters" in written_data
+        assert len(written_data["characters"]) == 4
+        
+    finally:
+        # Restore original content to keep tests clean/hermetic
+        if original_content is not None:
+            JSON_PATH.write_text(original_content)

@@ -285,46 +285,6 @@ def test_modules_endpoint():
     assert "modules" in data
     modules = data["modules"]
     assert isinstance(modules, list)
-    # Check if the dnd module is returned
-    dnd_module = next((m for m in modules if m.get("id") == "dnd"), None)
-    assert dnd_module is not None
-    assert dnd_module["name"] == "D&D Character Rolls"
-    assert dnd_module["enabled"] is True
 
-
-def test_dnd_regenerate_endpoint():
-    import json
-    # Save the original file contents if it exists
-    dnd_json_path = Path(__file__).parent.parent / "src" / "agent" / "static" / "dnd_characters.json"
-    original_content = None
-    if dnd_json_path.exists():
-        original_content = dnd_json_path.read_text()
-    
-    try:
-        response = client.post("/api/dnd/regenerate")
-        assert response.status_code == 200
-        data = response.json()
-        assert "characters" in data
-        characters = data["characters"]
-        assert len(characters) == 4
-        
-        # Verify characters list structure
-        for char in characters:
-            assert "name" in char
-            assert "stats" in char
-            assert "suggested_class" in char
-            assert isinstance(char["stats"], dict)
-            assert len(char["stats"]) == 6
-            
-        # Verify the file was written to disk
-        assert dnd_json_path.exists()
-        written_data = json.loads(dnd_json_path.read_text())
-        assert "characters" in written_data
-        assert len(written_data["characters"]) == 4
-        
-    finally:
-        # Restore original content to keep tests clean/hermetic
-        if original_content is not None:
-            dnd_json_path.write_text(original_content)
 
 
