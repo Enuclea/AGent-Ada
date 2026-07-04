@@ -61,6 +61,7 @@ class PriorityLock:
                 fut.set_result(None)
 
 session_locks = {}
+active_subagents = {}
 
 def get_session_lock(session_id: str) -> PriorityLock:
     if session_id not in session_locks:
@@ -463,6 +464,77 @@ async def chat_endpoint(req: ChatRequest):
                 "Connection": "keep-alive"
             }
         )
+        
+    # Intercept stop commands
+    if req.prompt.strip().lower() in ("stop", "/stop", "!stop"):
+        resolved_id = lookup_id
+        if lookup_id.startswith("discord-session-"):
+            mem = memory.load_memory()
+            session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+            if isinstance(session_mappings, dict):
+                resolved_id = session_mappings.get(lookup_id, lookup_id)
+                
+        # Cancel all active subagents for this parent session
+        cancelled_subs = []
+        for subagent_id, sub_info in list(active_subagents.items()):
+            if sub_info.get("parent_session_id") == resolved_id:
+                # Cancel task
+                if sub_info.get("task"):
+                    sub_info["task"].cancel()
+                # Kill process
+                resp = sub_info.get("response")
+                if resp and resp.proc:
+                    try:
+                        resp.proc.kill()
+                    except Exception:
+                        pass
+                active_subagents.pop(subagent_id, None)
+                cancelled_subs.append(subagent_id)
+                
+        # Update database statuses
+        conn = get_connection(memory.DB_FILE_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE plan_steps 
+                SET status = 'failed', error_message = 'Terminated by user stop command.' 
+                WHERE plan_id IN (SELECT id FROM session_plans WHERE session_id = ?)
+                  AND status IN ('running', 'delegated')
+            """, (resolved_id,))
+            
+            cursor.execute("""
+                UPDATE active_tasks 
+                SET status = 'failed' 
+                WHERE (name = 'Ada' OR name = 'Lacie' OR name = 'Val' OR name = 'Kira' OR name LIKE 'Subagent%')
+                  AND status = 'running'
+            """)
+            conn.commit()
+        except Exception as db_err:
+            print(f"[STOP COMMAND] Error updating DB on stop: {db_err}")
+        finally:
+            conn.close()
+            
+        # Release the lock if it's held
+        lock = get_session_lock(lookup_id)
+        if lock._locked:
+            lock.release()
+            
+        async def stop_generator():
+            msg = "🛑 **Execution Stopped**: All active subagents and background plan tasks for this session have been terminated."
+            if cancelled_subs:
+                msg += f"\n- Terminated subagents: {', '.join([f'`{s}`' for s in cancelled_subs])}"
+            yield f"data: {json.dumps({'type': 'chunk', 'content': msg})}\n\n"
+            yield "data: [DONE]\n\n"
+            
+        return StreamingResponse(
+            stop_generator(),
+            media_type="text/event-stream",
+            headers={
+                "X-Accel-Buffering": "no",
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive"
+            }
+        )
 
     # Resolve specialist profile to system_instructions ONCE at the top.
     # All subsequent get_or_create_agent calls (plan steps, fallback, stuck prevention)
@@ -519,8 +591,9 @@ async def chat_endpoint(req: ChatRequest):
                 
                 # 1. Decompose plan steps if enabled and prompt is complex enough
                 enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "true").lower() == "true"
-                existing_plan = memory.get_session_plan(agent.conversation_id)
-                if enable_planning and not existing_plan and len(req.prompt.strip()) > 200:
+                existing_plan = memory.get_session_plan(lookup_id)
+                plan_min_length = int(os.environ.get("AGENT_PLAN_MIN_LENGTH", "40"))
+                if enable_planning and not existing_plan and len(req.prompt.strip()) > plan_min_length:
                     import uuid
                     plan_id = str(uuid.uuid4())
                     plan_prompt = (
@@ -562,7 +635,7 @@ async def chat_endpoint(req: ChatRequest):
                                 ng = json.dumps(plan_data.get("non_goals") or [])
                                 tasks = plan_data.get("tasks") or []
                                 
-                                memory.add_session_plan(plan_id, agent.conversation_id, title, "pending", goal, ac, ng)
+                                memory.add_session_plan(plan_id, lookup_id, title, "pending", goal, ac, ng)
                                 for idx, step in enumerate(tasks):
                                     step_id = f"step-{plan_id}-{idx}"
                                     memory.add_plan_step(
@@ -637,7 +710,7 @@ async def chat_endpoint(req: ChatRequest):
                     memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.5-flash", input_tokens, output_tokens, cost)
 
                 # Run sequential driving steps
-                current_plan = memory.get_session_plan(agent.conversation_id)
+                current_plan = memory.get_session_plan(lookup_id)
                 if current_plan and "steps" in current_plan:
                     steps_to_run = [s for s in current_plan["steps"] if s["status"] != "completed"]
                 else:
@@ -645,87 +718,171 @@ async def chat_endpoint(req: ChatRequest):
 
                 if steps_to_run:
                     total_steps = len(current_plan["steps"])
-                    for step in steps_to_run:
-                        step_id = step["id"]
-                        step_desc = step["description"]
-                        step_tool = step.get("assigned_tool") or "any tool"
-                        step_order = step["step_order"]
+                    
+                    # Check if any step uses spawn_subagent — if so, consolidate into a single delegation call
+                    delegation_steps = [s for s in steps_to_run if s.get("assigned_tool") in ("spawn_subagent", "invoke_subagent")]
+                    non_delegation_steps = [s for s in steps_to_run if s.get("assigned_tool") not in ("spawn_subagent", "invoke_subagent")]
+                    
+                    if delegation_steps:
+                        # Consolidate ALL delegation steps into a single prompt
+                        consolidated_tasks = "\n".join([
+                            f"  - Task {s['step_order']}: {s['description']}"
+                            for s in delegation_steps
+                        ])
                         
-                        # Update status to running
-                        memory.update_plan_step_status(step_id, "running")
-                        
-                        # Yield thought block to visual progress
-                        await queue.put({"type": "thought", "content": f"\n⚙️ [Step {step_order}/{total_steps}]: {step_desc}...\n"})
-                        
-                        # Construct driving prompt
                         driver_prompt = (
-                            f"[SYSTEM DRIVER]\n"
-                            f"You are executing Step {step_order} of {total_steps}: \"{step_desc}\".\n"
-                            f"The recommended tool for this step is \"{step_tool}\".\n\n"
-                            f"Please execute this step now using your tools. Review the previous conversation history "
-                            f"and outputs to obtain any context you need. Once this step is complete, summarize your findings "
-                            f"clearly so we can transition to the next step."
+                            f"[SYSTEM DRIVER — PARALLEL DISPATCH]\n"
+                            f"You have {len(delegation_steps)} tasks to dispatch using `spawn_subagent`.\n\n"
+                            f"Tasks:\n{consolidated_tasks}\n\n"
+                            f"CRITICAL INSTRUCTIONS:\n"
+                            f"1. Call `spawn_subagent` for EACH task. Do NOT use invoke_subagent.\n"
+                            f"2. Each `spawn_subagent` call returns immediately — the subagent runs in the background.\n"
+                            f"3. Call ALL spawn_subagent invocations in this single turn.\n"
+                            f"4. After dispatching, briefly confirm what you spawned.\n\n"
+                            f"Original user request: {req.prompt}"
                         )
                         
-                        step_failed = False
-                        step_start_time = datetime.now(timezone.utc).isoformat()
-                        try:
-                            active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
-                            await stream_agent_response(active_agent, driver_prompt)
-                            
-                            # Check if a subagent was spawned during this step
-                            was_delegated = False
-                            conn = get_connection(memory.DB_FILE_PATH)
-                            try:
-                                cursor = conn.cursor()
-                                cursor.execute(
-                                    "SELECT count(*) FROM subagent_messages WHERE parent_session_id = ? AND timestamp >= ?",
-                                    (agent.conversation_id, step_start_time)
-                                )
-                                count = cursor.fetchone()[0]
-                                if count > 0:
-                                    was_delegated = True
-                            except Exception as db_err:
-                                print(f"Error checking subagent delegation in database: {db_err}")
-                            finally:
-                                conn.close()
-
-                            if was_delegated:
-                                memory.update_plan_step_status(step_id, "delegated")
-                                await queue.put({"type": "thought", "content": f"\n⏭️ Step {step_order} delegated to subagent. Exiting active execution loop.\n"})
-                                break
-
-                            # Verify outputs before completing the step
-                            verif_err = orchestration_service.verify_agent_outputs(req.session_id)
-                            if verif_err:
-                                raise ValueError(f"Step output verification failed: {verif_err}")
-                        except Exception as step_err:
-                            print(f"[DRIVER] Step {step_order} failed: {step_err}")
-                            memory.update_plan_step_status(step_id, "failed", error_message=str(step_err))
-                            step_failed = True
-                            
-                            # Fallback try
-                            fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
-                            await queue.put({"type": "thought", "content": f"\n⚠️ [System: Step {step_order} failed. Retrying step with fallback model...]\n"})
-                            
-                            fallback_prompt = (
-                                f"[SYSTEM DRIVER - FALLBACK]\n"
-                                f"The previous attempt to execute Step {step_order} failed with error: {step_err}.\n"
-                                f"Original step task: \"{step_desc}\".\n"
-                                f"Please complete this step successfully now."
-                            )
-                            try:
-                                active_agents.pop(lookup_id, None)
-                                fallback_agent = await get_or_create_agent(fallback_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
-                                await stream_agent_response(fallback_agent, fallback_prompt)
-                                step_failed = False
-                            except Exception as fallback_err:
-                                print(f"[DRIVER] Step {step_order} fallback also failed: {fallback_err}")
-                                memory.update_plan_step_status(step_id, "failed", error_message=str(fallback_err))
-                                raise fallback_err
+                        # Mark all delegation steps as running
+                        for s in delegation_steps:
+                            memory.update_plan_step_status(s["id"], "running")
                         
-                        if not step_failed:
-                            memory.update_plan_step_status(step_id, "completed")
+                        # Fire the delegation work as an isolated BACKGROUND subagent
+                        # NOT via get_or_create_agent (that pollutes the parent session)
+                        import uuid as _uuid
+                        deleg_subagent_id = f"subagent-dispatch-{_uuid.uuid4().hex[:8]}"
+                        deleg_task_id = f"task-agent-{deleg_subagent_id}"
+                        memory.add_active_task(deleg_task_id, "Dispatch Agent", f"Delegating: {req.prompt[:80]}...")
+                        
+                        async def background_delegation():
+                            try:
+                                from agent.keyless import KeylessAgyAgent
+                                bg_agent = KeylessAgyAgent(
+                                    model=primary_model,
+                                    system_instructions=resolved_system_instructions,
+                                    conversation_id=deleg_subagent_id,
+                                    timeout=300.0
+                                )
+                                async with bg_agent as conn:
+                                    response = await conn.chat(driver_prompt)
+                                    # Drain thoughts (required to prevent pipe buffer hang)
+                                    async for thought in response.thoughts:
+                                        pass
+                                    # Drain output
+                                    output = ""
+                                    async for chunk in response:
+                                        output += chunk
+                                    if output:
+                                        memory.log_conversation_step(agent.conversation_id, "assistant", f"[Delegation Result] {output}")
+                                # Mark delegation steps as delegated
+                                for s in delegation_steps:
+                                    memory.update_plan_step_status(s["id"], "delegated")
+                                memory.update_active_task_status(deleg_task_id, "completed")
+                                print(f"[BG DISPATCH] Delegation completed: {output[:200]}")
+                            except Exception as bg_err:
+                                print(f"[BG DISPATCH] Delegation failed: {bg_err}")
+                                for s in delegation_steps:
+                                    memory.update_plan_step_status(s["id"], "failed", error_message=str(bg_err))
+                                memory.update_active_task_status(deleg_task_id, "failed")
+                        
+                        asyncio.create_task(background_delegation())
+                        
+                        # Immediately respond to the client — don't wait for the agy process
+                        task_list = "\n".join([f"- {s['description']}" for s in delegation_steps])
+                        await queue.put({"type": "chunk", "content": (
+                            f"🚀 **Delegating {len(delegation_steps)} task(s) to background agents:**\n\n"
+                            f"{task_list}\n\n"
+                            f"Track progress in the **Activity Feed** →\n"
+                            f"Subagents will appear as they spawn and complete."
+                        )})
+                        text_chunks_emitted = True
+                        
+                        # Mark non-delegation steps as delegated too (subagent handles summary)
+                        for s in non_delegation_steps:
+                            memory.update_plan_step_status(s["id"], "delegated")
+                    else:
+                        # No delegation steps — run all steps sequentially (original behavior)
+                        for step in steps_to_run:
+                            step_id = step["id"]
+                            step_desc = step["description"]
+                            step_tool = step.get("assigned_tool") or "any tool"
+                            step_order = step["step_order"]
+                            
+                            memory.update_plan_step_status(step_id, "running")
+                            await queue.put({"type": "thought", "content": f"\n⚙️ [Step {step_order}/{total_steps}]: {step_desc}...\n"})
+                            
+                            driver_prompt = (
+                                f"[SYSTEM DRIVER]\n"
+                                f"You are executing Step {step_order} of {total_steps}: \"{step_desc}\".\n"
+                                f"The recommended tool for this step is \"{step_tool}\".\n\n"
+                                f"IMPORTANT: If this step requires spawning subagents, you MUST use the `spawn_subagent` tool "
+                                f"(NOT the built-in invoke_subagent). The `spawn_subagent` tool runs agents in the background "
+                                f"without blocking. Each call returns immediately.\n\n"
+                                f"Please execute this step now using your tools. Review the previous conversation history "
+                                f"and outputs to obtain any context you need. Once this step is complete, summarize your findings "
+                                f"clearly so we can transition to the next step."
+                            )
+                            
+                            step_failed = False
+                            step_start_time = datetime.now(timezone.utc).isoformat()
+                            try:
+                                active_agent = await get_or_create_agent(primary_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=driver_prompt)
+                                await stream_agent_response(active_agent, driver_prompt)
+                                
+                                # Check if a subagent was spawned during this step
+                                was_delegated = False
+                                conn = get_connection(memory.DB_FILE_PATH)
+                                try:
+                                    cursor = conn.cursor()
+                                    cursor.execute(
+                                        "SELECT count(*) FROM subagent_messages WHERE parent_session_id = ? AND timestamp >= ?",
+                                        (agent.conversation_id, step_start_time)
+                                    )
+                                    count = cursor.fetchone()[0]
+                                    if count > 0:
+                                        was_delegated = True
+                                except Exception as db_err:
+                                    print(f"Error checking subagent delegation in database: {db_err}")
+                                finally:
+                                    conn.close()
+
+                                if was_delegated:
+                                    memory.update_plan_step_status(step_id, "delegated")
+                                    await queue.put({"type": "thought", "content": f"\n⏭️ Step {step_order} delegated to subagent. Exiting active execution loop.\n"})
+                                    # Mark remaining steps as pending (subagent will handle)
+                                    for remaining in steps_to_run:
+                                        if remaining["step_order"] > step_order and remaining["status"] != "completed":
+                                            memory.update_plan_step_status(remaining["id"], "delegated")
+                                    break
+
+                                verif_err = orchestration_service.verify_agent_outputs(req.session_id)
+                                if verif_err:
+                                    raise ValueError(f"Step output verification failed: {verif_err}")
+                            except Exception as step_err:
+                                print(f"[DRIVER] Step {step_order} failed: {step_err}")
+                                memory.update_plan_step_status(step_id, "failed", error_message=str(step_err))
+                                step_failed = True
+                                
+                                fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
+                                await queue.put({"type": "thought", "content": f"\n⚠️ [System: Step {step_order} failed. Retrying step with fallback model...]\n"})
+                                
+                                fallback_prompt = (
+                                    f"[SYSTEM DRIVER - FALLBACK]\n"
+                                    f"The previous attempt to execute Step {step_order} failed with error: {step_err}.\n"
+                                    f"Original step task: \"{step_desc}\".\n"
+                                    f"Please complete this step successfully now."
+                                )
+                                try:
+                                    active_agents.pop(lookup_id, None)
+                                    fallback_agent = await get_or_create_agent(fallback_model, req.session_id, resolved_system_instructions, req.disable_tools, req.roleplay, prompt=fallback_prompt)
+                                    await stream_agent_response(fallback_agent, fallback_prompt)
+                                    step_failed = False
+                                except Exception as fallback_err:
+                                    print(f"[DRIVER] Step {step_order} fallback also failed: {fallback_err}")
+                                    memory.update_plan_step_status(step_id, "failed", error_message=str(fallback_err))
+                                    raise fallback_err
+                            
+                            if not step_failed:
+                                memory.update_plan_step_status(step_id, "completed")
                 else:
                     # Fallback to single call with fallback model routing & stuck prevention
                     try:
@@ -781,9 +938,11 @@ async def chat_endpoint(req: ChatRequest):
         task = asyncio.create_task(run_agent())
         try:
             while True:
+                if task.done() and queue.empty():
+                    break
                 try:
                     # Wait for items from the queue with a timeout to send keep-alive comment lines
-                    item = await asyncio.wait_for(queue.get(), timeout=10.0)
+                    item = await asyncio.wait_for(queue.get(), timeout=2.0)
                     if item == "DONE":
                         break
                     elif isinstance(item, Exception):
@@ -792,6 +951,8 @@ async def chat_endpoint(req: ChatRequest):
                     else:
                         yield f"data: {json.dumps(item)}\n\n"
                 except asyncio.TimeoutError:
+                    if task.done() and queue.empty():
+                        break
                     # Send a keep-alive line to prevent HTTP connection timeout
                     yield ": keep-alive\n\n"
             yield "data: [DONE]\n\n"
@@ -919,6 +1080,78 @@ async def install_repo_skill_endpoint(name: str):
 @app.get("/api/tasks")
 async def tasks_endpoint():
     tasks = memory.get_active_tasks()
+    
+    # Merge active or recently completed subagents as tasks so they appear in the Activity Feed
+    try:
+        from datetime import timedelta
+        import re
+        
+        subagents = memory.get_subagents_status()
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        
+        for sub in subagents:
+            is_recent = False
+            if sub.get("status") == "active":
+                is_recent = True
+            elif sub.get("completed_at"):
+                try:
+                    comp_str = sub["completed_at"].replace("Z", "+00:00")
+                    comp_dt = datetime.fromisoformat(comp_str)
+                    if comp_dt >= cutoff:
+                        is_recent = True
+                except Exception:
+                    pass
+            
+            if is_recent:
+                sub_id = sub["subagent_id"]
+                
+                # Check if this subagent is already in the tasks list as a running/completed task
+                if any(t.get("id") == sub_id for t in tasks):
+                    continue
+                
+                # Extract agent profile name from the spawn prompt text
+                displayName = sub_id
+                prompt_text = sub.get("prompt", "")
+                profile_match = re.search(r'Spawning tooled subagent \(([^)]+)\)', prompt_text)
+                if profile_match:
+                    profile_name = profile_match.group(1)
+                    if profile_name != 'generic':
+                        displayName = profile_name.replace('_', ' ').title()
+                
+                # Fallback: extract from subagent ID
+                if displayName == sub_id:
+                    parts = sub_id.split("-")
+                    if len(parts) > 1:
+                        prefix = parts[0]
+                        if prefix.lower() in ("boardroom", "sched", "task", "subagent") and len(parts) > 1:
+                            prefix = parts[1]
+                        if not re.match(r"^[0-9a-fA-F]{8}$", prefix) and not re.match(r"^[0-9a-fA-F]{12}$", prefix):
+                            displayName = prefix.replace("_", " ").title()
+                
+                if sub_id.startswith('grace-timekeeper-subagent'):
+                    displayName = 'Grace Timekeeper'
+                
+                prompt_snippet = prompt_text.strip().split("\n")[0]
+                # Strip the "Spawning tooled subagent (profile) with prompt: " prefix
+                prompt_prefix_idx = prompt_snippet.find("with prompt: ")
+                if prompt_prefix_idx != -1:
+                    prompt_snippet = prompt_snippet[prompt_prefix_idx + 13:]
+                if len(prompt_snippet) > 80:
+                    prompt_snippet = prompt_snippet[:77] + "..."
+                
+                task_status = "running" if sub["status"] == "active" else sub["status"]
+                
+                tasks.append({
+                    "id": sub_id,
+                    "name": displayName,
+                    "details": f"Subagent: {prompt_snippet}",
+                    "started_at": sub.get("started_at"),
+                    "status": task_status,
+                    "completed_at": sub.get("completed_at")
+                })
+    except Exception as e:
+        print(f"Error merging subagents into tasks endpoint: {e}")
+        
     return {"tasks": tasks}
 
 @app.get("/api/quotas")
@@ -1052,7 +1285,19 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
         req.stub_files
     )
                 
-    memory.log_subagent_message(req.subagent_id, "parent", f"Spawning subagent in sandbox {sandbox_dir} with prompt: {req.prompt}", parent_session_id=req.parent_session_id)
+    # Note: parent spawn message is already logged by tools.py spawn_subagent()
+    
+    active_subagents[req.subagent_id] = {
+        "task": None,
+        "parent_session_id": req.parent_session_id,
+        "agent": None,
+        "response": None
+    }
+    
+    # Register the subagent as an active task so it appears in the activity feed immediately
+    display_name = req.agent_profile.replace('_', ' ').title() if req.agent_profile else "Subagent"
+    task_id = f"task-agent-{req.subagent_id}"
+    memory.add_active_task(task_id, display_name, f"Executing: {req.prompt[:80]}...")
     
     async def run_subagent_background():
         try:
@@ -1064,22 +1309,32 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
             system_instructions = specialist_inst or "You are a subagent working in an isolated sandbox. Complete the requested task."
             
             agent = KeylessAgyAgent(
-                model="gemini-1.5-flash",
+                model="gemini-3.5-flash",
                 system_instructions=system_instructions,
                 conversation_id=req.subagent_id,
                 cwd=str(sandbox_dir),
                 timeout=300.0
             )
+            active_subagents[req.subagent_id]["agent"] = agent
             async with agent as sub_conn:
                 response = await sub_conn.chat(req.prompt)
+                active_subagents[req.subagent_id]["response"] = response
                 output = ""
                 async for chunk in response:
                     output += chunk
                 memory.log_subagent_message(req.subagent_id, "subagent", f"Subagent completed: {output}")
+                memory.update_active_task_status(task_id, "completed")
+        except asyncio.CancelledError:
+            memory.log_subagent_message(req.subagent_id, "subagent", "Subagent failed: Terminated by user stop command.")
+            memory.update_active_task_status(task_id, "failed")
         except Exception as e:
             memory.log_subagent_message(req.subagent_id, "subagent", f"Subagent failed: {e}")
+            memory.update_active_task_status(task_id, "failed")
+        finally:
+            active_subagents.pop(req.subagent_id, None)
             
-    asyncio.create_task(run_subagent_background())
+    task = asyncio.create_task(run_subagent_background())
+    active_subagents[req.subagent_id]["task"] = task
     return {"status": "success", "sandbox_dir": str(sandbox_dir)}
 
 @app.get("/api/subagents/{subagent_id}/messages")
@@ -1344,6 +1599,14 @@ async def status_task_endpoint(task_id: str, req: TaskStatusRequest):
 
 @app.get("/api/tasks/{task_id}/logs")
 async def get_task_logs_endpoint(task_id: str):
+    if task_id.startswith("subagent-") or task_id.startswith("boardroom-"):
+        try:
+            msgs = memory.get_subagent_messages(task_id)
+            logs = [{"timestamp": m["timestamp"], "message": f"[{m['role'].upper()}] {m['message']}"} for m in msgs]
+            return {"logs": logs}
+        except Exception as e:
+            print(f"Error fetching subagent logs for task feed: {e}")
+            return {"logs": []}
     logs = memory.get_task_logs(task_id)
     return {"logs": logs}
 
@@ -1975,6 +2238,95 @@ async def run_scheduler():
                                     print(f"[SCHEDULER] Failed to resume parent session {sess_id} on failure: {re_err}")
                                     
                             asyncio.create_task(resume_parent_fail(session_id, subagent_id, message))
+                
+                # Check for completed subagents that need parent resumption (non-plan sessions)
+                cursor.execute("""
+                    SELECT DISTINCT subagent_id, parent_session_id 
+                    FROM subagent_messages 
+                    WHERE role = 'subagent' 
+                      AND parent_session_id IS NOT NULL 
+                      AND parent_session_id != 'New Session'
+                      AND (message LIKE 'Subagent completed:%' OR message LIKE 'Subagent failed:%')
+                """)
+                completed_subs = cursor.fetchall()
+                
+                for subagent_id, parent_session_id in completed_subs:
+                    # Skip if the parent session has a plan step in 'delegated' status (already handled above)
+                    cursor.execute("""
+                        SELECT count(*) 
+                        FROM plan_steps ps
+                        JOIN session_plans sp ON ps.plan_id = sp.id
+                        WHERE sp.session_id = ? AND ps.status = 'delegated'
+                    """, (parent_session_id,))
+                    if cursor.fetchone()[0] > 0:
+                        continue
+                        
+                    # Check if already resumed in parent history
+                    cursor.execute("""
+                        SELECT count(*) FROM conversation_steps 
+                        WHERE session_id = ? AND role = 'user' AND content LIKE ?
+                    """, (parent_session_id, f"%[SYSTEM RESUME]%{subagent_id}%"))
+                    resumed_count = cursor.fetchone()[0]
+                    
+                    if resumed_count == 0:
+                        # Get the latest message
+                        cursor.execute("""
+                            SELECT message FROM subagent_messages 
+                            WHERE subagent_id = ? AND role = 'subagent' 
+                            ORDER BY id DESC LIMIT 1
+                        """, (subagent_id,))
+                        msg_row = cursor.fetchone()
+                        if not msg_row:
+                            continue
+                        message = msg_row[0]
+                        
+                        # Proceed with resume
+                        print(f"[SCHEDULER] Subagent {subagent_id} completed (non-plan). Resuming parent session {parent_session_id}...")
+                        
+                        async def resume_parent_non_plan(sess_id, sub_id, msg):
+                            try:
+                                channel_id = None
+                                mem = memory.load_memory()
+                                session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+                                if isinstance(session_mappings, dict):
+                                    for k, v in session_mappings.items():
+                                        if v == sess_id and k.startswith("discord-session-"):
+                                            try:
+                                                channel_id = int(k.split("-")[-1])
+                                            except ValueError:
+                                                pass
+                                            break
+
+                                if channel_id:
+                                    from agent.notifications import send_direct_discord_message
+                                    send_direct_discord_message(channel_id, f"⚙️ **Plan Resuming**: Subagent `{sub_id}` completed its task. Resuming parent execution...")
+
+                                from agent.keyless import KeylessAgyAgent
+                                agent = KeylessAgyAgent(
+                                    model="gemini-3.5-flash",
+                                    conversation_id=sess_id,
+                                    timeout=120.0
+                                )
+                                resume_prompt = (
+                                    f"[SYSTEM RESUME]\n"
+                                    f"Subagent '{sub_id}' has completed the delegated task.\n"
+                                    f"Subagent Output: {msg}\n\n"
+                                    f"Please resume execution and report back."
+                                )
+                                memory.log_conversation_step(sess_id, "user", resume_prompt)
+                                async with agent as active_agent:
+                                    response = await active_agent.chat(resume_prompt)
+                                    output_content = ""
+                                    async for chunk in response:
+                                        output_content += chunk
+                                    if output_content:
+                                        memory.log_conversation_step(sess_id, "assistant", output_content)
+                                        if channel_id:
+                                            send_direct_discord_message(channel_id, output_content)
+                            except Exception as re_err:
+                                print(f"[SCHEDULER] Failed to resume non-plan parent session {sess_id}: {re_err}")
+                                
+                        asyncio.create_task(resume_parent_non_plan(parent_session_id, subagent_id, message))
             except Exception as e:
                 print(f"[SCHEDULER] Error checking subagent completion: {e}")
             finally:
