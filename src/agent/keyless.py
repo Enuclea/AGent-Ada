@@ -497,6 +497,7 @@ class KeylessAgyAgent:
             "- CRITICAL: Keep your execution turns non-blocking. The system has a strict client/HTTP timeout.\n"
             "- If you spawn a subagent (`spawn_subagent`) or launch a long-running background command, you MUST schedule a check-in timer using the `schedule` tool and immediately END your turn by returning a progress update. Do NOT call any more tools or run loops in this turn to wait.\n"
             "- NEVER write loops in your thoughts or tool-calls to poll/wait for background tasks or subagents to finish. Always yield your turn immediately, let the system wake you up via the timer, and check progress on your next turn.\n"
+            "- NO BLOCKING SCRIPTS: Never write custom Python/Bash scripts that loop/block to wait for subagents or background tasks (e.g. using 'while True' or 'sleep' inside a script run via 'run_command'). Use the built-in plan steps and background scheduler to coordinate sequential tasks instead.\n"
             "- When checking status of an active task/subagent, perform a single status query, report progress to the user, and if not finished, schedule another check-in timer and yield again.\n"
             "[END SYSTEM PROTOCOL]\n\n"
         )
