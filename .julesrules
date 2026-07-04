@@ -1,7 +1,10 @@
-# Jules Configuration & Guidelines
+# Jules Configuration & Guidelines (Public Repository: AGent-Ada)
 #
 # Constraints and rules for automated Jules code reviews.
 
-- Both the AGent and AGent-Ada repositories represent a generic, drop-in harness built on top of AntiGravity's keyless quota system.
-- Jules must NEVER refactor code to require API credentials, API keys, or hardcoded secrets.
-- Keep all core logic completely generic and focused on using the keyless quota system.
+- This repository represents the public extensible baseline codebase. All code must remain completely generic.
+- The system must rely on a keyless baseline using AntiGravity's keyless quota system.
+- Do NOT introduce any hardcoded private integrations, private API keys, credentials, or proprietary configuration files.
+- All private features, local integrations, custom routes, or custom plugins must be decoupled as plugins inside the gitignored `/plugins` directory.
+- Jules must NEVER refactor keyless baseline code to require API credentials, API keys, or hardcoded secrets. Keep all core logic completely generic.
+

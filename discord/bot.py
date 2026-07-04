@@ -705,41 +705,7 @@ def is_admin_function_query(prompt: str) -> bool:
     normalized = prompt.lower()
     return any(re.search(pattern, normalized) for pattern in admin_patterns)
 
-async def handle_thumbtack_webhook_message(message: discord.Message):
-    # Extract message details (content, embeds, fields)
-    parts = []
-    if message.content:
-        parts.append(message.content)
-    for embed in message.embeds:
-        if embed.title:
-            parts.append(f"Embed Title: {embed.title}")
-        if embed.description:
-            parts.append(f"Embed Description: {embed.description}")
-        for field in embed.fields:
-            parts.append(f"{field.name}: {field.value}")
-        if embed.footer and embed.footer.text:
-            parts.append(f"Footer: {embed.footer.text}")
-            
-    full_text = "\n".join(parts)
-    
-    payload = {
-        "content": full_text,
-        "author": str(message.author),
-        "channel_id": str(message.channel.id),
-        "message_id": str(message.id),
-        "created_at": message.created_at.isoformat()
-    }
-    
-    import aiohttp
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(f"{AGENT_API_BASE}/api/integrations/thumbtack", json=payload) as resp:
-                if resp.status == 200:
-                    print(f"[Thumbtack Webhook] Successfully pushed message {message.id} to AGent API.")
-                else:
-                    print(f"[Thumbtack Webhook] Failed to push message {message.id} to AGent API: {resp.status}")
-    except Exception as e:
-        print(f"[Thumbtack Webhook] Error pushing message: {e}")
+
 
 # --- Local Spam & Link Moderation Sentinel ---
 import re
@@ -898,10 +864,6 @@ async def on_message(message: discord.Message):
     # Log all received Discord messages to discord_received.log temporarily
     log_received_message(message)
 
-    # Hook for Thumbtack webhook messages
-    if message.channel and message.channel.id == 1518534351002927205:
-        await handle_thumbtack_webhook_message(message)
-        return
 
     if message.author.bot:
         return
