@@ -1625,10 +1625,19 @@ async def status_task_endpoint(task_id: str, req: TaskStatusRequest):
 
 @app.get("/api/tasks/{task_id}/logs")
 async def get_task_logs_endpoint(task_id: str):
-    if task_id.startswith("subagent-") or task_id.startswith("boardroom-"):
+    clean_id = task_id.replace("task-agent-", "")
+    if clean_id.startswith("subagent-") or clean_id.startswith("boardroom-") or task_id.startswith("subagent-"):
         try:
-            msgs = memory.get_subagent_messages(task_id)
-            logs = [{"timestamp": m["timestamp"], "message": f"[{m['role'].upper()}] {m['message']}"} for m in msgs]
+            msgs = memory.get_subagent_messages(clean_id)
+            # Filter out parent spawn message containing the massive prompt
+            logs = []
+            for m in msgs:
+                if m["role"] == "parent":
+                    continue
+                logs.append({
+                    "timestamp": m["timestamp"],
+                    "message": m["message"]
+                })
             return {"logs": logs}
         except Exception as e:
             print(f"Error fetching subagent logs for task feed: {e}")
