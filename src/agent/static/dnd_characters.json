@@ -1,0 +1,52 @@
+{
+  "characters": [
+    {
+      "name": "Morgath",
+      "stats": {
+        "Strength": 9,
+        "Dexterity": 14,
+        "Constitution": 15,
+        "Intelligence": 17,
+        "Wisdom": 15,
+        "Charisma": 10
+      },
+      "suggested_class": "Wizard"
+    },
+    {
+      "name": "Dorian",
+      "stats": {
+        "Strength": 12,
+        "Dexterity": 14,
+        "Constitution": 10,
+        "Intelligence": 12,
+        "Wisdom": 17,
+        "Charisma": 13
+      },
+      "suggested_class": "Cleric"
+    },
+    {
+      "name": "Rowan",
+      "stats": {
+        "Strength": 13,
+        "Dexterity": 13,
+        "Constitution": 14,
+        "Intelligence": 10,
+        "Wisdom": 12,
+        "Charisma": 13
+      },
+      "suggested_class": "Barbarian"
+    },
+    {
+      "name": "Valerius",
+      "stats": {
+        "Strength": 11,
+        "Dexterity": 12,
+        "Constitution": 13,
+        "Intelligence": 7,
+        "Wisdom": 9,
+        "Charisma": 15
+      },
+      "suggested_class": "Bard"
+    }
+  ]
+}

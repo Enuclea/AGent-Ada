@@ -1,0 +1,10 @@
+{
+  "name": "D&D Character Rolls",
+  "id": "dnd",
+  "position": "sidebar",
+  "iconClass": "fa-solid fa-dice-d20",
+  "headerActionHtml": "<button id=\"refresh-dnd-btn\" class=\"card-action-btn\" title=\"Refresh Rolls\" style=\"padding: 0.25rem 0.5rem; background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); color: var(--text-secondary); border-radius: 4px; cursor: pointer; transition: all 0.2s;\"><i class=\"fa-solid fa-rotate\"></i></button>",
+  "widgetJs": "/modules/dnd/widget.js",
+  "widgetCss": "/modules/dnd/widget.css",
+  "enabled": true
+}
