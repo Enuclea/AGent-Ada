@@ -2150,6 +2150,7 @@ async def run_scheduler():
                 """)
                 delegated_steps = cursor.fetchall()
                 
+                resumed_sessions = set()
                 for step_id, plan_id, step_desc, session_id, step_order in delegated_steps:
                     cursor.execute("""
                         SELECT subagent_id, message, timestamp 
@@ -2166,102 +2167,106 @@ async def run_scheduler():
                             conn.commit()
                             print(f"[SCHEDULER] Subagent {subagent_id} completed. Step {step_id} marked completed.")
                             
-                            async def resume_parent(sess_id, sub_id, msg):
-                                try:
-                                    # Find original Discord channel if it's a mapped discord session
-                                    channel_id = None
-                                    mem = memory.load_memory()
-                                    session_mappings = mem.get("key_value", {}).get("session_mappings", {})
-                                    if isinstance(session_mappings, dict):
-                                        for k, v in session_mappings.items():
-                                            if v == sess_id and k.startswith("discord-session-"):
-                                                try:
-                                                    channel_id = int(k.split("-")[-1])
-                                                except ValueError:
-                                                    pass
-                                                break
+                            if session_id not in resumed_sessions:
+                                resumed_sessions.add(session_id)
+                                async def resume_parent(sess_id, sub_id, msg):
+                                    try:
+                                        # Find original Discord channel if it's a mapped discord session
+                                        channel_id = None
+                                        mem = memory.load_memory()
+                                        session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+                                        if isinstance(session_mappings, dict):
+                                            for k, v in session_mappings.items():
+                                                if v == sess_id and k.startswith("discord-session-"):
+                                                    try:
+                                                        channel_id = int(k.split("-")[-1])
+                                                    except ValueError:
+                                                        pass
+                                                    break
 
-                                    if channel_id:
-                                        from agent.notifications import send_direct_discord_message
-                                        send_direct_discord_message(channel_id, f"⚙️ **Plan Resuming**: Subagent `{sub_id}` completed its task. Resuming parent execution...")
+                                        if channel_id:
+                                            from agent.notifications import send_direct_discord_message
+                                            send_direct_discord_message(channel_id, f"⚙️ **Plan Resuming**: Subagent `{sub_id}` completed its task. Resuming parent execution...")
 
-                                    from agent.keyless import KeylessAgyAgent
-                                    agent = KeylessAgyAgent(
-                                        model="gemini-3.5-flash",
-                                        conversation_id=sess_id,
-                                        timeout=120.0
-                                    )
-                                    resume_prompt = (
-                                        f"[SYSTEM RESUME]\n"
-                                        f"Subagent '{sub_id}' has completed the delegated task for Step {step_order}.\n"
-                                        f"Subagent Output: {msg}\n\n"
-                                        f"Please resume execution of the plan and proceed with the remaining steps."
-                                    )
-                                    memory.log_conversation_step(sess_id, "user", resume_prompt)
-                                    async with agent as active_agent:
-                                        response = await active_agent.chat(resume_prompt)
-                                        output_content = ""
-                                        async for chunk in response:
-                                            output_content += chunk
-                                        if output_content:
-                                            memory.log_conversation_step(sess_id, "assistant", output_content)
-                                            if channel_id:
-                                                send_direct_discord_message(channel_id, output_content)
-                                except Exception as re_err:
-                                    print(f"[SCHEDULER] Failed to resume parent session {sess_id}: {re_err}")
-                            
-                            asyncio.create_task(resume_parent(session_id, subagent_id, message))
+                                        from agent.keyless import KeylessAgyAgent
+                                        agent = KeylessAgyAgent(
+                                            model="gemini-3.5-flash",
+                                            conversation_id=sess_id,
+                                            timeout=120.0
+                                        )
+                                        resume_prompt = (
+                                            f"[SYSTEM RESUME]\n"
+                                            f"Subagent '{sub_id}' has completed the delegated task.\n"
+                                            f"Subagent Output: {msg}\n\n"
+                                            f"Please resume execution and report back."
+                                        )
+                                        memory.log_conversation_step(sess_id, "user", resume_prompt)
+                                        async with agent as active_agent:
+                                            response = await active_agent.chat(resume_prompt)
+                                            output_content = ""
+                                            async for chunk in response:
+                                                output_content += chunk
+                                            if output_content:
+                                                memory.log_conversation_step(sess_id, "assistant", output_content)
+                                                if channel_id:
+                                                    send_direct_discord_message(channel_id, output_content)
+                                    except Exception as re_err:
+                                        print(f"[SCHEDULER] Failed to resume parent session {sess_id}: {re_err}")
+                                
+                                asyncio.create_task(resume_parent(session_id, subagent_id, message))
                             
                         elif "subagent failed:" in message.lower():
                             cursor.execute("UPDATE plan_steps SET status = 'failed', error_message = ? WHERE id = ?", (message, step_id))
                             conn.commit()
                             print(f"[SCHEDULER] Subagent {subagent_id} failed. Step {step_id} marked failed.")
                             
-                            async def resume_parent_fail(sess_id, sub_id, err_msg):
-                                try:
-                                    # Find original Discord channel if it's a mapped discord session
-                                    channel_id = None
-                                    mem = memory.load_memory()
-                                    session_mappings = mem.get("key_value", {}).get("session_mappings", {})
-                                    if isinstance(session_mappings, dict):
-                                        for k, v in session_mappings.items():
-                                            if v == sess_id and k.startswith("discord-session-"):
-                                                try:
-                                                    channel_id = int(k.split("-")[-1])
-                                                except ValueError:
-                                                    pass
-                                                break
+                            if session_id not in resumed_sessions:
+                                resumed_sessions.add(session_id)
+                                async def resume_parent_fail(sess_id, sub_id, err_msg):
+                                    try:
+                                        # Find original Discord channel if it's a mapped discord session
+                                        channel_id = None
+                                        mem = memory.load_memory()
+                                        session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+                                        if isinstance(session_mappings, dict):
+                                            for k, v in session_mappings.items():
+                                                if v == sess_id and k.startswith("discord-session-"):
+                                                    try:
+                                                        channel_id = int(k.split("-")[-1])
+                                                    except ValueError:
+                                                        pass
+                                                    break
 
-                                    if channel_id:
-                                        from agent.notifications import send_direct_discord_message
-                                        send_direct_discord_message(channel_id, f"⚠️ **Plan Resuming on Failure**: Subagent `{sub_id}` failed. Resuming parent to handle error...")
+                                        if channel_id:
+                                            from agent.notifications import send_direct_discord_message
+                                            send_direct_discord_message(channel_id, f"⚠️ **Plan Resuming on Failure**: Subagent `{sub_id}` failed. Resuming parent to handle error...")
 
-                                    from agent.keyless import KeylessAgyAgent
-                                    agent = KeylessAgyAgent(
-                                        model="gemini-3.5-flash",
-                                        conversation_id=sess_id,
-                                        timeout=120.0
-                                    )
-                                    resume_prompt = (
-                                        f"[SYSTEM RESUME - FAILURE]\n"
-                                        f"Subagent '{sub_id}' failed during execution of Step {step_order}.\n"
-                                        f"Failure message: {err_msg}\n\n"
-                                        f"Please handle the failure and proceed accordingly."
-                                    )
-                                    memory.log_conversation_step(sess_id, "user", resume_prompt)
-                                    async with agent as active_agent:
-                                        response = await active_agent.chat(resume_prompt)
-                                        output_content = ""
-                                        async for chunk in response:
-                                            output_content += chunk
-                                        if output_content:
-                                            memory.log_conversation_step(sess_id, "assistant", output_content)
-                                            if channel_id:
-                                                send_direct_discord_message(channel_id, output_content)
-                                except Exception as re_err:
-                                    print(f"[SCHEDULER] Failed to resume parent session {sess_id} on failure: {re_err}")
-                                    
-                            asyncio.create_task(resume_parent_fail(session_id, subagent_id, message))
+                                        from agent.keyless import KeylessAgyAgent
+                                        agent = KeylessAgyAgent(
+                                            model="gemini-3.5-flash",
+                                            conversation_id=sess_id,
+                                            timeout=120.0
+                                        )
+                                        resume_prompt = (
+                                            f"[SYSTEM RESUME - FAILURE]\n"
+                                            f"Subagent '{sub_id}' failed execution.\n"
+                                            f"Failure message: {err_msg}\n\n"
+                                            f"Please handle the failure and proceed accordingly."
+                                        )
+                                        memory.log_conversation_step(sess_id, "user", resume_prompt)
+                                        async with agent as active_agent:
+                                            response = await active_agent.chat(resume_prompt)
+                                            output_content = ""
+                                            async for chunk in response:
+                                                output_content += chunk
+                                            if output_content:
+                                                memory.log_conversation_step(sess_id, "assistant", output_content)
+                                                if channel_id:
+                                                    send_direct_discord_message(channel_id, output_content)
+                                    except Exception as re_err:
+                                        print(f"[SCHEDULER] Failed to resume parent session {sess_id} on failure: {re_err}")
+                                        
+                                asyncio.create_task(resume_parent_fail(session_id, subagent_id, message))
                 
                 # Check for completed subagents that need parent resumption (non-plan sessions)
                 cursor.execute("""
