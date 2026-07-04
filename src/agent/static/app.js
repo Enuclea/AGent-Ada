@@ -167,7 +167,24 @@ chatForm.addEventListener('submit', async (e) => {
                                 // Detect delegation response — start polling for results
                                 if (data.content && data.content.includes('🚀')) {
                                     delegationPending = true;
-                                    console.log('[UI] Delegation detected, will poll for background results');
+                                    console.log('[UI] Delegation detected, starting history poll interval');
+                                    // Start dedicated polling interval to pick up background results
+                                    const delegationStartMsgCount = chatMessages.querySelectorAll('.message.assistant-message').length;
+                                    if (delegationHistoryTimer) clearInterval(delegationHistoryTimer);
+                                    let pollCount = 0;
+                                    delegationHistoryTimer = setInterval(async () => {
+                                        pollCount++;
+                                        console.log(`[UI] Delegation poll #${pollCount}`);
+                                        await loadHistory();
+                                        const newMsgCount = chatMessages.querySelectorAll('.message.assistant-message').length;
+                                        if (newMsgCount > delegationStartMsgCount || pollCount >= 24) {
+                                            // Found new messages or timed out (2 min)
+                                            clearInterval(delegationHistoryTimer);
+                                            delegationHistoryTimer = null;
+                                            delegationPending = false;
+                                            console.log(`[UI] Delegation poll complete (${newMsgCount > delegationStartMsgCount ? 'new messages' : 'timeout'})`);
+                                        }
+                                    }, 5000);
                                 }
                             }
                         } catch (err) {
@@ -581,18 +598,6 @@ async function pollTasks() {
             
             const runningCount = tasks.filter(t => t.status === 'running').length;
             activeTasksCount.textContent = `${runningCount} active`;
-
-            // Auto-refresh chat history when delegation tasks complete
-            if (delegationPending && runningCount === 0) {
-                // All tasks finished — refresh chat to show background results
-                if (delegationHistoryTimer) clearTimeout(delegationHistoryTimer);
-                delegationHistoryTimer = setTimeout(async () => {
-                    console.log('[UI] Refreshing chat history after delegation completed');
-                    await loadHistory();
-                    delegationPending = false;
-                    delegationHistoryTimer = null;
-                }, 3000);
-            }
 
             const currentTaskIds = new Set(tasks.map(t => t.id));
             

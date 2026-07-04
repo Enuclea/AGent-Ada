@@ -610,59 +610,86 @@ async def chat_endpoint(req: ChatRequest):
                 if enable_planning and not existing_plan and len(req.prompt.strip()) > plan_min_length:
                     import uuid
                     plan_id = str(uuid.uuid4())
-                    plan_prompt = (
-                        f"Given the user request: '{req.prompt}', decompose it into 3-5 sequential execution plan steps, "
-                        "identifying the overall goal, tasks, acceptance criteria, and non-goals.\n"
-                        "Return ONLY a JSON object with the following structure:\n"
-                        "{\n"
-                        '  "title": "Short title of the task (e.g. Create hello world web page)",\n'
-                        '  "goal": "Clear explanation of the overall goal (e.g. Create a simple, nicely styled Hello World page.)",\n'
-                        '  "tasks": [\n'
-                        '    {"description": "Description of step 1", "assigned_tool": "assigned_tool (e.g. run_command or write_to_file or spawn_subagent)"},\n'
-                        '    {"description": "Description of step 2", "assigned_tool": "..."}\n'
-                        '  ],\n'
-                        '  "acceptance_criteria": [\n'
-                        '    "Acceptance criteria 1",\n'
-                        '    "Acceptance criteria 2"\n'
-                        '  ],\n'
-                        '  "non_goals": [\n'
-                        '    "Non-goal 1 (optional)",\n'
-                        '    "Non-goal 2 (optional)"\n'
-                        '  ]\n'
-                        "}"
-                    )
-                    try:
-                        from agent.keyless import KeylessAgyAgent as PlanAgent, TaskPriority
-                        plan_agent = PlanAgent(
-                            model="gemini-3.5-flash",
-                            system_instructions="You are a plan decomposer. Output ONLY raw JSON.",
-                            task_priority=TaskPriority.BACKGROUND
+                    
+                    # Fast-path: if the user explicitly names a specialist, skip LLM decomposition
+                    # and create a single delegation step. This prevents subagent explosion.
+                    prompt_lower = req.prompt.lower()
+                    specialist_match = None
+                    for name in ["lacie", "val", "kira", "grace"]:
+                        if name in prompt_lower:
+                            specialist_match = name
+                            break
+                    
+                    if specialist_match:
+                        # Single-step delegation — give the whole task to the named specialist
+                        title = f"Delegate to {specialist_match.title()}: {req.prompt[:50]}..."
+                        memory.add_session_plan(plan_id, lookup_id, title, "running", req.prompt, "[]", "[]")
+                        step_id = f"step-{plan_id}-0"
+                        memory.add_plan_step(
+                            step_id=step_id,
+                            plan_id=plan_id,
+                            step_order=1,
+                            description=req.prompt,
+                            status="pending",
+                            assigned_tool="spawn_subagent",
+                            assigned_args=""
                         )
-                        async with plan_agent as pa:
-                            await queue.put({"type": "thought", "content": "🤖 Creating execution plan...\n"})
-                            plan_resp = await pa.chat(plan_prompt)
-                            plan_data = json.loads(plan_resp.text.strip().strip("`").strip("json").strip())
-                            if isinstance(plan_data, dict):
-                                title = plan_data.get("title") or f"Plan: {req.prompt[:50]}..."
-                                goal = plan_data.get("goal")
-                                ac = json.dumps(plan_data.get("acceptance_criteria") or [])
-                                ng = json.dumps(plan_data.get("non_goals") or [])
-                                tasks = plan_data.get("tasks") or []
-                                
-                                memory.add_session_plan(plan_id, lookup_id, title, "running", goal, ac, ng)
-                                for idx, step in enumerate(tasks):
-                                    step_id = f"step-{plan_id}-{idx}"
-                                    memory.add_plan_step(
-                                        step_id=step_id,
-                                        plan_id=plan_id,
-                                        step_order=idx + 1,
-                                        description=step.get("description", ""),
-                                        status="pending",
-                                        assigned_tool=step.get("assigned_tool"),
-                                        assigned_args=str(step.get("assigned_args", ""))
-                                    )
-                    except Exception as pe:
-                        print(f"[PLANNING] Failed to decompose plan: {pe}")
+                        await queue.put({"type": "thought", "content": f"🚀 Delegating to {specialist_match.title()}...\n"})
+                    else:
+                        # Full LLM-based plan decomposition for complex tasks
+                        plan_prompt = (
+                            f"Given the user request: '{req.prompt}', decompose it into 3-5 sequential execution plan steps, "
+                            "identifying the overall goal, tasks, acceptance criteria, and non-goals.\n"
+                            "Return ONLY a JSON object with the following structure:\n"
+                            "{\n"
+                            '  "title": "Short title of the task (e.g. Create hello world web page)",\n'
+                            '  "goal": "Clear explanation of the overall goal (e.g. Create a simple, nicely styled Hello World page.)",\n'
+                            '  "tasks": [\n'
+                            '    {"description": "Description of step 1", "assigned_tool": "assigned_tool (e.g. run_command or write_to_file or spawn_subagent)"},\n'
+                            '    {"description": "Description of step 2", "assigned_tool": "..."}\n'
+                            '  ],\n'
+                            '  "acceptance_criteria": [\n'
+                            '    "Acceptance criteria 1",\n'
+                            '    "Acceptance criteria 2"\n'
+                            '  ],\n'
+                            '  "non_goals": [\n'
+                            '    "Non-goal 1 (optional)",\n'
+                            '    "Non-goal 2 (optional)"\n'
+                            '  ]\n'
+                            "}"
+                        )
+                        try:
+                            from agent.keyless import KeylessAgyAgent as PlanAgent, TaskPriority
+                            plan_agent = PlanAgent(
+                                model="gemini-3.5-flash",
+                                system_instructions="You are a plan decomposer. Output ONLY raw JSON.",
+                                task_priority=TaskPriority.BACKGROUND
+                            )
+                            async with plan_agent as pa:
+                                await queue.put({"type": "thought", "content": "🤖 Creating execution plan...\n"})
+                                plan_resp = await pa.chat(plan_prompt)
+                                plan_data = json.loads(plan_resp.text.strip().strip("`").strip("json").strip())
+                                if isinstance(plan_data, dict):
+                                    title = plan_data.get("title") or f"Plan: {req.prompt[:50]}..."
+                                    goal = plan_data.get("goal")
+                                    ac = json.dumps(plan_data.get("acceptance_criteria") or [])
+                                    ng = json.dumps(plan_data.get("non_goals") or [])
+                                    tasks = plan_data.get("tasks") or []
+                                    
+                                    memory.add_session_plan(plan_id, lookup_id, title, "running", goal, ac, ng)
+                                    for idx, step in enumerate(tasks):
+                                        step_id = f"step-{plan_id}-{idx}"
+                                        memory.add_plan_step(
+                                            step_id=step_id,
+                                            plan_id=plan_id,
+                                            step_order=idx + 1,
+                                            description=step.get("description", ""),
+                                            status="pending",
+                                            assigned_tool=step.get("assigned_tool"),
+                                            assigned_args=str(step.get("assigned_args", ""))
+                                        )
+                        except Exception as pe:
+                            print(f"[PLANNING] Failed to decompose plan: {pe}")
 
                 # Log user prompt
                 memory.log_conversation_step(agent.conversation_id, "user", req.prompt)
