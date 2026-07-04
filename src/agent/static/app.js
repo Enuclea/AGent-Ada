@@ -1165,6 +1165,8 @@ function setupCollapsibleWidgets() {
     
     // Bind click events
     headers.forEach(header => {
+        if (header.dataset.listenerBound) return;
+        header.dataset.listenerBound = "true";
         header.addEventListener('click', () => {
             const card = header.closest('.widget-card');
             if (!card) return;
@@ -1181,6 +1183,71 @@ function setupCollapsibleWidgets() {
     });
 }
 
+// Dynamic Module/Widget Loader System
+async function loadDynamicModules() {
+    try {
+        const response = await fetch('/api/modules');
+        if (!response.ok) return;
+        const data = await response.json();
+        const modules = data.modules || [];
+
+        for (let mod of modules) {
+            // 1. Inject CSS if present
+            if (mod.widgetCss) {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = mod.widgetCss + '?v=' + Date.now();
+                document.head.appendChild(link);
+            }
+
+            // 2. Inject HTML container
+            let parentContainer = document.querySelector('.sidebar-content') || document.querySelector('.sidebar') || document.body;
+            if (mod.position === 'main') {
+                parentContainer = document.querySelector('.main-content') || document.body;
+            }
+
+            const widgetCard = document.createElement('div');
+            widgetCard.className = 'widget-card glass-card dynamic-module-card';
+            widgetCard.id = `module-${mod.id}-card`;
+            
+            widgetCard.innerHTML = `
+                <div class="card-header collapsible-header">
+                    <h2><i class="${mod.iconClass || 'fa-solid fa-puzzle-piece'}" style="color: var(--accent-orchid);"></i> ${mod.name}</h2>
+                    <div class="header-right" style="display: flex; align-items: center; gap: 0.5rem;">
+                        ${mod.headerActionHtml || ''}
+                        <span class="collapse-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                    </div>
+                </div>
+                <div class="card-content-wrapper">
+                    <div class="card-body">
+                        <div id="module-${mod.id}-container"></div>
+                    </div>
+                </div>
+            `;
+            
+            const skillsCard = document.getElementById('skills-card');
+            if (skillsCard && mod.position === 'sidebar') {
+                skillsCard.parentNode.insertBefore(widgetCard, skillsCard);
+            } else {
+                parentContainer.appendChild(widgetCard);
+            }
+
+            // 3. Inject JS script
+            if (mod.widgetJs) {
+                const script = document.createElement('script');
+                script.type = 'module';
+                script.src = mod.widgetJs + '?v=' + Date.now();
+                document.body.appendChild(script);
+            }
+        }
+        
+        // Re-bind collapsible events to dynamically added cards
+        setupCollapsibleWidgets();
+    } catch (err) {
+        console.error('Failed to load dynamic modules:', err);
+    }
+}
+
 // Init Setup
 async function init() {
     await loadStatus();
@@ -1191,6 +1258,9 @@ async function init() {
     await pollPlanAndTelemetry();
     await pollQuotas();
     setupCollapsibleWidgets();
+    
+    // Load dynamic widgets/modules
+    await loadDynamicModules();
     
     // Polling schedules and active tasks
     setInterval(pollTasks, 2000);

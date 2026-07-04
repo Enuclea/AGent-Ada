@@ -1843,7 +1843,9 @@ select:focus {
     pointer-events: none;
 }
 
+
 .widget-card.collapsed .collapse-chevron i {
     transform: rotate(-90deg);
 }
+
 

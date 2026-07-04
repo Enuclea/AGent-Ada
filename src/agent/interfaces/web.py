@@ -1564,6 +1564,29 @@ async def get_discord_members():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve Discord members: {e}")
 
+@app.get("/api/modules")
+async def list_modules_endpoint():
+    """Dynamically scans static/modules directory for widget modules."""
+    modules_dir = Path(__file__).parent.parent / "static" / "modules"
+    if not modules_dir.exists():
+        return {"modules": []}
+    
+    modules = []
+    for path in modules_dir.iterdir():
+        if path.is_dir():
+            config_file = path / "module.json"
+            if config_file.exists():
+                try:
+                    with open(config_file, "r") as f:
+                        data = json.load(f)
+                        data["id"] = path.name
+                        data.setdefault("enabled", True)
+                        if data.get("enabled"):
+                            modules.append(data)
+                except Exception as e:
+                    print(f"Error loading module config from {path}: {e}")
+    return {"modules": modules}
+
 @app.post("/api/discord/config")
 async def post_discord_config(req: DiscordConfigRequest):
     """Sets/updates the centralized channel/bot configuration."""
