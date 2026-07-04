@@ -492,7 +492,21 @@ class KeylessAgyAgent:
             roleplay: Whether to activate local Ollama fallback for roleplay.
         """
         self.model: Optional[str] = model
-        self.system_instructions: Optional[str] = system_instructions
+        common_protocol = (
+            "[SYSTEM PROTOCOL - TIMEOUT PREVENTION & YIELDING]\n"
+            "- CRITICAL: Keep your execution turns non-blocking. The system has a strict client/HTTP timeout.\n"
+            "- If you spawn a subagent (`spawn_subagent`) or launch a long-running background command, you MUST schedule a check-in timer using the `schedule` tool and immediately END your turn by returning a progress update. Do NOT call any more tools or run loops in this turn to wait.\n"
+            "- NEVER write loops in your thoughts or tool-calls to poll/wait for background tasks or subagents to finish. Always yield your turn immediately, let the system wake you up via the timer, and check progress on your next turn.\n"
+            "- When checking status of an active task/subagent, perform a single status query, report progress to the user, and if not finished, schedule another check-in timer and yield again.\n"
+            "[END SYSTEM PROTOCOL]\n\n"
+        )
+        if system_instructions:
+            if "[SYSTEM PROTOCOL - TIMEOUT PREVENTION & YIELDING]" not in system_instructions:
+                self.system_instructions = common_protocol + system_instructions
+            else:
+                self.system_instructions = system_instructions
+        else:
+            self.system_instructions = common_protocol
         self.conversation_id: Optional[str] = conversation_id
         self.response_schema: Optional[Any] = response_schema
         self.db_path: Optional[str] = db_path
