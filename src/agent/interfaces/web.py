@@ -774,12 +774,15 @@ async def chat_endpoint(req: ChatRequest):
                         
                         # Fire the delegation work as a background task — call spawn endpoint directly
                         # instead of spawning an intermediate agy process (saves ~90s startup overhead).
+                        # Capture the real session ID for the closure
+                        delegation_session_id = agent.conversation_id
+                        
                         async def background_delegation():
                             await asyncio.sleep(0.5)  # Wait for client lock release
                             from agent.memory import active_session_id_var
                             from agent.core.registry import tool_registry
                             lock = get_session_lock(lookup_id)
-                            token = active_session_id_var.set(lookup_id)
+                            token = active_session_id_var.set(delegation_session_id)
                             try:
                                 await lock.acquire(priority=0)
                                 import uuid
@@ -812,7 +815,7 @@ async def chat_endpoint(req: ChatRequest):
                                         subagent_id=subagent_id,
                                         prompt=prompt,
                                         agent_profile=profile,
-                                        parent_session_id=lookup_id,
+                                        parent_session_id=delegation_session_id,
                                         target_files=[],
                                         stub_files=[]
                                     )
@@ -828,7 +831,7 @@ async def chat_endpoint(req: ChatRequest):
                                 
                                 # Log summary
                                 summary = f"Dispatched {len(delegation_steps)} subagent(s) directly."
-                                memory.log_conversation_step(lookup_id, "assistant", summary)
+                                memory.log_conversation_step(delegation_session_id, "assistant", summary)
                                 print(f"[BG DISPATCH] {summary}")
                             except Exception as bg_err:
                                 print(f"[BG DISPATCH] Delegation failed: {bg_err}")
@@ -841,6 +844,8 @@ async def chat_endpoint(req: ChatRequest):
                         asyncio.create_task(background_delegation())
                         
                         # Immediately respond to the client — don't wait for the agy process
+                        # Send session_id first so the frontend knows which session to poll
+                        await queue.put({"type": "session_id", "content": agent.conversation_id})
                         task_list = "\n".join([f"- {s['description']}" for s in delegation_steps])
                         await queue.put({"type": "chunk", "content": (
                             f"🚀 **Delegating {len(delegation_steps)} task(s) to background agents:**\n\n"
