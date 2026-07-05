@@ -314,6 +314,49 @@ body {
     font-size: 0.9rem;
 }
 
+.thought-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.thought-placeholder {
+    opacity: 0.5;
+}
+
+.thought-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.2rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    animation: thoughtFadeIn 0.3s ease-out;
+}
+
+.thought-item:last-child {
+    border-bottom: none;
+}
+
+.thought-time {
+    font-size: 0.7rem;
+    color: var(--accent-orchid);
+    opacity: 0.6;
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-family: monospace;
+    padding-top: 0.1rem;
+}
+
+.thought-text {
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+@keyframes thoughtFadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 /* System Message */
 .system-message .message-avatar {
     background: rgba(0, 242, 254, 0.05);

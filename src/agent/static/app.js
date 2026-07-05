@@ -204,8 +204,7 @@ chatForm.addEventListener('submit', async (e) => {
                                     updateSessionListSelection(currentSessionId);
                                 }
                             } else if (data.type === 'thought') {
-                                lastThoughtText += data.content;
-                                updateThoughtBubble(thoughtBubble, lastThoughtText);
+                                appendThoughtItem(thoughtBubble, data.content);
                             } else if (data.type === 'chunk') {
                                 lastResponseText += data.content;
                                 updateResponseBubble(responseBubble, lastResponseText);
@@ -241,7 +240,7 @@ chatForm.addEventListener('submit', async (e) => {
         }
 
         // Clean up empty thought or response bubble if none received
-        if (!lastThoughtText) {
+        if (!thoughtBubble.querySelector('.thought-item')) {
             thoughtBubble.remove();
         }
         if (!lastResponseText) {
@@ -251,7 +250,7 @@ chatForm.addEventListener('submit', async (e) => {
     } catch (error) {
         console.error('Failed to stream response:', error);
         appendMessage('system', `Error streaming agent response: ${error.message}`);
-        if (thoughtBubble && !lastThoughtText) thoughtBubble.remove();
+        if (thoughtBubble && !thoughtBubble.querySelector('.thought-item')) thoughtBubble.remove();
         if (responseBubble && !lastResponseText) responseBubble.remove();
     } finally {
         setLoadingState(false);
@@ -316,8 +315,12 @@ function appendThoughtBubble() {
     avatar.textContent = '🧠';
     
     const contentDiv = document.createElement('div');
-    contentDiv.className = 'message-content';
-    contentDiv.textContent = 'Thinking...';
+    contentDiv.className = 'message-content thought-list';
+    // Start with a "Thinking..." placeholder that gets removed on first real item
+    const placeholder = document.createElement('div');
+    placeholder.className = 'thought-placeholder';
+    placeholder.textContent = 'Thinking...';
+    contentDiv.appendChild(placeholder);
     
     msgDiv.appendChild(avatar);
     msgDiv.appendChild(contentDiv);
@@ -326,9 +329,29 @@ function appendThoughtBubble() {
     return msgDiv;
 }
 
-function updateThoughtBubble(bubbleDiv, content) {
+function appendThoughtItem(bubbleDiv, content) {
+    if (!content || !content.trim()) return;
     const contentDiv = bubbleDiv.querySelector('.message-content');
-    contentDiv.textContent = content;
+    
+    // Remove the "Thinking..." placeholder on first real item
+    const placeholder = contentDiv.querySelector('.thought-placeholder');
+    if (placeholder) placeholder.remove();
+    
+    const item = document.createElement('div');
+    item.className = 'thought-item';
+    
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'thought-time';
+    timeSpan.textContent = timestamp;
+    
+    const textSpan = document.createElement('span');
+    textSpan.className = 'thought-text';
+    textSpan.textContent = content.trim();
+    
+    item.appendChild(timeSpan);
+    item.appendChild(textSpan);
+    contentDiv.appendChild(item);
     scrollChatToBottom();
 }
 
