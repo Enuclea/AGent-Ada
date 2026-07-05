@@ -162,7 +162,7 @@ class OrchestrationService:
             mem_summary = ""
             if roleplay_mem_list:
                 mem_summary = "\n\n[PERSISTENT ROLEPLAY MEMORIES]\n" + "\n".join([f"- {m['key']}: {m['fact']}" for m in roleplay_mem_list]) + "\n[END OF PERSISTENT ROLEPLAY MEMORIES]"
-            full_instructions = common_protocol + (custom_instructions or "") + mem_summary
+            full_instructions = (custom_instructions or "") + mem_summary
         elif custom_instructions:
             # Specialist mode: personality prompt only, no heavy context injection.
             # Specialists respond instantly in character with full tool access.

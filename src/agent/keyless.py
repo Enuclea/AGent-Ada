@@ -218,7 +218,7 @@ class KeylessAgyResponse:
         last_activity_time = start_time
         max_duration = self.timeout_val if self.timeout_val is not None else 120.0
         prev_ticks, _ = get_process_activity_metrics(self.proc.pid) if self.proc else (0, [])
-        idle_timeout = 45.0
+        idle_timeout = 120.0
         
         try:
             while True:
@@ -333,7 +333,7 @@ class KeylessAgyResponse:
             last_activity_time: float = start_time
             max_duration: float = self.timeout_val if self.timeout_val is not None else 120.0
             prev_ticks, _ = get_process_activity_metrics(self.proc.pid) if self.proc else (0, [])
-            idle_timeout: float = 45.0
+            idle_timeout: float = 120.0
             
             try:
                 while True:
@@ -622,7 +622,9 @@ class KeylessAgyAgent:
             "  4). Final, formatted clean -- declaration of work done.\n"
             "[END SYSTEM PROTOCOL]\n\n"
         )
-        if system_instructions:
+        if roleplay:
+            self.system_instructions = system_instructions or ""
+        elif system_instructions:
             if "[SYSTEM PROTOCOL - TIMEOUT PREVENTION & YIELDING]" not in system_instructions:
                 self.system_instructions = common_protocol + system_instructions
             else:
