@@ -314,9 +314,19 @@ def init_db() -> None:
             model_family TEXT PRIMARY KEY,
             pct_5h REAL,
             pct_weekly REAL,
+            reset_5h TEXT,
+            reset_weekly TEXT,
             last_updated TEXT
         )
         """)
+        try:
+            cursor.execute("ALTER TABLE model_quotas ADD COLUMN reset_5h TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE model_quotas ADD COLUMN reset_weekly TEXT")
+        except sqlite3.OperationalError:
+            pass
         # Remote workers
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS workers (

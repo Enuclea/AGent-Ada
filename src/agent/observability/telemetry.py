@@ -261,13 +261,21 @@ def get_subagents_status() -> List[Dict[str, Any]]:
 
 # --- Model Quotas ---
 
-def update_model_quotas(model_family: str, pct_5h: float, pct_weekly: float) -> None:
+def update_model_quotas(
+    model_family: str,
+    pct_5h: float,
+    pct_weekly: float,
+    reset_5h: Optional[str] = None,
+    reset_weekly: Optional[str] = None
+) -> None:
     """Updates or inserts the quota usage percentages for a model family.
 
     Args:
         model_family: Identifier for the model provider family.
         pct_5h: Percentage usage over the past 5 hours.
         pct_weekly: Percentage usage over the past week.
+        reset_5h: Next reset time for the 5-hour limit.
+        reset_weekly: Next reset time for the weekly limit.
     """
     conn = _db.get_connection(_db.DB_FILE_PATH)
     try:
@@ -275,10 +283,10 @@ def update_model_quotas(model_family: str, pct_5h: float, pct_weekly: float) -> 
         last_updated = datetime.now(timezone.utc).isoformat()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO model_quotas (model_family, pct_5h, pct_weekly, last_updated)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO model_quotas (model_family, pct_5h, pct_weekly, reset_5h, reset_weekly, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (model_family, pct_5h, pct_weekly, last_updated)
+            (model_family, pct_5h, pct_weekly, reset_5h, reset_weekly, last_updated)
         )
         conn.commit()
     except Exception:
@@ -296,14 +304,16 @@ def get_model_quotas() -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT model_family, pct_5h, pct_weekly, last_updated FROM model_quotas")
+        cursor.execute("SELECT model_family, pct_5h, pct_weekly, reset_5h, reset_weekly, last_updated FROM model_quotas")
         rows = cursor.fetchall()
         for r in rows:
             results.append({
                 "model_family": r[0],
                 "pct_5h": r[1],
                 "pct_weekly": r[2],
-                "last_updated": r[3]
+                "reset_5h": r[3],
+                "reset_weekly": r[4],
+                "last_updated": r[5]
             })
     except Exception:
         pass

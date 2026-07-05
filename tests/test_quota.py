@@ -37,7 +37,7 @@ def test_database_helpers():
     conn.commit()
     conn.close()
 
-    memory.update_model_quotas("gemini", 90.0, 85.0)
+    memory.update_model_quotas("gemini", 90.0, 85.0, "2026-07-05T20:30:00Z", "2026-07-12T17:30:00Z")
     memory.update_model_quotas("claude_gpt", 100.0, 99.0)
 
     quotas = memory.get_model_quotas()
@@ -45,10 +45,14 @@ def test_database_helpers():
     gemini = next(q for q in quotas if q["model_family"] == "gemini")
     assert gemini["pct_5h"] == 90.0
     assert gemini["pct_weekly"] == 85.0
+    assert gemini["reset_5h"] == "2026-07-05T20:30:00Z"
+    assert gemini["reset_weekly"] == "2026-07-12T17:30:00Z"
 
     claude = next(q for q in quotas if q["model_family"] == "claude_gpt")
     assert claude["pct_5h"] == 100.0
     assert claude["pct_weekly"] == 99.0
+    assert claude["reset_5h"] is None
+    assert claude["reset_weekly"] is None
 
 @patch("agent.web.discover_language_server")
 @patch("requests.post")
@@ -63,15 +67,15 @@ def test_fetch_real_quotas(mock_post, mock_discover):
                 {
                     "displayName": "Gemini Models",
                     "buckets": [
-                        {"window": "5h", "remainingFraction": 0.95},
-                        {"window": "weekly", "remainingFraction": 0.88}
+                        {"window": "5h", "remainingFraction": 0.95, "resetTime": "2026-07-05T20:30:00Z"},
+                        {"window": "weekly", "remainingFraction": 0.88, "resetTime": "2026-07-12T17:30:00Z"}
                     ]
                 },
                 {
                     "displayName": "Claude and GPT models",
                     "buckets": [
-                        {"window": "5h", "remainingFraction": 1.0},
-                        {"window": "weekly", "remainingFraction": 0.99}
+                        {"window": "5h", "remainingFraction": 1.0, "resetTime": "2026-07-05T21:00:00Z"},
+                        {"window": "weekly", "remainingFraction": 0.99, "resetTime": "2026-07-13T17:30:00Z"}
                     ]
                 }
             ]
@@ -86,6 +90,14 @@ def test_fetch_real_quotas(mock_post, mock_discover):
     gemini = next(q for q in quotas if q["model_family"] == "gemini")
     assert gemini["pct_5h"] == 95.0
     assert gemini["pct_weekly"] == 88.0
+    assert gemini["reset_5h"] == "2026-07-05T20:30:00Z"
+    assert gemini["reset_weekly"] == "2026-07-12T17:30:00Z"
+
+    claude = next(q for q in quotas if q["model_family"] == "claude_gpt")
+    assert claude["pct_5h"] == 100.0
+    assert claude["pct_weekly"] == 99.0
+    assert claude["reset_5h"] == "2026-07-05T21:00:00Z"
+    assert claude["reset_weekly"] == "2026-07-13T17:30:00Z"
 
 def test_api_endpoint():
     response = client.get("/api/quotas")

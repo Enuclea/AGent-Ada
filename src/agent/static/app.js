@@ -1183,6 +1183,33 @@ async function pollPlanAndTelemetry() {
     }
 }
 
+function formatRelativeTime(isoString) {
+    if (!isoString) return '';
+    try {
+        const target = new Date(isoString);
+        if (isNaN(target.getTime())) return '';
+        const now = new Date();
+        const diffMs = target - now;
+        if (diffMs <= 0) return 'Reset: pending';
+        
+        const diffMins = Math.floor(diffMs / 60000);
+        if (diffMins < 60) {
+            return `Reset: ${diffMins}m`;
+        }
+        const diffHours = Math.floor(diffMins / 60);
+        const remMins = diffMins % 60;
+        if (diffHours < 24) {
+            return `Reset: ${diffHours}h ${remMins}m`;
+        }
+        const diffDays = Math.floor(diffHours / 24);
+        const remHours = diffHours % 24;
+        return `Reset: ${diffDays}d ${remHours}h`;
+    } catch (e) {
+        console.error(e);
+        return '';
+    }
+}
+
 // Poll Model Quotas
 async function pollQuotas() {
     try {
@@ -1196,22 +1223,61 @@ async function pollQuotas() {
                 const pct_weekly = q.pct_weekly;
                 
                 const prefix = (family === 'gemini') ? 'gemini' : 'claude';
+                const brand = (family === 'gemini') ? 'Gemini' : 'Claude';
                 
                 const val5h = document.getElementById(`${prefix}-5h-val`);
                 const valWeekly = document.getElementById(`${prefix}-weekly-val`);
                 const bar5h = document.getElementById(`${prefix}-5h-bar`);
                 const barWeekly = document.getElementById(`${prefix}-weekly-bar`);
                 
+                const lbl5h = document.getElementById(`${prefix}-5h-label`);
+                const lblWeekly = document.getElementById(`${prefix}-weekly-label`);
+                
+                const reset5hText = formatRelativeTime(q.reset_5h);
+                const resetWeeklyText = formatRelativeTime(q.reset_weekly);
+                
                 if (val5h) val5h.textContent = `${pct_5h.toFixed(1)}%`;
                 if (valWeekly) valWeekly.textContent = `${pct_weekly.toFixed(1)}%`;
+                
+                if (lbl5h) {
+                    if (reset5hText) {
+                        lbl5h.textContent = `${brand} 5h Limit (${reset5hText})`;
+                    } else {
+                        lbl5h.textContent = '5-Hour Limit';
+                    }
+                }
+                
+                if (lblWeekly) {
+                    if (resetWeeklyText) {
+                        lblWeekly.textContent = `${brand} Weekly Limit (${resetWeeklyText})`;
+                    } else {
+                        lblWeekly.textContent = 'Weekly Limit';
+                    }
+                }
                 
                 if (bar5h) {
                     bar5h.style.width = `${pct_5h}%`;
                     bar5h.className = 'quota-progress-bar ' + (pct_5h >= 50.0 ? 'high' : (pct_5h >= 20.0 ? 'medium' : 'low'));
+                    if (q.reset_5h) {
+                        const localReset = new Date(q.reset_5h).toLocaleString();
+                        bar5h.title = `Next reset: ${localReset}`;
+                        if (lbl5h) lbl5h.title = `Next reset: ${localReset}`;
+                    } else {
+                        bar5h.title = '';
+                        if (lbl5h) lbl5h.title = '';
+                    }
                 }
                 if (barWeekly) {
                     barWeekly.style.width = `${pct_weekly}%`;
                     barWeekly.className = 'quota-progress-bar ' + (pct_weekly >= 50.0 ? 'high' : (pct_weekly >= 20.0 ? 'medium' : 'low'));
+                    if (q.reset_weekly) {
+                        const localReset = new Date(q.reset_weekly).toLocaleString();
+                        barWeekly.title = `Next reset: ${localReset}`;
+                        if (lblWeekly) lblWeekly.title = `Next reset: ${localReset}`;
+                    } else {
+                        barWeekly.title = '';
+                        if (lblWeekly) lblWeekly.title = '';
+                    }
                 }
             });
         }

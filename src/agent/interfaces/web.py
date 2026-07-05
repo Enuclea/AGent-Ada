@@ -289,17 +289,22 @@ def fetch_real_quotas_sync():
                     
                     pct_5h = None
                     pct_weekly = None
+                    reset_5h = None
+                    reset_weekly = None
                     for bucket in group.get("buckets", []):
                         window = bucket.get("window")
                         rem = bucket.get("remainingFraction", 1.0)
                         pct_val = rem * 100.0
+                        reset_time = bucket.get("resetTime")
                         if window == "5h":
                             pct_5h = pct_val
+                            reset_5h = reset_time
                         elif window == "weekly":
                             pct_weekly = pct_val
+                            reset_weekly = reset_time
                     
                     if pct_5h is not None and pct_weekly is not None:
-                        memory.update_model_quotas(family, pct_5h, pct_weekly)
+                        memory.update_model_quotas(family, pct_5h, pct_weekly, reset_5h, reset_weekly)
                 return True
         except Exception:
             pass
@@ -1397,8 +1402,8 @@ async def get_quotas():
     quotas = memory.get_model_quotas()
     if not quotas:
         return [
-            {"model_family": "gemini", "pct_5h": 96.0, "pct_weekly": 89.0, "last_updated": datetime.now(timezone.utc).isoformat()},
-            {"model_family": "claude_gpt", "pct_5h": 100.0, "pct_weekly": 100.0, "last_updated": datetime.now(timezone.utc).isoformat()}
+            {"model_family": "gemini", "pct_5h": 96.0, "pct_weekly": 89.0, "reset_5h": None, "reset_weekly": None, "last_updated": datetime.now(timezone.utc).isoformat()},
+            {"model_family": "claude_gpt", "pct_5h": 100.0, "pct_weekly": 100.0, "reset_5h": None, "reset_weekly": None, "last_updated": datetime.now(timezone.utc).isoformat()}
         ]
     return quotas
 
