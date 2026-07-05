@@ -551,17 +551,6 @@ class OrchestrationService:
                         memory.update_key_value("session_metadata", session_metadata)
                         
                     resolved_conv_id = session_mappings[session_id]
-                    
-                    try:
-                        conv_dir = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
-                        template_path = conv_dir / "template.db"
-                        dest_path = conv_dir / f"{resolved_conv_id}.db"
-                        if template_path.exists() and not dest_path.exists():
-                            import shutil
-                            shutil.copy(template_path, dest_path)
-                            print(f"[ORCHESTRATOR] Pre-initialized conversation database for {resolved_conv_id}")
-                    except Exception as copy_err:
-                        print(f"[ORCHESTRATOR] Failed to pre-initialize conversation database: {copy_err}")
                 else:
                     resolved_conv_id = session_id
 
