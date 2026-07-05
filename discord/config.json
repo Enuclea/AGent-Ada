@@ -1,0 +1,127 @@
+{
+  "default_model": "gemini-3.5-flash",
+  "agent_api_base": "http://127.0.0.1:8050",
+  "roleplay_guild_ids": [
+    980680159961178123,
+    1518055111987953814
+  ],
+  "boss_user_ids": [
+    405566743415750656,
+    1418503476857540739
+  ],
+  "moderation_channel_id": 1518103220495581326,
+  "thumbtack_channel_id": 1518534351002927205,
+  "bar_channel_id": 1518087367465111594,
+  "linkshell_channel_id": 980931413316628581,
+  "around_house_channel_id": 1017827413104803931,
+  "channels": {
+    "111111111111111111": {
+      "channel_name": "developer-assistant-example",
+      "purpose": "developer-assistant",
+      "allowed_roles": [
+        "Admin",
+        "Developer"
+      ],
+      "allowed_users": [],
+      "on_mention": true,
+      "prefix": "!ada"
+    },
+    "222222222222222222": {
+      "channel_name": "qa-example",
+      "purpose": "read-only-qa",
+      "allowed_roles": [
+        "@everyone"
+      ],
+      "allowed_users": [],
+      "on_mention": true,
+      "prefix": null
+    },
+    "1518056970538586272": {
+      "channel_name": "control-room",
+      "purpose": "developer-assistant",
+      "allowed_roles": [],
+      "allowed_users": [
+        "405566743415750656"
+      ],
+      "on_mention": false,
+      "prefix": null
+    },
+    "1518078485199982763": {
+      "channel_name": "roleplay",
+      "purpose": "roleplay",
+      "allowed_roles": [
+        "@everyone"
+      ],
+      "allowed_users": [],
+      "on_mention": false,
+      "prefix": null
+    },
+    "1518086254724517988": {
+      "channel_name": "control",
+      "purpose": "developer-assistant",
+      "allowed_roles": [],
+      "allowed_users": [
+        "405566743415750656"
+      ],
+      "on_mention": false,
+      "prefix": null
+    },
+    "1518087367465111594": {
+      "channel_name": "permanent-rooms / The Bar",
+      "purpose": "roleplay",
+      "allowed_roles": [
+        "@everyone"
+      ],
+      "allowed_users": [],
+      "on_mention": true,
+      "prefix": null
+    },
+    "1520504614590615663": {
+      "channel_name": "🤖・bot-admin",
+      "purpose": "developer-assistant",
+      "allowed_roles": [
+        "bot-admin"
+      ],
+      "allowed_users": [
+        "405566743415750656",
+        "1418503476857540739"
+      ],
+      "on_mention": false,
+      "prefix": null
+    },
+    "980931413316628581": {
+      "channel_name": "linkshell",
+      "purpose": "roleplay",
+      "allowed_roles": [
+        "@everyone"
+      ],
+      "allowed_users": [],
+      "on_mention": true,
+      "prefix": null
+    },
+    "1520956284898115716": {
+      "channel_name": "bot-admin",
+      "purpose": "developer-assistant",
+      "allowed_roles": [],
+      "allowed_users": [
+        "405566743415750656",
+        "1418503476857540739"
+      ],
+      "on_mention": false,
+      "prefix": null
+    }
+  },
+  "moderator_user_ids": [],
+  "server_moderators": {
+    "980680159961178123": [],
+    "1510527066406129744": [],
+    "1418504570170118184": [
+      "405566743415750656",
+      "1418503476857540739"
+    ]
+  },
+  "admin_user_ids": [
+    "405566743415750656",
+    "1418503476857540739"
+  ]
+}

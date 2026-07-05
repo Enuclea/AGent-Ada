@@ -391,6 +391,7 @@ class ChatRequest(BaseModel):
     agent_profile: Optional[str] = None
     disable_tools: Optional[bool] = False
     roleplay: Optional[bool] = False
+    general_chat: Optional[bool] = False
 
 class DiscordMembersRequest(BaseModel):
     members_data: dict
@@ -590,13 +591,68 @@ async def chat_endpoint(req: ChatRequest):
             from agent.memory import active_session_id_var
             token = active_session_id_var.set(agent.conversation_id)
             lock = get_session_lock(lookup_id)
+            
+            # Output Gate: track whether any text content was yielded to the client
+            text_chunks_emitted = False
+            thoughts_emitted = False
+            
+            async def stream_agent_response(active_agent, prompt_to_send):
+                nonlocal text_chunks_emitted, thoughts_emitted
+                # Reset context state to False to prevent session leakage
+                from agent.tools import yield_requested
+                yield_requested.set(False)
+
+                response = await active_agent.chat(prompt_to_send)
+                await queue.put({"type": "session_id", "content": active_agent.conversation_id})
+                
+                # Stream thoughts
+                thoughts_str = ""
+                async for thought in response.thoughts:
+                    thoughts_str += thought
+                    if thought:
+                        thoughts_emitted = True
+                        await queue.put({"type": "thought", "content": thought})
+                    if yield_requested.get():
+                        break
+                    
+                if thoughts_str:
+                    memory.log_conversation_step(active_agent.conversation_id, "thought", thoughts_str)
+                    
+                # Stream response chunks ONLY if a yield has not been requested
+                output_content = ""
+                if not yield_requested.get():
+                    async for chunk in response:
+                        output_content += chunk
+                        if chunk:
+                            text_chunks_emitted = True
+                            await queue.put({"type": "chunk", "content": chunk})
+                        if yield_requested.get():
+                            break
+                    
+                if output_content:
+                    memory.log_conversation_step(active_agent.conversation_id, "assistant", output_content)
+
+                # Record token usage telemetry
+                input_tokens = 0
+                output_tokens = 0
+                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                    input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
+                    output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
+                if input_tokens == 0 and output_tokens == 0:
+                    input_tokens = len(prompt_to_send) // 4
+                    output_content_len = len(output_content) if output_content else 100
+                    output_tokens = output_content_len // 4
+                cost = (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
+                memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.5-flash", input_tokens, output_tokens, cost)
+
             try:
                 await lock.acquire(priority)
                 
-                # Output Gate: track whether any text content was yielded to the client
-                text_chunks_emitted = False
-                thoughts_emitted = False
-                
+                # Direct Roleplay / General Chat Bypass: Skip planning, decomposition, and sequential driving steps
+                if req.roleplay or getattr(req, "general_chat", False):
+                    await stream_agent_response(agent, req.prompt)
+                    return
+
                 # 1. Decompose plan steps if enabled and prompt is complex enough
                 enable_planning = os.environ.get("AGENT_ENABLE_PLAN_DECOMPOSITION", "true").lower() == "true"
                 existing_plan = memory.get_session_plan(lookup_id)
@@ -711,55 +767,6 @@ async def chat_endpoint(req: ChatRequest):
 
                 is_gemini = "gemini" in primary_model.lower()
 
-                async def stream_agent_response(active_agent, prompt_to_send):
-                    nonlocal text_chunks_emitted, thoughts_emitted
-                    # Reset context state to False to prevent session leakage
-                    from agent.tools import yield_requested
-                    yield_requested.set(False)
-
-                    response = await active_agent.chat(prompt_to_send)
-                    await queue.put({"type": "session_id", "content": active_agent.conversation_id})
-                    
-                    # Stream thoughts
-                    thoughts_str = ""
-                    async for thought in response.thoughts:
-                        thoughts_str += thought
-                        if thought:
-                            thoughts_emitted = True
-                            await queue.put({"type": "thought", "content": thought})
-                        if yield_requested.get():
-                            break
-                        
-                    if thoughts_str:
-                        memory.log_conversation_step(active_agent.conversation_id, "thought", thoughts_str)
-                        
-                    # Stream response chunks ONLY if a yield has not been requested
-                    output_content = ""
-                    if not yield_requested.get():
-                        async for chunk in response:
-                            output_content += chunk
-                            if chunk:
-                                text_chunks_emitted = True
-                                await queue.put({"type": "chunk", "content": chunk})
-                            if yield_requested.get():
-                                break
-                        
-                    if output_content:
-                        memory.log_conversation_step(active_agent.conversation_id, "assistant", output_content)
-
-                    # Record token usage telemetry
-                    input_tokens = 0
-                    output_tokens = 0
-                    if hasattr(response, "usage_metadata") and response.usage_metadata:
-                        input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
-                        output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
-                    if input_tokens == 0 and output_tokens == 0:
-                        input_tokens = len(prompt_to_send) // 4
-                        output_content_len = len(output_content) if output_content else 100
-                        output_tokens = output_content_len // 4
-                    cost = (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
-                    memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.5-flash", input_tokens, output_tokens, cost)
-
                 # Run sequential driving steps
                 current_plan = memory.get_session_plan(lookup_id)
                 if current_plan and "steps" in current_plan:
@@ -852,7 +859,7 @@ async def chat_endpoint(req: ChatRequest):
                                         subagent_id=subagent_id,
                                         prompt=prompt,
                                         agent_profile=profile,
-                                        parent_session_id=delegation_session_id,
+                                        parent_session_id=delegation_session_id or lookup_id,
                                         target_files=[],
                                         stub_files=[]
                                     )
@@ -1276,7 +1283,7 @@ async def get_session_telemetry_endpoint(session_id: str):
     return {"telemetry": telemetry}
 
 class SpawnSubagentRequest(BaseModel):
-    parent_session_id: str
+    parent_session_id: Optional[str] = None
     subagent_id: str
     prompt: str
     target_files: Optional[List[str]] = None

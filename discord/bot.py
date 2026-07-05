@@ -22,8 +22,15 @@ import aiohttp
 import bot_config
 import bot_queue
 
-# Constants for hooking into the running local AGent FastAPI daemon
-AGENT_API_BASE = "http://127.0.0.1:8050"
+# Constants for hooking into the running local AGent FastAPI daemon loaded from config.json
+AGENT_API_BASE = bot_config.get_agent_api_base()
+ROLEPLAY_GUILD_IDS = bot_config.get_roleplay_guild_ids()
+BOSS_USER_IDS = bot_config.get_boss_user_ids()
+MODERATION_CHANNEL_ID = bot_config.get_moderation_channel_id()
+THUMBTACK_CHANNEL_ID = bot_config.get_thumbtack_channel_id()
+BAR_CHANNEL_ID = bot_config.get_bar_channel_id()
+LINKSHELL_CHANNEL_ID = bot_config.get_linkshell_channel_id()
+AROUND_HOUSE_CHANNEL_ID = bot_config.get_around_house_channel_id()
 
 import random
 
@@ -76,8 +83,8 @@ def log_received_message(message: discord.Message, trigger_prompt: Optional[str]
         if message.channel:
             channel_id_str = str(message.channel.id)
             chan_cfg = bot_config.get_channel_config(channel_id_str)
-            # Linkshell (980931413316628581) and Around-the-house (1017827413104803931)
-            is_special_unconfigured = message.channel.id in [980931413316628581, 1017827413104803931]
+            # Linkshell and Around-the-house
+            is_special_unconfigured = message.channel.id in [LINKSHELL_CHANNEL_ID, AROUND_HOUSE_CHANNEL_ID]
             if chan_cfg or is_special_unconfigured:
                 chan_log_file = Path(__file__).parent / f"discord_channel_{channel_id_str}.log"
                 with open(chan_log_file, "a", encoding="utf-8") as f:
@@ -142,6 +149,8 @@ PRIORITY_ROLEPLAY = 2
 
 task_queue = asyncio.PriorityQueue()
 task_counter = 0
+session_queues = {}
+active_session_workers = set()
 
 # Active session cache per channel ID to guarantee consistent context
 def get_channel_session_id(channel_id: int) -> str:
@@ -194,14 +203,12 @@ def is_user_moderator_anywhere(user_id: int) -> bool:
 
 
 def has_roleplay_rights_in_any_guild(user_id: int) -> bool:
-    # Anyone in Phoenix (guild ID: 980680159961178123) should be able to roleplay.
-    # Otherwise, no other Discords are permitted at this point.
-    phoenix_guild_id = 980680159961178123
-    phoenix_guild = bot.get_guild(phoenix_guild_id)
-    if phoenix_guild:
-        member = phoenix_guild.get_member(user_id)
-        if member:
-            return True
+    for guild_id in ROLEPLAY_GUILD_IDS:
+        guild = bot.get_guild(guild_id)
+        if guild:
+            member = guild.get_member(user_id)
+            if member:
+                return True
     return False
 
 
@@ -381,7 +388,7 @@ def get_message_priority(message: discord.Message) -> int:
     
     if message.guild is None:
         author_id = message.author.id
-        is_boss = (author_id in [405566743415750656, 1418503476857540739]) or (hasattr(bot, "owner_id") and author_id == bot.owner_id)
+        is_boss = (author_id in BOSS_USER_IDS) or (hasattr(bot, "owner_id") and author_id == bot.owner_id)
         if is_boss:
             is_called = False
             if bot.user in message.mentions:
@@ -461,12 +468,11 @@ async def is_backend_busy(session_id: Optional[str] = None) -> bool:
         pass
     return False
 
-async def queue_worker():
-    print("[QUEUE] Serialized task queue worker started.")
-    while True:
-        try:
-            # Block until a task is available
-            priority, timestamp, task_data = await task_queue.get()
+async def session_queue_worker(session_id: str):
+    queue = session_queues[session_id]
+    try:
+        while not queue.empty():
+            priority, timestamp, task_data = await queue.get()
             
             task_id = task_data.get("id")
             task_type = task_data["type"]
@@ -475,22 +481,14 @@ async def queue_worker():
             placeholder = task_data["placeholder"]
             typing_task = task_data["typing_task"]
             
-            # Resolve session ID for this specific task/channel to check lock status
-            channel = message.channel
-            session_id = get_channel_session_id(channel.id)
-            if hasattr(channel, "name") and channel.name:
-                profile_name = get_specialist_profile_for_channel(channel.name)
-                if profile_name:
-                    session_id = f"discord-session-specialist-{channel.id}"
-            
             # If the backend is currently busy with this specific session, wait
             while await is_backend_busy(session_id):
                 await asyncio.sleep(1)
-            
+                
             if task_id:
                 bot_queue.update_task_status(task_id, 'processing')
-            
-            print(f"[QUEUE] Processing task: priority={priority}, timestamp={timestamp}, type={task_type}")
+                
+            print(f"[QUEUE] Processing task for session {session_id}: priority={priority}, timestamp={timestamp}, type={task_type}")
             try:
                 if task_type == "command":
                     await bot.process_commands(message)
@@ -510,7 +508,19 @@ async def queue_worker():
                 print(f"[QUEUE ERROR] Exception executing task {task_id}: {e}")
                 if task_id:
                     bot_queue.update_task_status(task_id, 'failed')
-                raise
+                if placeholder:
+                    try:
+                        await placeholder.edit(content=f"❌ **Error**: `{e}`")
+                    except Exception:
+                        try:
+                            await placeholder.delete()
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        await message.channel.send(f"❌ **Error**: `{e}`")
+                    except Exception:
+                        pass
             finally:
                 if typing_task:
                     typing_task.cancel()
@@ -519,7 +529,37 @@ async def queue_worker():
                         await placeholder.delete()
                     except Exception:
                         pass
-            task_queue.task_done()
+                queue.task_done()
+                try:
+                    task_queue.task_done()
+                except ValueError:
+                    pass
+    finally:
+        active_session_workers.discard(session_id)
+
+async def queue_worker():
+    print("[QUEUE] Serialized task queue worker started.")
+    while True:
+        try:
+            # Block until a task is available
+            priority, timestamp, task_data = await task_queue.get()
+            
+            message = task_data["message"]
+            channel = message.channel
+            session_id = get_channel_session_id(channel.id)
+            if hasattr(channel, "name") and channel.name:
+                profile_name = get_specialist_profile_for_channel(channel.name)
+                if profile_name:
+                    session_id = f"discord-session-specialist-{channel.id}"
+            
+            if session_id not in session_queues:
+                session_queues[session_id] = asyncio.PriorityQueue()
+            await session_queues[session_id].put((priority, timestamp, task_data))
+            
+            if session_id not in active_session_workers:
+                active_session_workers.add(session_id)
+                asyncio.create_task(session_queue_worker(session_id))
+                
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -705,7 +745,41 @@ def is_admin_function_query(prompt: str) -> bool:
     normalized = prompt.lower()
     return any(re.search(pattern, normalized) for pattern in admin_patterns)
 
-
+async def handle_thumbtack_webhook_message(message: discord.Message):
+    # Extract message details (content, embeds, fields)
+    parts = []
+    if message.content:
+        parts.append(message.content)
+    for embed in message.embeds:
+        if embed.title:
+            parts.append(f"Embed Title: {embed.title}")
+        if embed.description:
+            parts.append(f"Embed Description: {embed.description}")
+        for field in embed.fields:
+            parts.append(f"{field.name}: {field.value}")
+        if embed.footer and embed.footer.text:
+            parts.append(f"Footer: {embed.footer.text}")
+            
+    full_text = "\n".join(parts)
+    
+    payload = {
+        "content": full_text,
+        "author": str(message.author),
+        "channel_id": str(message.channel.id),
+        "message_id": str(message.id),
+        "created_at": message.created_at.isoformat()
+    }
+    
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{AGENT_API_BASE}/api/integrations/thumbtack", json=payload) as resp:
+                if resp.status == 200:
+                    print(f"[Thumbtack Webhook] Successfully pushed message {message.id} to AGent API.")
+                else:
+                    print(f"[Thumbtack Webhook] Failed to push message {message.id} to AGent API: {resp.status}")
+    except Exception as e:
+        print(f"[Thumbtack Webhook] Error pushing message: {e}")
 
 # --- Local Spam & Link Moderation Sentinel ---
 import re
@@ -864,6 +938,10 @@ async def on_message(message: discord.Message):
     # Log all received Discord messages to discord_received.log temporarily
     log_received_message(message)
 
+    # Hook for Thumbtack webhook messages
+    if message.channel and message.channel.id == THUMBTACK_CHANNEL_ID:
+        await handle_thumbtack_webhook_message(message)
+        return
 
     if message.author.bot:
         return
@@ -905,7 +983,7 @@ async def on_message(message: discord.Message):
             is_specialist_channel = True
 
     author_id = message.author.id
-    is_boss = (author_id in [405566743415750656, 1418503476857540739]) or (hasattr(bot, "owner_id") and author_id == bot.owner_id)
+    is_boss = (author_id in BOSS_USER_IDS) or (hasattr(bot, "owner_id") and author_id == bot.owner_id)
     is_mod = is_user_moderator(author_id, message.guild.id if message.guild else None)
     is_author_admin = is_user_admin(author_id)
     is_exempt = is_boss or is_mod or is_client_support_channel or is_specialist_channel
@@ -1015,7 +1093,6 @@ async def on_message(message: discord.Message):
             return
 
     # Listen inside Moderation Channel for introduction events (Authorized for admins only)
-    MODERATION_CHANNEL_ID = 1518103220495581326
     if message.channel.id == MODERATION_CHANNEL_ID:
         if is_author_admin:
             new_mods = []
@@ -1095,8 +1172,8 @@ async def on_message(message: discord.Message):
 
         # Trigger corresponding engine or persona based on channel purpose
         if channel_purpose == "roleplay":
-            # Only allow roleplay in Phoenix (Guild ID: 980680159961178123)
-            if message.guild and message.guild.id != 980680159961178123:
+            # Only allow roleplay in Phoenix (Guild ID: 980680159961178123) and Ada Control (Guild ID: 1518055111987953814)
+            if message.guild and message.guild.id not in ROLEPLAY_GUILD_IDS:
                 return
             await enqueue_task(get_message_priority(message), "roleplay", message)
         elif channel_purpose == "client-support":
@@ -1109,8 +1186,8 @@ async def on_message(message: discord.Message):
 
     # Handle ambient and explicit triggers in dedicated roleplay channels
     if channel_purpose == "roleplay":
-        # Only allow roleplay in Phoenix (Guild ID: 980680159961178123)
-        if message.guild and message.guild.id != 980680159961178123:
+        # Only allow roleplay in Phoenix (Guild ID: 980680159961178123) and Ada Control (Guild ID: 1518055111987953814)
+        if message.guild and message.guild.id not in ROLEPLAY_GUILD_IDS:
             return
 
         if re.search(r"\bada\b", message.content, re.IGNORECASE):
@@ -1131,7 +1208,7 @@ async def on_message(message: discord.Message):
             await enqueue_task(get_message_priority(message), "roleplay", message)
         else:
             # Skip ambient triggers for linkshell channel (ID: 980931413316628581)
-            if message.channel.id == 980931413316628581:
+            if message.channel.id == LINKSHELL_CHANNEL_ID:
                 return
             if message.channel.id not in quiet_channels:
                 cid = message.channel.id
@@ -1208,7 +1285,7 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
 
     # Tight Security Controls:
     author_id = message.author.id
-    is_boss = (author_id in [405566743415750656, 1418503476857540739]) or (hasattr(bot, "owner_id") and author_id == bot.owner_id)
+    is_boss = (author_id in BOSS_USER_IDS) or (hasattr(bot, "owner_id") and author_id == bot.owner_id)
     
     channel_id_str = str(channel.id) if message.guild else None
     chan_cfg = bot_config.get_channel_config(channel_id_str) if channel_id_str else None
@@ -1737,8 +1814,8 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
     familiarity = get_familiarity_level(session_id, speaker, message.author.id)
 
     # Check if this is the linkshell channel to restrict name/person familiarity to bar-introduced patrons
-    if channel.id == 980931413316628581:
-        bar_familiarity = get_familiarity_level("discord-roleplay-1518087367465111594", speaker, message.author.id)
+    if channel.id == LINKSHELL_CHANNEL_ID:
+        bar_familiarity = get_familiarity_level(f"discord-roleplay-{BAR_CHANNEL_ID}", speaker, message.author.id)
         if bar_familiarity == "Stranger":
             familiarity = f"Stranger (You have never met [{speaker}] in person in the bar. To you, they are just an unknown voice speaking on the linkshell, so you should treat them as a stranger / ask who is speaking.)"
         else:
@@ -1798,7 +1875,7 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
         "2. Do not reveal that you are an AI or bot. Stay in character at all times."
     )
 
-    if channel.id == 980931413316628581:
+    if channel.id == LINKSHELL_CHANNEL_ID:
         roleplay_instructions += (
             "\n\nCRITICAL LINKSHELL RULES:\n"
             "1. You are communicating remotely via a linkshell device. Other patrons cannot see you, your physical actions, or facial expressions. They only hear your voice.\n"
@@ -1806,7 +1883,7 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
             "3. You MUST begin your message with the prefix `[Ada] ` (e.g. `[Ada] \"Hello...\"`)."
         )
 
-    # Fetch updates from linkshell (980931413316628581) and around-the-house (1017827413104803931)
+    # Fetch updates from linkshell and around-the-house
     from datetime import timezone
     cutoff_time = datetime(2026, 6, 22, 3, 4, 43, tzinfo=timezone.utc)
     
@@ -1814,9 +1891,9 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
     around_house_info = []
     
     try:
-        linkshell_channel = bot.get_channel(980931413316628581)
+        linkshell_channel = bot.get_channel(LINKSHELL_CHANNEL_ID)
         if not linkshell_channel:
-            linkshell_channel = await bot.fetch_channel(980931413316628581)
+            linkshell_channel = await bot.fetch_channel(LINKSHELL_CHANNEL_ID)
         if linkshell_channel:
             history_msgs = []
             async for m in linkshell_channel.history(limit=50):
@@ -1838,9 +1915,9 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
         print(f"Error fetching linkshell history in handle_roleplay_query: {e}")
 
     try:
-        around_house_channel = bot.get_channel(1017827413104803931)
+        around_house_channel = bot.get_channel(AROUND_HOUSE_CHANNEL_ID)
         if not around_house_channel:
-            around_house_channel = await bot.fetch_channel(1017827413104803931)
+            around_house_channel = await bot.fetch_channel(AROUND_HOUSE_CHANNEL_ID)
         if around_house_channel:
             history_msgs = []
             async for m in around_house_channel.history(limit=50):
@@ -1981,7 +2058,7 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
                     return chunks
 
                 if cleaned_response:
-                    if channel.id == 980931413316628581:
+                    if channel.id == LINKSHELL_CHANNEL_ID:
                         # Ensure linkshell prefix '[Ada] ' is present
                         if not cleaned_response.startswith("[Ada]"):
                             # If it starts with [Ada] but with varying whitespace, normalize
@@ -2054,7 +2131,15 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
             typing_task.cancel()
         if placeholder:
             try:
-                await placeholder.delete()
+                await placeholder.edit(content=f"❌ *Ada seems distracted...* (Error: {e})")
+            except Exception:
+                try:
+                    await placeholder.delete()
+                except Exception:
+                    pass
+        else:
+            try:
+                await channel.send(f"❌ *Ada seems distracted...* (Error: {e})")
             except Exception:
                 pass
         print(f"Error in handle_roleplay_query: {e}")
@@ -2539,7 +2624,7 @@ async def compact_database(ctx):
         for log_file in log_dir.glob("*.log"):
             if "bot.log" in log_file.name:
                 continue
-            is_special = any(id_str in log_file.name for id_str in ["980931413316628581", "1017827413104803931"])
+            is_special = any(id_str in log_file.name for id_str in [str(LINKSHELL_CHANNEL_ID), str(AROUND_HOUSE_CHANNEL_ID)])
             max_lines = 1000 if is_special else 3000
             prune_log_file(log_file, max_lines=max_lines, force=True)
             pruned_logs_count += 1
