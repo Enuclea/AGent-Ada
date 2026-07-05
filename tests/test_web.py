@@ -338,3 +338,10 @@ def test_install_skill_endpoint_path_traversal():
             response = client.post("/api/skills/install", json=bad_payload)
             assert response.status_code == 400
             assert "escapes the skills directory" in response.json()["detail"]
+
+def test_cancel_session_endpoint():
+    response = client.post("/api/sessions/test-cancel-sess/cancel")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "Execution stopped." in data["message"]

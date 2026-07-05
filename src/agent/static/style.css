@@ -324,6 +324,35 @@ body {
     opacity: 0.5;
 }
 
+.thought-toggle {
+    font-size: 0.75rem;
+    color: var(--accent-orchid);
+    cursor: pointer;
+    padding: 0.2rem 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 0.35rem;
+    width: fit-content;
+    user-select: none;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.thought-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--accent-orchid);
+    color: #fff;
+}
+
+.thought-list.collapsed .thought-item {
+    display: none;
+}
+
+.thought-list.collapsed .thought-item:nth-last-child(-n+3) {
+    display: flex;
+}
+
 .thought-item {
     display: flex;
     align-items: flex-start;
@@ -396,7 +425,7 @@ textarea#prompt-input {
     border: none;
     outline: none;
     color: var(--text-primary);
-    padding: 0.85rem 3.5rem 0.85rem 1rem;
+    padding: 0.85rem 5.5rem 0.85rem 1rem;
     font-family: var(--font-body);
     font-size: 0.95rem;
     resize: none;
@@ -421,11 +450,60 @@ textarea#prompt-input {
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
+    z-index: 2;
 }
 
 .send-btn:hover {
     transform: scale(1.05);
     box-shadow: 0 0 10px var(--accent-cyan-glow);
+}
+
+.interrupt-btn {
+    position: absolute;
+    right: 48px;
+    bottom: 8px;
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, #ff4d4d 0%, #ff1a1a 100%);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.9rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    z-index: 2;
+}
+
+.interrupt-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 10px rgba(255, 77, 77, 0.4);
+}
+
+.status-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1.25rem;
+    background: hsla(268, 100%, 68%, 0.08);
+    border-bottom: 1px solid hsla(268, 100%, 68%, 0.25);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    z-index: 10;
+    animation: slideDown 0.3s ease-out;
+}
+
+.status-banner i {
+    color: var(--accent-cyan);
+}
+
+@keyframes slideDown {
+    from { transform: translateY(-100%); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
 }
 
 .chat-input-footer {

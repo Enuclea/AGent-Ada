@@ -54,6 +54,8 @@ const chatMessages = document.getElementById('chat-messages');
 const chatForm = document.getElementById('chat-form');
 const promptInput = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
+const interruptBtn = document.getElementById('interrupt-btn');
+const statusBanner = document.getElementById('status-banner');
 const connectionStatus = document.getElementById('connection-status');
 const headerSessionId = document.getElementById('header-session-id');
 const modelSelect = document.getElementById('model-select');
@@ -352,7 +354,53 @@ function appendThoughtItem(bubbleDiv, content) {
     item.appendChild(timeSpan);
     item.appendChild(textSpan);
     contentDiv.appendChild(item);
+
+    // Auto collapse after 3 bullets
+    const items = contentDiv.querySelectorAll('.thought-item');
+    if (items.length > 3) {
+        let toggle = contentDiv.querySelector('.thought-toggle');
+        if (!toggle) {
+            toggle = document.createElement('div');
+            toggle.className = 'thought-toggle';
+            // Insert toggle at the top of the list
+            contentDiv.insertBefore(toggle, contentDiv.firstChild);
+            
+            toggle.addEventListener('click', () => {
+                if (contentDiv.classList.contains('collapsed')) {
+                    contentDiv.classList.remove('collapsed');
+                    contentDiv.classList.add('expanded');
+                    toggle.textContent = 'Collapse thoughts ⬆️';
+                } else {
+                    contentDiv.classList.remove('expanded');
+                    contentDiv.classList.add('collapsed');
+                    const currentItems = contentDiv.querySelectorAll('.thought-item');
+                    toggle.textContent = `Show ${currentItems.length - 3} more thoughts...`;
+                }
+                scrollChatToBottom();
+            });
+        }
+
+        // Set default collapsed class if neither is set
+        if (!contentDiv.classList.contains('collapsed') && !contentDiv.classList.contains('expanded')) {
+            contentDiv.classList.add('collapsed');
+        }
+
+        // Update toggle text
+        if (contentDiv.classList.contains('collapsed')) {
+            toggle.textContent = `Show ${items.length - 3} more thoughts...`;
+        }
+    }
+    
     scrollChatToBottom();
+}
+
+function updateThoughtBubble(bubbleDiv, content) {
+    if (!content) return;
+    const lines = content.split('\n').filter(line => line.trim().length > 0);
+    lines.forEach(line => {
+        const cleanLine = line.replace(/^[\s\-\*\d\.\:]+/, '').trim();
+        appendThoughtItem(bubbleDiv, cleanLine);
+    });
 }
 
 function appendResponseBubble() {
@@ -381,13 +429,51 @@ function updateResponseBubble(bubbleDiv, content) {
 }
 
 function setLoadingState(loading) {
-    sendBtn.disabled = loading;
-    promptInput.disabled = loading;
+    // Keep input area active: promptInput is never disabled
+    promptInput.disabled = false;
+    
     if (loading) {
+        if (interruptBtn) interruptBtn.style.display = 'inline-flex';
+        if (statusBanner) statusBanner.style.display = 'flex';
         sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
     } else {
+        if (interruptBtn) interruptBtn.style.display = 'none';
+        if (statusBanner) statusBanner.style.display = 'none';
         sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i>';
     }
+}
+
+// Event listener for Interrupt button
+if (interruptBtn) {
+    interruptBtn.addEventListener('click', async () => {
+        try {
+            // Append a local system message indicating interruption
+            appendMessage('system', 'Sending stop signal to terminate execution...');
+            
+            const response = await fetch(`/api/sessions/${currentSessionId}/cancel`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                let msg = `🛑 **Execution Stopped**: ${data.message || 'All active subagents and background plan tasks for this session have been terminated.'}`;
+                if (data.cancelled_subagents && data.cancelled_subagents.length > 0) {
+                    msg += `\n- Terminated subagents: ${data.cancelled_subagents.map(s => `\`${s}\``).join(', ')}`;
+                }
+                appendMessage('system', msg);
+            } else {
+                appendMessage('system', 'Failed to send stop signal to backend.');
+            }
+        } catch (error) {
+            console.error('Error sending interrupt:', error);
+            appendMessage('system', `Error sending interrupt: ${error.message}`);
+        } finally {
+            setLoadingState(false);
+            await pollTasks();
+            await loadStatus();
+            await pollPlanAndTelemetry();
+        }
+    });
 }
 
 function scrollChatToBottom() {

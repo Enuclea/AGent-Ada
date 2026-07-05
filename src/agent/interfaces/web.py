@@ -1137,6 +1137,60 @@ async def chat_endpoint(req: ChatRequest):
         }
     )
 
+@app.post("/api/sessions/{session_id}/cancel")
+async def cancel_session(session_id: str):
+    resolved_id = session_id
+    if session_id.startswith("discord-session-"):
+        mem = memory.load_memory()
+        session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+        if isinstance(session_mappings, dict):
+            resolved_id = session_mappings.get(session_id, session_id)
+            
+    # Cancel all active subagents for this parent session
+    cancelled_subs = []
+    for subagent_id, sub_info in list(active_subagents.items()):
+        if sub_info.get("parent_session_id") == resolved_id:
+            if sub_info.get("task"):
+                sub_info["task"].cancel()
+            resp = sub_info.get("response")
+            if resp and resp.proc:
+                try:
+                    resp.proc.kill()
+                except Exception:
+                    pass
+            active_subagents.pop(subagent_id, None)
+            cancelled_subs.append(subagent_id)
+            
+    # Update database statuses
+    conn = get_connection(memory.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE plan_steps 
+            SET status = 'failed', error_message = 'Terminated by user stop command.' 
+            WHERE plan_id IN (SELECT id FROM session_plans WHERE session_id = ?)
+              AND status IN ('running', 'delegated')
+        """, (resolved_id,))
+        
+        cursor.execute("""
+            UPDATE active_tasks 
+            SET status = 'failed' 
+            WHERE (name = 'Ada' OR name = 'Lacie' OR name = 'Val' OR name = 'Kira' OR name LIKE 'Subagent%')
+              AND status = 'running'
+        """)
+        conn.commit()
+    except Exception as db_err:
+        print(f"[CANCEL API] Error updating DB on cancel: {db_err}")
+    finally:
+        conn.close()
+        
+    # Release the lock if it's held
+    lock = get_session_lock(session_id)
+    if lock._locked:
+        lock.release()
+        
+    return {"status": "success", "message": "Execution stopped.", "cancelled_subagents": cancelled_subs}
+
 @app.get("/api/status")
 async def status_endpoint(session_id: Optional[str] = None):
     global active_agents
