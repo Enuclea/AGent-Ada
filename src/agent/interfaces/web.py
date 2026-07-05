@@ -1715,9 +1715,15 @@ async def get_discord_members():
     """Retrieves the centrally cached list of Discord accounts/members."""
     try:
         members_file = Path(__file__).parent.parent.parent / "discord" / "members.json"
-        if members_file.exists():
-            with open(members_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+        def _read():
+            if members_file.exists():
+                with open(members_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            return None
+
+        data = await asyncio.to_thread(_read)
+        if data is not None:
+            return data
         
         # Fallback to persistent memory cache
         mem = memory.load_memory()
@@ -1725,12 +1731,10 @@ async def get_discord_members():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve Discord members: {e}")
 
-@app.get("/api/modules")
-async def list_modules_endpoint():
-    """Dynamically scans static/modules directory for widget modules."""
+def load_modules():
     modules_dir = Path(__file__).parent.parent / "static" / "modules"
     if not modules_dir.exists():
-        return {"modules": []}
+        return []
     
     modules = []
     for path in modules_dir.iterdir():
@@ -1746,6 +1750,12 @@ async def list_modules_endpoint():
                             modules.append(data)
                 except Exception as e:
                     print(f"Error loading module config from {path}: {e}")
+    return modules
+
+@app.get("/api/modules")
+async def list_modules_endpoint():
+    """Dynamically scans static/modules directory for widget modules."""
+    modules = await asyncio.to_thread(load_modules)
     return {"modules": modules}
 
 @app.post("/api/discord/config")
@@ -1753,9 +1763,12 @@ async def post_discord_config(req: DiscordConfigRequest):
     """Sets/updates the centralized channel/bot configuration."""
     try:
         config_file = Path(__file__).resolve().parents[3] / "discord" / "config.json"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_file, "w", encoding="utf-8") as f:
-            json.dump(req.config_data, f, indent=2, ensure_ascii=False)
+        def _write():
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump(req.config_data, f, indent=2, ensure_ascii=False)
+
+        await asyncio.to_thread(_write)
             
         # Also cache in memory settings
         mem = memory.load_memory()
@@ -1771,9 +1784,15 @@ async def get_discord_config():
     """Retrieves the centrally brokered channel configuration."""
     try:
         config_file = Path(__file__).resolve().parents[3] / "discord" / "config.json"
-        if config_file.exists():
-            with open(config_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+        def _read():
+            if config_file.exists():
+                with open(config_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            return None
+
+        data = await asyncio.to_thread(_read)
+        if data is not None:
+            return data
         
         # Fallback to persistent memory cache
         mem = memory.load_memory()

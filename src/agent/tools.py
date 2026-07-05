@@ -652,41 +652,48 @@ async def backup_discord_channel(channel_id: str) -> str:
                 if not isinstance(channel, (discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel)):
                     raise ValueError(f"Channel with ID {self.target_channel_id} is not a messageable text channel.")
 
+                lines = []
+                lines.append(f"--- Backup of Channel: {channel.name} (ID: {channel.id}) ---\n")
+                lines.append(f"--- Generated at: {datetime.now(timezone.utc).isoformat()} UTC ---\n\n")
+
                 messages_count = 0
-                with open(self.file_path, "w", encoding="utf-8") as f:
-                    f.write(f"--- Backup of Channel: {channel.name} (ID: {channel.id}) ---\n")
-                    f.write(f"--- Generated at: {datetime.now(timezone.utc).isoformat()} UTC ---\n\n")
+                # Fetch messages recursively
+                async for message in channel.history(limit=None, oldest_first=True):
+                    timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                    display_name = getattr(message.author, "display_name", "")
+                    username = getattr(message.author, "name", "")
+                    if display_name and username and display_name != username:
+                        author = f"{display_name} ({username})"
+                    else:
+                        author = display_name or username or str(message.author)
+                    content = message.content or ""
+                    lines.append(f"[{timestamp}] {author}: {content}\n")
 
-                    # Fetch messages recursively
-                    async for message in channel.history(limit=None, oldest_first=True):
-                        timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                        display_name = getattr(message.author, "display_name", "")
-                        username = getattr(message.author, "name", "")
-                        if display_name and username and display_name != username:
-                            author = f"{display_name} ({username})"
-                        else:
-                            author = display_name or username or str(message.author)
-                        content = message.content or ""
-                        f.write(f"[{timestamp}] {author}: {content}\n")
+                    if message.attachments:
+                        attachment_urls = ", ".join([att.url for att in message.attachments])
+                        lines.append(f"  Attachments: {attachment_urls}\n")
 
-                        if message.attachments:
-                            attachment_urls = ", ".join([att.url for att in message.attachments])
-                            f.write(f"  Attachments: {attachment_urls}\n")
+                    if message.embeds:
+                        for embed in message.embeds:
+                            embed_parts = []
+                            if embed.title:
+                                embed_parts.append(f"Title: {embed.title}")
+                            if embed.description:
+                                embed_parts.append(f"Description: {embed.description}")
+                            if embed.url:
+                                embed_parts.append(f"URL: {embed.url}")
+                            for field in embed.fields:
+                                embed_parts.append(f"Field {field.name}: {field.value}")
+                            if embed_parts:
+                                lines.append(f"  Embed: {'; '.join(embed_parts)}\n")
+                    messages_count += 1
 
-                        if message.embeds:
-                            for embed in message.embeds:
-                                embed_parts = []
-                                if embed.title:
-                                    embed_parts.append(f"Title: {embed.title}")
-                                if embed.description:
-                                    embed_parts.append(f"Description: {embed.description}")
-                                if embed.url:
-                                    embed_parts.append(f"URL: {embed.url}")
-                                for field in embed.fields:
-                                    embed_parts.append(f"Field {field.name}: {field.value}")
-                                if embed_parts:
-                                    f.write(f"  Embed: {'; '.join(embed_parts)}\n")
-                        messages_count += 1
+                def _write_file():
+                    with open(self.file_path, "w", encoding="utf-8") as f:
+                        for line in lines:
+                            f.write(line)
+
+                await asyncio.to_thread(_write_file)
 
                 self.result_message = f"Successfully backed up {messages_count} messages from channel #{channel.name} to {self.file_path}"
             except Exception as e:
