@@ -38,9 +38,22 @@ async def run_meta_evaluation(days: int = 1):
     failed_tasks = cursor.fetchall()
     
     task_log_data = []
+    task_logs_map = {}
+    if failed_tasks:
+        task_ids = [t["id"] for t in failed_tasks]
+        placeholders = ",".join("?" for _ in task_ids)
+        cursor.execute(
+            f"SELECT task_id, timestamp, message FROM task_logs WHERE task_id IN ({placeholders}) ORDER BY id ASC",
+            task_ids
+        )
+        for row in cursor.fetchall():
+            tid = row["task_id"]
+            if tid not in task_logs_map:
+                task_logs_map[tid] = []
+            task_logs_map[tid].append(row)
+
     for t in failed_tasks:
-        cursor.execute("SELECT timestamp, message FROM task_logs WHERE task_id = ? ORDER BY id ASC", (t["id"],))
-        logs = cursor.fetchall()
+        logs = task_logs_map.get(t["id"], [])
         log_lines = [f"[{l['timestamp']}] {l['message']}" for l in logs]
         task_log_data.append(
             f"Task: {t['name']} (ID: {t['id']})\n"

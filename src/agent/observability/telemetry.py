@@ -187,15 +187,17 @@ def get_subagents_status() -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT subagent_id FROM subagent_messages")
-        subagent_ids = [row[0] for row in cursor.fetchall()]
+        cursor.execute(
+            "SELECT subagent_id, role, message, timestamp, parent_session_id FROM subagent_messages ORDER BY timestamp ASC"
+        )
+        all_messages = cursor.fetchall()
         
-        for sid in subagent_ids:
-            cursor.execute(
-                "SELECT role, message, timestamp, parent_session_id FROM subagent_messages WHERE subagent_id = ? ORDER BY timestamp ASC",
-                (sid,)
-            )
-            msgs = cursor.fetchall()
+        from collections import defaultdict
+        grouped_messages = defaultdict(list)
+        for subagent_id, role, message, timestamp, parent_session_id in all_messages:
+            grouped_messages[subagent_id].append((role, message, timestamp, parent_session_id))
+            
+        for sid, msgs in grouped_messages.items():
             if not msgs:
                 continue
             

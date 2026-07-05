@@ -35,10 +35,25 @@ def check_tasks(inactivity_threshold_mins=10):
         stalled_tasks = []
         running_tasks_list = []
         
+        last_logs = {}
+        if running_tasks:
+            task_ids = [t[0] for t in running_tasks]
+            placeholders = ",".join("?" for _ in task_ids)
+            query = f"""
+            SELECT task_id, timestamp, message FROM (
+                SELECT task_id, timestamp, message,
+                       ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY id DESC) as rn
+                FROM task_logs
+                WHERE task_id IN ({placeholders})
+            ) WHERE rn = 1
+            """
+            cursor.execute(query, task_ids)
+            for task_id, timestamp, message in cursor.fetchall():
+                last_logs[task_id] = (timestamp, message)
+
         for task_id, name, details, started_at in running_tasks:
             # Find the last log entry for this task
-            cursor.execute("SELECT timestamp, message FROM task_logs WHERE task_id = ? ORDER BY id DESC LIMIT 1", (task_id,))
-            last_log = cursor.fetchone()
+            last_log = last_logs.get(task_id)
             
             # Parse start time
             try:
@@ -85,18 +100,20 @@ def check_tasks(inactivity_threshold_mins=10):
                 running_tasks_list.append(task_info)
                 
         # --- 2. Check Subagents ---
-        cursor.execute("SELECT DISTINCT subagent_id FROM subagent_messages")
-        subagent_ids = [row[0] for row in cursor.fetchall()]
+        cursor.execute(
+            "SELECT subagent_id, role, message, timestamp, parent_session_id FROM subagent_messages ORDER BY timestamp ASC"
+        )
+        all_messages = cursor.fetchall()
         
+        from collections import defaultdict
+        grouped_messages = defaultdict(list)
+        for subagent_id, role, message, timestamp, parent_session_id in all_messages:
+            grouped_messages[subagent_id].append((role, message, timestamp, parent_session_id))
+            
         stalled_subagents = []
         running_subagents_list = []
         
-        for sid in subagent_ids:
-            cursor.execute(
-                "SELECT role, message, timestamp, parent_session_id FROM subagent_messages WHERE subagent_id = ? ORDER BY timestamp ASC",
-                (sid,)
-            )
-            msgs = cursor.fetchall()
+        for sid, msgs in grouped_messages.items():
             if not msgs:
                 continue
             
