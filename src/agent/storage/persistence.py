@@ -345,6 +345,10 @@ def compact_all_memories() -> Dict[str, Any]:
             """)
             keep_ids = [row[0] for row in cursor.fetchall()]
             
+            import re
+            pattern = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
+            keep_ids = [kid for kid in keep_ids if kid and pattern.match(str(kid))]
+            
             if keep_ids:
                 placeholders = ",".join("?" for _ in keep_ids)
                 cursor.execute(f"""
@@ -394,8 +398,12 @@ def compact_all_memories() -> Dict[str, Any]:
                     seen_session_key_fact.add(uniq)
                     
             if ids_to_delete:
-                placeholders = ",".join("?" for _ in ids_to_delete)
-                cursor.execute(f"DELETE FROM roleplay_memories WHERE id IN ({placeholders})", list(ids_to_delete))
+                ids_list = list(ids_to_delete)
+                chunk_size = 999
+                for i in range(0, len(ids_list), chunk_size):
+                    chunk = ids_list[i : i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    cursor.execute(f"DELETE FROM roleplay_memories WHERE id IN ({placeholders})", chunk)
                 
             cursor.execute("SELECT count(*) FROM roleplay_memories")
             stats["roleplay_memories_after"] = cursor.fetchone()[0]

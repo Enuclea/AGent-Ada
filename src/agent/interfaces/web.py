@@ -1180,8 +1180,21 @@ class InstallSkillRequest(BaseModel):
 @app.post("/api/skills/install")
 async def install_skill_endpoint(req: InstallSkillRequest):
     try:
-        folder_name = req.name.lower().replace(" ", "_")
-        skill_dir = tools.SKILLS_DIR / folder_name
+        # Prevent path traversal by sanitizing name and validating resolved path
+        import re as re_lib
+        sanitized_name = re_lib.sub(r"[^a-zA-Z0-9_\-\s\.]", "", req.name)
+        while ".." in sanitized_name:
+            sanitized_name = sanitized_name.replace("..", ".")
+        folder_name = sanitized_name.lower().replace(" ", "_")
+        if not folder_name:
+            raise ValueError("Invalid skill name after sanitization")
+            
+        skills_dir_resolved = tools.SKILLS_DIR.resolve()
+        skill_dir = (tools.SKILLS_DIR / folder_name).resolve()
+        
+        if not str(skill_dir).startswith(str(skills_dir_resolved) + os.sep):
+            raise ValueError("Skill path escapes the skills directory")
+            
         skill_dir.mkdir(parents=True, exist_ok=True)
         
         fm_content = (
@@ -1199,6 +1212,8 @@ async def install_skill_endpoint(req: InstallSkillRequest):
             f.write(fm_content)
             
         return {"status": "success", "detail": f"Skill '{req.name}' successfully installed!"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

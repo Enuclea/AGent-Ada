@@ -288,3 +288,53 @@ def test_modules_endpoint():
 
 
 
+
+
+def test_install_skill_endpoint_path_traversal():
+    '''Verify that installing a skill sanitizes name and prevents path traversal escaping SKILLS_DIR.'''
+    from unittest.mock import patch
+    from pathlib import Path
+    import tempfile
+    
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_skills_dir = Path(tmp_dir) / "skills"
+        tmp_skills_dir.mkdir()
+        
+        with patch("agent.tools.SKILLS_DIR", tmp_skills_dir):
+            # 1. Test a valid skill installation
+            payload = {
+                "name": "My Safe Skill",
+                "description": "Safe test skill",
+                "instructions": "Run safety checks"
+            }
+            response = client.post("/api/skills/install", json=payload)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            
+            # Check file was created under our temp skills directory
+            expected_file = tmp_skills_dir / "my_safe_skill" / "SKILL.md"
+            assert expected_file.exists()
+            content = expected_file.read_text()
+            assert 'name: "My Safe Skill"' in content
+            
+            # 2. Test sanitization of name (e.g. replacing '..' with '.')
+            payload_with_dots = {
+                "name": "My..Safe..Skill",
+                "description": "Safe test skill",
+                "instructions": "Run safety checks"
+            }
+            response = client.post("/api/skills/install", json=payload_with_dots)
+            assert response.status_code == 200
+            expected_file_dots = tmp_skills_dir / "my.safe.skill" / "SKILL.md"
+            assert expected_file_dots.exists()
+
+            # 3. Test path traversal attempt that results in escaping SKILLS_DIR
+            bad_payload = {
+                "name": "..",
+                "description": "Exploit attempt",
+                "instructions": "Execute malware"
+            }
+            response = client.post("/api/skills/install", json=bad_payload)
+            assert response.status_code == 400
+            assert "escapes the skills directory" in response.json()["detail"]

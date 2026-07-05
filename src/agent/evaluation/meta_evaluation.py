@@ -1,3 +1,4 @@
+import ast
 import sqlite3
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -147,7 +148,7 @@ async def run_meta_evaluation(days: int = 1):
             # Safety check: Validate python script syntax before applying action
             if script and filename and filename.endswith(".py"):
                 try:
-                    compile(script, filename, "exec")
+                    ast.parse(script)
                 except Exception as syntax_err:
                     print(f"[META-EVAL] Aborted action for {skill_name}: Script contains syntax errors: {syntax_err}")
                     continue

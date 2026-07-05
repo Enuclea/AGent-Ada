@@ -30,6 +30,16 @@ class GrokRoute(BaseRoute):
         timeout: Optional[float] = None,
         conversation_id: Optional[str] = None,
     ) -> Optional[Union[str, asyncio.subprocess.Process]]:
+        import re
+        if model.startswith("-"):
+            raise ValueError("model cannot start with a hyphen")
+        if not re.match(r"^[a-zA-Z0-9_\-\./\*]+$", model):
+            raise ValueError(f"Invalid model: {model}")
+        if conversation_id is not None:
+            if conversation_id.startswith("-"):
+                raise ValueError("conversation_id cannot start with a hyphen")
+            if not re.match(r"^[a-zA-Z0-9_\-\.:]+$", conversation_id):
+                raise ValueError(f"Invalid conversation_id: {conversation_id}")
         harness_path = shutil.which("grok")
         if not harness_path:
             # Fallback to local user path
