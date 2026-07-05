@@ -1676,7 +1676,7 @@ async def list_modules_endpoint():
 async def post_discord_config(req: DiscordConfigRequest):
     """Sets/updates the centralized channel/bot configuration."""
     try:
-        config_file = Path(__file__).parent.parent.parent / "discord" / "config.json"
+        config_file = Path(__file__).resolve().parents[3] / "discord" / "config.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         with open(config_file, "w", encoding="utf-8") as f:
             json.dump(req.config_data, f, indent=2, ensure_ascii=False)
@@ -1694,7 +1694,7 @@ async def post_discord_config(req: DiscordConfigRequest):
 async def get_discord_config():
     """Retrieves the centrally brokered channel configuration."""
     try:
-        config_file = Path(__file__).parent.parent.parent / "discord" / "config.json"
+        config_file = Path(__file__).resolve().parents[3] / "discord" / "config.json"
         if config_file.exists():
             with open(config_file, "r", encoding="utf-8") as f:
                 return json.load(f)
