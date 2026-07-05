@@ -61,6 +61,7 @@ class OrchestrationService:
         custom_instructions: Optional[str] = None,
         disable_tools: bool = False,
         roleplay: bool = False,
+        general_chat: bool = False,
         workspaces: Optional[List[str]] = None,
         auto_approve: bool = False,
         prompt: Optional[str] = None,
@@ -158,13 +159,36 @@ class OrchestrationService:
 
         # 3. Construct system instructions with SQLite persistent memory and RAG
         if roleplay:
+            # Mode 3: Pure entertainment persona — ZERO tools, persona-only + roleplay memories
             roleplay_mem_list = memory.get_roleplay_memories(session_id)
             mem_summary = ""
             if roleplay_mem_list:
                 mem_summary = "\n\n[PERSISTENT ROLEPLAY MEMORIES]\n" + "\n".join([f"- {m['key']}: {m['fact']}" for m in roleplay_mem_list]) + "\n[END OF PERSISTENT ROLEPLAY MEMORIES]"
             full_instructions = (custom_instructions or "") + mem_summary
+        elif general_chat:
+            # Mode 2: Casual conversation — no protocol, no structured reporting, tools available if asked
+            if custom_instructions:
+                # Specialist persona channel (e.g. #lacie): use their personality in casual mode
+                full_instructions = (
+                    custom_instructions + "\n\n"
+                    "[INTERACTION MODE: CASUAL]\n"
+                    "Drop all formality. No structured reports, no 4-section output format, "
+                    "no delegation protocols. Just be yourself and chat naturally. "
+                    "You have tools available — use them if the user asks you to do work "
+                    "in your area, but don't volunteer to delegate or produce formal output."
+                )
+            else:
+                # Default Ada personality in casual mode
+                full_instructions = (
+                    "You are Ada. You're sharp, approachable, and direct. "
+                    "Talk like a real person — no formalities, no structured reports, no delegation. "
+                    "Just have a natural conversation. If the user asks you to do something specific "
+                    "(look something up, run a command, check a file), you have tools available and "
+                    "can use them. But don't proactively delegate, decompose tasks, or produce "
+                    "structured output unless specifically asked."
+                )
         elif custom_instructions:
-            # Specialist mode: personality prompt only, no heavy context injection.
+            # Specialist work mode: personality prompt only, no heavy context injection.
             # Specialists respond instantly in character with full tool access.
             # Skip: memory summary, RAG, delegation rules, checkpoints, skills, workers.
             full_instructions = common_protocol + custom_instructions
@@ -433,6 +457,7 @@ class OrchestrationService:
         custom_instructions: Optional[str] = None,
         disable_tools: bool = False,
         roleplay: bool = False,
+        general_chat: bool = False,
         workspaces: Optional[List[str]] = None,
         auto_approve: bool = False,
         prompt: Optional[str] = None,
@@ -491,6 +516,7 @@ class OrchestrationService:
                 custom_instructions=custom_instructions,
                 disable_tools=disable_tools,
                 roleplay=roleplay,
+                general_chat=general_chat,
                 workspaces=workspaces,
                 auto_approve=auto_approve,
                 prompt=prompt,
@@ -525,6 +551,17 @@ class OrchestrationService:
                         memory.update_key_value("session_metadata", session_metadata)
                         
                     resolved_conv_id = session_mappings[session_id]
+                    
+                    try:
+                        conv_dir = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+                        template_path = conv_dir / "template.db"
+                        dest_path = conv_dir / f"{resolved_conv_id}.db"
+                        if template_path.exists() and not dest_path.exists():
+                            import shutil
+                            shutil.copy(template_path, dest_path)
+                            print(f"[ORCHESTRATOR] Pre-initialized conversation database for {resolved_conv_id}")
+                    except Exception as copy_err:
+                        print(f"[ORCHESTRATOR] Failed to pre-initialize conversation database: {copy_err}")
                 else:
                     resolved_conv_id = session_id
 
@@ -533,7 +570,8 @@ class OrchestrationService:
                 system_instructions=config_args["system_instructions"],
                 conversation_id=resolved_conv_id,
                 timeout=600.0,
-                roleplay=roleplay
+                roleplay=roleplay,
+                general_chat=general_chat
             )
             agent = await agent.__aenter__()
 

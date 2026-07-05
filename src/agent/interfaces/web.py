@@ -68,6 +68,20 @@ def get_session_lock(session_id: str) -> PriorityLock:
         session_locks[session_id] = PriorityLock()
     return session_locks[session_id]
 
+def update_session_mapping(session_id: str, new_conv_id: str):
+    if not session_id or not session_id.startswith("discord-"):
+        return
+    try:
+        from agent import memory
+        mem = memory.load_memory()
+        session_mappings = mem.setdefault("key_value", {}).get("session_mappings", {})
+        if isinstance(session_mappings, dict) and session_mappings.get(session_id) != new_conv_id:
+            session_mappings[session_id] = new_conv_id
+            memory.update_key_value("session_mappings", session_mappings)
+            print(f"[SESSION MAPPING] Updated mapping for '{session_id}' to '{new_conv_id}'")
+    except Exception as e:
+        print(f"[SESSION MAPPING] Error updating mapping: {e}")
+
 app = FastAPI(title="Ada Task Engine Dashboard")
 
 def ensure_default_scheduled_tasks(conn=None):
@@ -405,6 +419,7 @@ async def get_or_create_agent(
     system_instructions: Optional[str] = None,
     disable_tools: bool = False,
     roleplay: bool = False,
+    general_chat: bool = False,
     prompt: Optional[str] = None,
     agent_profile: Optional[str] = None
 ):
@@ -430,6 +445,7 @@ async def get_or_create_agent(
         custom_instructions=system_instructions,
         disable_tools=disable_tools,
         roleplay=roleplay,
+        general_chat=general_chat,
         prompt=prompt,
         auto_approve=auto_approve,
         agent_profile=agent_profile
@@ -555,14 +571,20 @@ async def chat_endpoint(req: ChatRequest):
         if specialist_inst:
             resolved_system_instructions = specialist_inst
 
+    # Mode 3: Roleplay is pure entertainment — ZERO tools
+    effective_disable_tools = req.disable_tools
+    if req.roleplay:
+        effective_disable_tools = True
+
     try:
         agent = await get_or_create_agent(
             req.model,
             req.session_id,
             resolved_system_instructions,
-            req.disable_tools,
+            effective_disable_tools,
             req.roleplay,
-            req.prompt,
+            general_chat=getattr(req, 'general_chat', False),
+            prompt=req.prompt,
             agent_profile=req.agent_profile
         )
     except Exception as e:
@@ -617,6 +639,11 @@ async def chat_endpoint(req: ChatRequest):
                     
                 if thoughts_str:
                     memory.log_conversation_step(active_agent.conversation_id, "thought", thoughts_str)
+                    
+                if active_agent.conversation_id and req.session_id:
+                    from agent.interfaces.web import update_session_mapping
+                    update_session_mapping(req.session_id, active_agent.conversation_id)
+                    await queue.put({"type": "session_id", "content": active_agent.conversation_id})
                     
                 # Stream response chunks ONLY if a yield has not been requested
                 output_content = ""

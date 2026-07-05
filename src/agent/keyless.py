@@ -590,6 +590,7 @@ class KeylessAgyAgent:
         task_priority: TaskPriority = TaskPriority.INTERACTIVE,
         cwd: Optional[str] = None,
         roleplay: bool = False,
+        general_chat: bool = False,
     ) -> None:
         """Initialize KeylessAgyAgent.
 
@@ -603,6 +604,7 @@ class KeylessAgyAgent:
             task_priority: Execution priority of the task.
             cwd: Working directory context for the execution process.
             roleplay: Whether to activate local Ollama fallback for roleplay.
+            general_chat: Whether to use casual conversational mode (no protocol).
         """
         self.model: Optional[str] = model
         common_protocol = (
@@ -622,7 +624,7 @@ class KeylessAgyAgent:
             "  4). Final, formatted clean -- declaration of work done.\n"
             "[END SYSTEM PROTOCOL]\n\n"
         )
-        if roleplay:
+        if roleplay or general_chat:
             self.system_instructions = system_instructions or ""
         elif system_instructions:
             if "[SYSTEM PROTOCOL - TIMEOUT PREVENTION & YIELDING]" not in system_instructions:

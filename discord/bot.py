@@ -202,6 +202,41 @@ def is_user_moderator_anywhere(user_id: int) -> bool:
     return False
 
 
+def is_plain_chat(text: str) -> bool:
+    """Returns True if the message looks like casual conversation rather than a task/command.
+    
+    Used to infer Mode 2 (Plain Chat) vs Mode 1 (Work) on Discord channels
+    where the user doesn't explicitly toggle a chat mode.
+    """
+    text_lower = text.strip().lower()
+    
+    # Very short messages are almost always casual chat
+    if len(text_lower) < 30:
+        # Unless they look like commands/tasks
+        command_prefixes = [
+            "run ", "check ", "deploy ", "fix ", "update ", "restart ",
+            "show ", "list ", "create ", "delete ", "add ", "remove ",
+            "investigate ", "diagnose ", "debug ", "test ", "build ",
+        ]
+        if any(text_lower.startswith(p) for p in command_prefixes):
+            return False
+        return True
+    
+    # Task indicators — presence of these means it's work, not chat
+    task_signals = [
+        "implement", "refactor", "deploy", "debug", "fix the", "create a",
+        "write a", "add a", "remove the", "update the", "change the",
+        "run the", "restart", "check the logs", "investigate", "diagnose",
+        "commit", "push", "merge", "review the", "test the", "build",
+        "configure", "install", "set up", "look into", "what's the status",
+        "pull request", "pr ", "branch", "git ",
+    ]
+    if any(signal in text_lower for signal in task_signals):
+        return False
+    
+    return True
+
+
 def has_roleplay_rights_in_any_guild(user_id: int) -> bool:
     for guild_id in ROLEPLAY_GUILD_IDS:
         guild = bot.get_guild(guild_id)
@@ -412,7 +447,7 @@ def get_message_priority(message: discord.Message) -> int:
         
     return 2
 
-async def enqueue_task(priority: int, task_type: str, message: discord.Message, prompt_text: Optional[str] = None):
+async def enqueue_task(priority: int, task_type: str, message: discord.Message, prompt_text: Optional[str] = None, general_chat: bool = False):
     global task_counter
     channel = message.channel
     placeholder = None
@@ -448,7 +483,8 @@ async def enqueue_task(priority: int, task_type: str, message: discord.Message, 
         "message": message,
         "prompt_text": prompt_text,
         "placeholder": placeholder,
-        "typing_task": typing_task
+        "typing_task": typing_task,
+        "general_chat": general_chat
     }
     await task_queue.put((priority, task_counter, task_data))
 
@@ -489,6 +525,7 @@ async def session_queue_worker(session_id: str):
                 bot_queue.update_task_status(task_id, 'processing')
                 
             print(f"[QUEUE] Processing task for session {session_id}: priority={priority}, timestamp={timestamp}, type={task_type}")
+            general_chat = task_data.get("general_chat", False)
             try:
                 if task_type == "command":
                     await bot.process_commands(message)
@@ -496,7 +533,7 @@ async def session_queue_worker(session_id: str):
                     handler = bot.custom_task_handlers[task_type]
                     await handler(message, prompt_text, placeholder=placeholder, typing_task=typing_task)
                 elif task_type == "hook":
-                    await handle_agent_hook_query(message, prompt_text, placeholder=placeholder, typing_task=typing_task)
+                    await handle_agent_hook_query(message, prompt_text, placeholder=placeholder, typing_task=typing_task, general_chat=general_chat)
                 elif task_type == "roleplay":
                     await handle_roleplay_query(message, placeholder=placeholder, typing_task=typing_task)
                 elif task_type == "ambient":
@@ -1181,7 +1218,9 @@ async def on_message(message: discord.Message):
         elif channel_purpose in ["developer-assistant", "read-only-qa"]:
             # Only connect to the development task hook if the user is exempt (Boss/Mods)
             if is_exempt:
-                await enqueue_task(get_message_priority(message), "hook", message, trigger_prompt)
+                # Mode 2 vs Mode 1 intent inference: casual chat vs work task
+                chat_mode = is_plain_chat(trigger_prompt)
+                await enqueue_task(get_message_priority(message), "hook", message, trigger_prompt, general_chat=chat_mode)
         return
 
     # Handle ambient and explicit triggers in dedicated roleplay channels
@@ -1271,7 +1310,7 @@ def get_specialist_profile_for_channel(channel_name: str) -> Optional[str]:
         return "ops_runner"
     return None
 
-async def handle_agent_hook_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None):
+async def handle_agent_hook_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None, general_chat=False):
     """Funnels user inputs directly to the local AGent FastAPI endpoint, streaming response."""
     channel = message.channel
     
@@ -1305,12 +1344,15 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     if hasattr(channel, "name") and channel.name:
         profile_name = get_specialist_profile_for_channel(channel.name)
         if profile_name:
-            # Specialist channels get full tools via agent_profile. The orchestrator's
-            # specialist fast path (custom_instructions branch) skips heavy context injection,
-            # giving instant in-character responses with tools available if work is needed.
+            # Specialist channels: casual personality with tools available (Mode 2)
             payload["agent_profile"] = profile_name
+            payload["general_chat"] = True
             # Use a dedicated session prefix to isolate from old coordinator history
             payload["session_id"] = f"discord-session-specialist-{channel.id}"
+
+    # Forward general_chat flag if set by caller (e.g. intent inference)
+    if general_chat and "general_chat" not in payload:
+        payload["general_chat"] = True
 
     if not full_tooling_authorized:
         payload["disable_tools"] = True
