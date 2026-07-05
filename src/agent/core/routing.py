@@ -8,10 +8,49 @@ import os
 import sys
 import importlib
 import inspect
+import asyncio
 from pathlib import Path
 from typing import List, Optional, Type, Dict, Any, Tuple
 
 from agent.routes.base import BaseRoute, RouteStatus, TaskPriority
+
+_checking_routes = set()
+
+async def check_primary_route_health(route_name: str, model: str):
+    if route_name in _checking_routes:
+        return
+    _checking_routes.add(route_name)
+    
+    print(f"[HEALTH CHECK] Started periodic checks for primary route '{route_name}' using model '{model}'")
+    try:
+        # Check every 60 seconds
+        for _ in range(30):  # limit to 30 attempts
+            await asyncio.sleep(60)
+            print(f"[HEALTH CHECK] Actively checking if primary route '{route_name}' is back up...")
+            from agent.core.routing import routing_engine
+            route = routing_engine.routes.get(route_name.lower())
+            if not route:
+                break
+            
+            try:
+                # Run a simple check prompt
+                res = await route.execute(
+                    prompt="Hello, reply with exactly 'OK'",
+                    model=model,
+                    timeout=10.0
+                )
+                if res and "ok" in res.lower():
+                    print(f"[HEALTH CHECK] Primary route '{route_name}' is BACK UP!")
+                    try:
+                        from agent.keyless import _circuit_breaker
+                        _circuit_breaker.record_success(model)
+                    except Exception:
+                        pass
+                    break
+            except Exception as ce:
+                print(f"[HEALTH CHECK] Route '{route_name}' still down: {ce}")
+    finally:
+        _checking_routes.discard(route_name)
 
 
 class RoutingEngine:
@@ -200,7 +239,7 @@ class RoutingEngine:
             raise RuntimeError(f"No active routes support the model '{model}' for task priority {task_priority.name}")
 
         last_error = None
-        for route in routes:
+        for i, route in enumerate(routes):
             try:
                 print(f"[ROUTING] Attempting execution via route '{route.name}' for model '{model}'")
                 res = await route.execute(
@@ -215,6 +254,30 @@ class RoutingEngine:
             except Exception as e:
                 print(f"[ROUTING] Route '{route.name}' failed: {e}")
                 last_error = e
+
+                # Check if this was a primary route and we are about to failover to magica or onemin
+                if route.name in ("agy", "byok") and i + 1 < len(routes):
+                    next_route = routes[i + 1]
+                    if next_route.name in ("magica", "onemin"):
+                        # Determine cause of failure
+                        err_msg = str(e).lower()
+                        is_quota = any(k in err_msg for k in ("quota", "429", "rate limit", "rate_limit", "exhausted", "capacity"))
+                        
+                        if not is_quota:
+                            # Connection/frontier model failure - notify user & schedule check
+                            warning_msg = f"⚠️ Primary route '{route.name}' failed ({e}). Failing over to {next_route.name}..."
+                            print(f"[ROUTING] {warning_msg}")
+                            
+                            # Log thought step in conversation if conversation_id is available
+                            if conversation_id:
+                                try:
+                                    from agent.storage.conversation import log_conversation_step
+                                    log_conversation_step(conversation_id, "thought", warning_msg)
+                                except Exception as le:
+                                    print(f"[ROUTING] Failed to log failover thought: {le}")
+                            
+                            # Spawn background health checker
+                            asyncio.create_task(check_primary_route_health(route.name, model))
 
         raise RuntimeError(f"All execution routes failed. Last error: {last_error or 'No response'}")
 

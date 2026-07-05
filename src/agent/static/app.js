@@ -331,7 +331,7 @@ function appendThoughtBubble() {
     return msgDiv;
 }
 
-function appendThoughtItem(bubbleDiv, content) {
+function appendThoughtItem(bubbleDiv, content, timestampStr = null) {
     if (!content || !content.trim()) return;
     const contentDiv = bubbleDiv.querySelector('.message-content');
     
@@ -342,10 +342,21 @@ function appendThoughtItem(bubbleDiv, content) {
     const item = document.createElement('div');
     item.className = 'thought-item';
     
-    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    let displayTime = '';
+    if (timestampStr) {
+        try {
+            const d = new Date(timestampStr);
+            displayTime = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        } catch (e) {
+            displayTime = timestampStr;
+        }
+    } else {
+        displayTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+    
     const timeSpan = document.createElement('span');
     timeSpan.className = 'thought-time';
-    timeSpan.textContent = timestamp;
+    timeSpan.textContent = displayTime;
     
     const textSpan = document.createElement('span');
     textSpan.className = 'thought-text';
@@ -354,53 +365,58 @@ function appendThoughtItem(bubbleDiv, content) {
     item.appendChild(timeSpan);
     item.appendChild(textSpan);
     contentDiv.appendChild(item);
-
-    // Auto collapse after 3 bullets
-    const items = contentDiv.querySelectorAll('.thought-item');
-    if (items.length > 3) {
-        let toggle = contentDiv.querySelector('.thought-toggle');
-        if (!toggle) {
-            toggle = document.createElement('div');
-            toggle.className = 'thought-toggle';
-            // Insert toggle at the top of the list
-            contentDiv.insertBefore(toggle, contentDiv.firstChild);
-            
-            toggle.addEventListener('click', () => {
-                if (contentDiv.classList.contains('collapsed')) {
-                    contentDiv.classList.remove('collapsed');
-                    contentDiv.classList.add('expanded');
-                    toggle.textContent = 'Collapse thoughts ⬆️';
-                } else {
-                    contentDiv.classList.remove('expanded');
-                    contentDiv.classList.add('collapsed');
-                    const currentItems = contentDiv.querySelectorAll('.thought-item');
-                    toggle.textContent = `Show ${currentItems.length - 3} more thoughts...`;
-                }
-                scrollChatToBottom();
-            });
-        }
-
-        // Set default collapsed class if neither is set
-        if (!contentDiv.classList.contains('collapsed') && !contentDiv.classList.contains('expanded')) {
-            contentDiv.classList.add('collapsed');
-        }
-
-        // Update toggle text
-        if (contentDiv.classList.contains('collapsed')) {
-            toggle.textContent = `Show ${items.length - 3} more thoughts...`;
-        }
-    }
+    
+    // Auto collapse if needed
+    updateThoughtCollapsibility(bubbleDiv);
     
     scrollChatToBottom();
 }
 
-function updateThoughtBubble(bubbleDiv, content) {
+function updateThoughtBubble(bubbleDiv, content, timestampStr = null) {
     if (!content) return;
-    const lines = content.split('\n').filter(line => line.trim().length > 0);
+    const lines = content.split('\n');
     lines.forEach(line => {
-        const cleanLine = line.replace(/^[\s\-\*\d\.\:]+/, '').trim();
-        appendThoughtItem(bubbleDiv, cleanLine);
+        if (line.trim()) {
+            appendThoughtItem(bubbleDiv, line.trim(), timestampStr);
+        }
     });
+}
+
+function updateThoughtCollapsibility(bubbleDiv) {
+    const contentDiv = bubbleDiv.querySelector('.message-content.thought-list');
+    if (!contentDiv) return;
+    
+    const items = contentDiv.querySelectorAll('.thought-item');
+    if (items.length <= 3) {
+        const toggle = bubbleDiv.querySelector('.thought-toggle');
+        if (toggle) toggle.remove();
+        contentDiv.classList.remove('collapsed');
+        return;
+    }
+    
+    let toggle = bubbleDiv.querySelector('.thought-toggle');
+    if (!toggle) {
+        toggle = document.createElement('div');
+        toggle.className = 'thought-toggle';
+        contentDiv.insertBefore(toggle, contentDiv.firstChild);
+        contentDiv.classList.add('collapsed');
+        
+        toggle.addEventListener('click', () => {
+            const isCollapsed = contentDiv.classList.toggle('collapsed');
+            updateToggleText(toggle, contentDiv.querySelectorAll('.thought-item').length, isCollapsed);
+        });
+    }
+    
+    const isCollapsed = contentDiv.classList.contains('collapsed');
+    updateToggleText(toggle, items.length, isCollapsed);
+}
+
+function updateToggleText(toggleEl, totalCount, isCollapsed) {
+    if (isCollapsed) {
+        toggleEl.innerHTML = `<i class="fa-solid fa-chevron-down"></i> Show all thoughts (${totalCount})`;
+    } else {
+        toggleEl.innerHTML = `<i class="fa-solid fa-chevron-up"></i> Collapse thoughts`;
+    }
 }
 
 function appendResponseBubble() {
@@ -1184,30 +1200,22 @@ async function pollPlanAndTelemetry() {
 }
 
 function formatRelativeTime(isoString) {
-    if (!isoString) return '';
-    try {
-        const target = new Date(isoString);
-        if (isNaN(target.getTime())) return '';
-        const now = new Date();
-        const diffMs = target - now;
-        if (diffMs <= 0) return 'Reset: pending';
-        
-        const diffMins = Math.floor(diffMs / 60000);
-        if (diffMins < 60) {
-            return `Reset: ${diffMins}m`;
-        }
-        const diffHours = Math.floor(diffMins / 60);
-        const remMins = diffMins % 60;
-        if (diffHours < 24) {
-            return `Reset: ${diffHours}h ${remMins}m`;
-        }
-        const diffDays = Math.floor(diffHours / 24);
-        const remHours = diffHours % 24;
-        return `Reset: ${diffDays}d ${remHours}h`;
-    } catch (e) {
-        console.error(e);
-        return '';
+    if (!isoString) return null;
+    const diffMs = new Date(isoString) - new Date();
+    if (diffMs <= 0) return null;
+    
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 60) {
+        return `${diffMins}m`;
     }
+    const diffHours = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+    if (diffHours < 24) {
+        return `${diffHours}h ${mins}m`;
+    }
+    const diffDays = Math.floor(diffHours / 24);
+    const hours = diffHours % 24;
+    return `${diffDays}d ${hours}h`;
 }
 
 // Poll Model Quotas
@@ -1222,61 +1230,64 @@ async function pollQuotas() {
                 const pct_5h = q.pct_5h;
                 const pct_weekly = q.pct_weekly;
                 
+                const used_pct_5h = Math.max(0, Math.min(100, 100 - pct_5h));
+                const used_pct_weekly = Math.max(0, Math.min(100, 100 - pct_weekly));
+                
                 const prefix = (family === 'gemini') ? 'gemini' : 'claude';
-                const brand = (family === 'gemini') ? 'Gemini' : 'Claude';
                 
                 const val5h = document.getElementById(`${prefix}-5h-val`);
                 const valWeekly = document.getElementById(`${prefix}-weekly-val`);
                 const bar5h = document.getElementById(`${prefix}-5h-bar`);
                 const barWeekly = document.getElementById(`${prefix}-weekly-bar`);
-                
                 const lbl5h = document.getElementById(`${prefix}-5h-label`);
                 const lblWeekly = document.getElementById(`${prefix}-weekly-label`);
                 
-                const reset5hText = formatRelativeTime(q.reset_5h);
-                const resetWeeklyText = formatRelativeTime(q.reset_weekly);
+                const labelPrefix = (family === 'gemini') ? 'Gemini' : 'Claude';
+                const base5h = `${labelPrefix} 5h Limit`;
+                const baseWeekly = `${labelPrefix} Weekly Limit`;
                 
-                if (val5h) val5h.textContent = `${pct_5h.toFixed(1)}%`;
-                if (valWeekly) valWeekly.textContent = `${pct_weekly.toFixed(1)}%`;
+                const rel5h = formatRelativeTime(q.reset_5h);
+                const relWeekly = formatRelativeTime(q.reset_weekly);
+                
+                const labelText5h = rel5h ? `${base5h} (Reset: ${rel5h})` : base5h;
+                const labelTextWeekly = relWeekly ? `${baseWeekly} (Reset: ${relWeekly})` : baseWeekly;
                 
                 if (lbl5h) {
-                    if (reset5hText) {
-                        lbl5h.textContent = `${brand} 5h Limit (${reset5hText})`;
+                    lbl5h.textContent = labelText5h;
+                    if (q.reset_5h) {
+                        lbl5h.title = `Next Reset: ${new Date(q.reset_5h).toLocaleString()}`;
                     } else {
-                        lbl5h.textContent = '5-Hour Limit';
+                        lbl5h.removeAttribute('title');
+                    }
+                }
+                if (lblWeekly) {
+                    lblWeekly.textContent = labelTextWeekly;
+                    if (q.reset_weekly) {
+                        lblWeekly.title = `Next Reset: ${new Date(q.reset_weekly).toLocaleString()}`;
+                    } else {
+                        lblWeekly.removeAttribute('title');
                     }
                 }
                 
-                if (lblWeekly) {
-                    if (resetWeeklyText) {
-                        lblWeekly.textContent = `${brand} Weekly Limit (${resetWeeklyText})`;
-                    } else {
-                        lblWeekly.textContent = 'Weekly Limit';
-                    }
-                }
+                if (val5h) val5h.textContent = `${used_pct_5h.toFixed(1)}%`;
+                if (valWeekly) valWeekly.textContent = `${used_pct_weekly.toFixed(1)}%`;
                 
                 if (bar5h) {
-                    bar5h.style.width = `${pct_5h}%`;
-                    bar5h.className = 'quota-progress-bar ' + (pct_5h >= 50.0 ? 'high' : (pct_5h >= 20.0 ? 'medium' : 'low'));
+                    bar5h.style.width = `${used_pct_5h}%`;
+                    bar5h.className = 'quota-progress-bar ' + (used_pct_5h > 80.0 ? 'low' : (used_pct_5h > 50.0 ? 'medium' : 'high'));
                     if (q.reset_5h) {
-                        const localReset = new Date(q.reset_5h).toLocaleString();
-                        bar5h.title = `Next reset: ${localReset}`;
-                        if (lbl5h) lbl5h.title = `Next reset: ${localReset}`;
+                        bar5h.title = `Next Reset: ${new Date(q.reset_5h).toLocaleString()}`;
                     } else {
-                        bar5h.title = '';
-                        if (lbl5h) lbl5h.title = '';
+                        bar5h.removeAttribute('title');
                     }
                 }
                 if (barWeekly) {
-                    barWeekly.style.width = `${pct_weekly}%`;
-                    barWeekly.className = 'quota-progress-bar ' + (pct_weekly >= 50.0 ? 'high' : (pct_weekly >= 20.0 ? 'medium' : 'low'));
+                    barWeekly.style.width = `${used_pct_weekly}%`;
+                    barWeekly.className = 'quota-progress-bar ' + (used_pct_weekly > 80.0 ? 'low' : (used_pct_weekly > 50.0 ? 'medium' : 'high'));
                     if (q.reset_weekly) {
-                        const localReset = new Date(q.reset_weekly).toLocaleString();
-                        barWeekly.title = `Next reset: ${localReset}`;
-                        if (lblWeekly) lblWeekly.title = `Next reset: ${localReset}`;
+                        barWeekly.title = `Next Reset: ${new Date(q.reset_weekly).toLocaleString()}`;
                     } else {
-                        barWeekly.title = '';
-                        if (lblWeekly) lblWeekly.title = '';
+                        barWeekly.removeAttribute('title');
                     }
                 }
             });
