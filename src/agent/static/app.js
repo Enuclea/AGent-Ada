@@ -9,9 +9,35 @@ function generateUUID() {
 }
 let currentSessionId = generateUUID();
 let currentModel = null;
+let currentChatMode = 'build';
 let activeTasksMap = new Map(); // Keep track of seen tasks and their status
 let delegationPending = false; // Set when a delegation response is received
 let delegationHistoryTimer = null; // Timer to refresh chat after delegation completes
+
+/**
+ * Maps the Intent dropdown value to the correct API request payload fields.
+ * - build:    Mode 1 (Work) — full coordinator with planning/delegation
+ * - ada:      Mode 2 (Plain Chat) — casual Ada, tools if asked
+ * - lacie/val/kira: Mode 2 + specialist profile — casual persona with tools
+ * - roleplay: Mode 3 — pure entertainment LLM, ZERO tools
+ */
+function buildIntentPayload(mode) {
+    switch (mode) {
+        case 'ada':
+            return { general_chat: true };
+        case 'lacie':
+            return { general_chat: true, agent_profile: 'lacie' };
+        case 'val':
+            return { general_chat: true, agent_profile: 'qa_specialist' };
+        case 'kira':
+            return { general_chat: true, agent_profile: 'ops_runner' };
+        case 'roleplay':
+            return { roleplay: true };
+        case 'build':
+        default:
+            return {};
+    }
+}
 
 // DOM Elements
 const chatMessages = document.getElementById('chat-messages');
@@ -21,6 +47,7 @@ const sendBtn = document.getElementById('send-btn');
 const connectionStatus = document.getElementById('connection-status');
 const headerSessionId = document.getElementById('header-session-id');
 const modelSelect = document.getElementById('model-select');
+const chatModeSelect = document.getElementById('chat-mode-select');
 const sessionSelect = document.getElementById('session-select');
 const workspacePath = document.getElementById('workspace-path');
 const activeTasksCount = document.getElementById('active-tasks-count');
@@ -68,6 +95,11 @@ headerSessionId.addEventListener('click', () => {
 // Switch active model
 modelSelect.addEventListener('change', (e) => {
     currentModel = e.target.value;
+});
+
+// Switch chat mode
+chatModeSelect.addEventListener('change', (e) => {
+    currentChatMode = e.target.value;
 });
 
 // Switch session
@@ -118,7 +150,8 @@ chatForm.addEventListener('submit', async (e) => {
             body: JSON.stringify({
                 prompt: prompt,
                 session_id: currentSessionId,
-                model: currentModel
+                model: currentModel,
+                ...buildIntentPayload(currentChatMode)
             })
         });
 

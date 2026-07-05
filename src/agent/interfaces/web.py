@@ -82,6 +82,34 @@ def update_session_mapping(session_id: str, new_conv_id: str):
     except Exception as e:
         print(f"[SESSION MAPPING] Error updating mapping: {e}")
 
+def _is_plain_chat(text: str) -> bool:
+    """Server-side intent inference: returns True if the prompt looks like casual chat.
+    
+    Prevents casual messages from entering the full coordinator/delegation pipeline.
+    Conservative: short messages default to chat, task-verb messages default to work.
+    """
+    text_lower = text.strip().lower()
+    if len(text_lower) < 30:
+        command_prefixes = [
+            "run ", "check ", "deploy ", "fix ", "update ", "restart ",
+            "show ", "list ", "create ", "delete ", "add ", "remove ",
+            "investigate ", "diagnose ", "debug ", "test ", "build ",
+        ]
+        if any(text_lower.startswith(p) for p in command_prefixes):
+            return False
+        return True
+    task_signals = [
+        "implement", "refactor", "deploy", "debug", "fix the", "create a",
+        "write a", "add a", "remove the", "update the", "change the",
+        "run the", "restart", "check the logs", "investigate", "diagnose",
+        "commit", "push", "merge", "review the", "test the", "build",
+        "configure", "install", "set up", "look into", "what's the status",
+        "pull request", "pr ", "branch", "git ",
+    ]
+    if any(signal in text_lower for signal in task_signals):
+        return False
+    return True
+
 app = FastAPI(title="Ada Task Engine Dashboard")
 
 def ensure_default_scheduled_tasks(conn=None):
@@ -576,6 +604,12 @@ async def chat_endpoint(req: ChatRequest):
     if req.roleplay:
         effective_disable_tools = True
 
+    # Server-side intent inference: auto-detect plain chat if not explicitly set
+    # This prevents casual messages from going through the full coordinator/delegation pipeline
+    effective_general_chat = getattr(req, 'general_chat', False)
+    if not effective_general_chat and not req.roleplay and req.prompt:
+        effective_general_chat = _is_plain_chat(req.prompt)
+
     try:
         agent = await get_or_create_agent(
             req.model,
@@ -583,7 +617,7 @@ async def chat_endpoint(req: ChatRequest):
             resolved_system_instructions,
             effective_disable_tools,
             req.roleplay,
-            general_chat=getattr(req, 'general_chat', False),
+            general_chat=effective_general_chat,
             prompt=req.prompt,
             agent_profile=req.agent_profile
         )
@@ -676,7 +710,7 @@ async def chat_endpoint(req: ChatRequest):
                 await lock.acquire(priority)
                 
                 # Direct Roleplay / General Chat Bypass: Skip planning, decomposition, and sequential driving steps
-                if req.roleplay or getattr(req, "general_chat", False):
+                if req.roleplay or effective_general_chat:
                     await stream_agent_response(agent, req.prompt)
                     return
 
