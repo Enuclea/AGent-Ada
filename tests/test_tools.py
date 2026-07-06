@@ -298,7 +298,8 @@ def test_repository_skills(temp_skills_dir, mock_external_dirs):
     
     # Verify install_repository_skill
     with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
-        install_res = tools.install_repository_skill("apple-notes")
+        with mock.patch("agent.execution.tools._verify_skill_signature", return_value=True):
+            install_res = tools.install_repository_skill("apple-notes")
     assert "Successfully downloaded and installed skill" in install_res
     
     installed_skill_folder = temp_skills_dir / "apple-notes"
@@ -387,45 +388,47 @@ def test_install_repository_skill_traversal(temp_skills_dir, mock_external_dirs)
 
 def test_install_repository_skill_hitl(temp_skills_dir, mock_external_dirs):
     """Test Human-in-the-loop (HITL) prompt and confirmation mechanism."""
-    hermes_path = mock_external_dirs["hermes_skills"]
-    skill_folder = hermes_path / "test-hitl"
-    skill_folder.mkdir(parents=True, exist_ok=True)
-    skill_md_content = "---\nname: test-hitl\ndescription: Test HITL\n---\n# Test HITL"
-    with open(skill_folder / "SKILL.md", "w") as f:
-        f.write(skill_md_content)
-        
-    # Case 1: ADA_SKILL_INSTALL_CONFIRMED = "1" -> Installs immediately
-    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
-        res = tools.install_repository_skill("test-hitl")
-        assert "Successfully downloaded and installed" in res
-        
-    # Cleanup
-    import shutil
-    shutil.rmtree(temp_skills_dir / "test-hitl", ignore_errors=True)
+    with mock.patch("agent.execution.tools._verify_skill_signature", return_value=True):
+        hermes_path = mock_external_dirs["hermes_skills"]
+        skill_folder = hermes_path / "test-hitl"
+        skill_folder.mkdir(parents=True, exist_ok=True)
+        skill_md_content = "---\nname: test-hitl\ndescription: Test HITL\n---\n# Test HITL"
+        with open(skill_folder / "SKILL.md", "w") as f:
+            f.write(skill_md_content)
+            
+        # Case 1: ADA_SKILL_INSTALL_CONFIRMED = "1" -> Installs immediately
+        with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
+            res = tools.install_repository_skill("test-hitl")
+            assert "Successfully downloaded and installed" in res
+            
+        # Cleanup
+        import shutil
+        shutil.rmtree(temp_skills_dir / "test-hitl", ignore_errors=True)
 
-    # Case 2: ADA_SKILL_INSTALL_CONFIRMED != "1" and sys.stdin.isatty() is True
-    # User confirms 'y'
-    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
-         mock.patch("sys.stdin.isatty", return_value=True), \
-         mock.patch("builtins.input", return_value="y") as mock_input:
-        res = tools.install_repository_skill("test-hitl")
-        assert "Successfully downloaded and installed" in res
-        mock_input.assert_called_once()
+        # Case 2: ADA_SKILL_INSTALL_CONFIRMED != "1" and sys.stdin.isatty() is True
+        # User confirms 'y'
+        with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
+             mock.patch("sys.stdin.isatty", return_value=True), \
+             mock.patch("builtins.input", return_value="y") as mock_input:
+            res = tools.install_repository_skill("test-hitl")
+            assert "Successfully downloaded and installed" in res
+            mock_input.assert_called_once()
+            
+        shutil.rmtree(temp_skills_dir / "test-hitl", ignore_errors=True)
         
-    shutil.rmtree(temp_skills_dir / "test-hitl", ignore_errors=True)
-    
-    # Case 3: User denies 'n'
-    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
-         mock.patch("sys.stdin.isatty", return_value=True), \
-         mock.patch("builtins.input", return_value="n") as mock_input:
-        res = tools.install_repository_skill("test-hitl")
-        assert "Error: Skill installation cancelled by user." in res
-        
-    # Case 4: ADA_SKILL_INSTALL_CONFIRMED != "1" and sys.stdin.isatty() is False
-    with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
-         mock.patch("sys.stdin.isatty", return_value=False):
-        res = tools.install_repository_skill("test-hitl")
-        assert "Error: Explicit out-of-band human confirmation required" in res
+        # Case 3: User denies 'n'
+        with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
+             mock.patch("sys.stdin.isatty", return_value=True), \
+             mock.patch("builtins.input", return_value="n") as mock_input:
+            res = tools.install_repository_skill("test-hitl")
+            assert "Error: Skill installation cancelled by user." in res
+            
+        # Case 4: ADA_SKILL_INSTALL_CONFIRMED != "1" and sys.stdin.isatty() is False
+        with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}), \
+             mock.patch("sys.stdin.isatty", return_value=False):
+            res = tools.install_repository_skill("test-hitl")
+            assert "Error: Explicit out-of-band human confirmation required" in res
+
 
 
 def test_run_command_environment_scrubbing():
@@ -450,9 +453,13 @@ def test_run_command_environment_scrubbing():
              
             mock_shell.return_value = mock_proc
             
-            # Scenario A: Command does not reference skills paths -> env passed is None (inherits)
+            # Scenario A: Command does not reference skills paths -> env passed has keys scrubbed
             await tools.run_command("echo hello")
-            mock_shell.assert_called_with("echo hello", stdout=mock.ANY, stderr=mock.ANY, env=None)
+            called_args, called_kwargs = mock_shell.call_args
+            passed_env = called_kwargs.get("env")
+            assert passed_env is not None
+            assert "SAFE_VAR" in passed_env
+            assert "GEMINI_API_KEY" not in passed_env
             
             # Scenario B: Command references skills paths -> env passed has keys scrubbed
             mock_shell.reset_mock()
