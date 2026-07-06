@@ -318,22 +318,8 @@
                             <h2><i class="fa-solid fa-route" style="color: var(--accent-orchid);"></i> Route Configurations</h2>
                         </div>
                         <div class="card-body" style="padding: 1.25rem;">
-                            <div class="table-container" style="overflow-x: auto;">
-                                <table class="config-table" style="width: 100%; border-collapse: collapse; text-align: left;">
-                                    <thead>
-                                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.08); color: var(--text-muted); font-size: 0.85rem;">
-                                            <th style="padding: 0.75rem;">Route</th>
-                                            <th style="padding: 0.75rem;">Type</th>
-                                            <th style="padding: 0.75rem;">Status</th>
-                                            <th style="padding: 0.75rem;">Priority</th>
-                                            <th style="padding: 0.75rem;">Weight</th>
-                                            <th style="padding: 0.75rem;">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="routes-config-body">
-                                        <!-- Dynamically populated -->
-                                    </tbody>
-                                </table>
+                            <div id="routes-config-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1.25rem;">
+                                <!-- Dynamically populated cards -->
                             </div>
                         </div>
                     </div>

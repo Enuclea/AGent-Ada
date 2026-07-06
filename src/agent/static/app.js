@@ -2071,54 +2071,73 @@ function loadPlatformConfigUI() {
         .then(res => res.json())
         .then(data => {
             if (data.status === 'success') {
-                currentPlatformConfig = data.config;
-                const tbody = document.getElementById('routes-config-body');
-                tbody.innerHTML = '';
+                currentPlatformConfig = data.config || {};
+                currentPlatformConfig.routes = currentPlatformConfig.routes || {};
+                currentPlatformConfig.plugins = currentPlatformConfig.plugins || {};
+                currentPlatformConfig.skills = currentPlatformConfig.skills || {};
+                
+                const grid = document.getElementById('routes-config-grid');
+                grid.innerHTML = '';
                 
                 data.available_routes.forEach(route => {
                     const rName = route.name.toLowerCase();
                     const cfg = currentPlatformConfig.routes[rName] || {};
-                    const status = cfg.status || route.default_status;
+                    const status = (cfg.status || route.default_status || '').toUpperCase();
                     const priority = cfg.priority !== undefined ? cfg.priority : route.default_priority;
                     const weight = cfg.weight !== undefined ? cfg.weight : 100;
                     
-                    const tr = document.createElement('tr');
-                    tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
-                    tr.innerHTML = `
-                        <td style="padding: 0.75rem; font-weight: 600; color: var(--text-primary);">${route.name.toUpperCase()}</td>
-                        <td style="padding: 0.75rem; color: var(--text-muted); font-size: 0.85rem;">${route.type}</td>
-                        <td style="padding: 0.75rem;">
-                            <select class="route-status-select" data-route="${rName}" style="background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: var(--text-primary); padding: 0.25rem; border-radius: 4px; font-size: 0.85rem;">
-                                <option value="PRIMARY" ${status === 'PRIMARY' ? 'selected' : ''}>Primary</option>
-                                <option value="SECONDARY" ${status === 'SECONDARY' ? 'selected' : ''}>Secondary</option>
-                                <option value="URGENT_ONLY" ${status === 'URGENT_ONLY' ? 'selected' : ''}>Urgent Only</option>
-                                <option value="OFF" ${status === 'OFF' ? 'selected' : ''}>Off</option>
-                            </select>
-                        </td>
-                        <td style="padding: 0.75rem;">
-                            <input type="number" class="route-priority-input" data-route="${rName}" value="${priority}" min="1" max="10" style="width: 55px; background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: var(--text-primary); padding: 0.25rem; border-radius: 4px; text-align: center; font-size: 0.85rem;">
-                        </td>
-                        <td style="padding: 0.75rem;">
-                            <div style="display: flex; align-items: center; gap: 0.5rem; width: 150px;">
-                                <input type="range" class="route-weight-range" data-route="${rName}" value="${weight}" min="0" max="100" style="flex: 1; accent-color: var(--accent-orchid); cursor: pointer;">
-                                <span class="weight-val" style="width: 35px; text-align: right; font-size: 0.85rem; color: var(--text-muted);">${weight}%</span>
+                    const card = document.createElement('div');
+                    card.className = 'route-card';
+                    card.style.background = 'rgba(255, 255, 255, 0.02)';
+                    card.style.border = '1px solid var(--card-border)';
+                    card.style.borderRadius = '8px';
+                    card.style.padding = '1.25rem';
+                    card.style.display = 'flex';
+                    card.style.flexDirection = 'column';
+                    card.style.gap = '0.75rem';
+                    
+                    card.innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.5rem;">
+                            <span style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem; letter-spacing: 0.5px;">${route.name.toUpperCase()}</span>
+                            <span style="background: rgba(255,255,255,0.04); border: 1px solid var(--card-border); padding: 0.15rem 0.45rem; border-radius: 4px; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">${route.type}</span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; align-items: center;">
+                            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                                <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 500;">Status</label>
+                                <select class="route-status-select" data-route="${rName}" style="background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: var(--text-primary); padding: 0.35rem; border-radius: 4px; font-size: 0.8rem; width: 100%;">
+                                    <option value="PRIMARY" ${status === 'PRIMARY' ? 'selected' : ''}>Primary</option>
+                                    <option value="SECONDARY" ${status === 'SECONDARY' ? 'selected' : ''}>Secondary</option>
+                                    <option value="URGENT_ONLY" ${status === 'URGENT_ONLY' ? 'selected' : ''}>Urgent Only</option>
+                                    <option value="OFF" ${status === 'OFF' ? 'selected' : ''}>Off</option>
+                                </select>
                             </div>
-                        </td>
-                        <td style="padding: 0.75rem;">
-                            <button class="btn-save-route" data-route="${rName}" style="background: var(--accent-orchid); border: none; color: white; padding: 0.35rem 0.75rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; font-weight: 500; transition: background 0.3s ease;">
-                                Save
-                            </button>
-                        </td>
+                            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                                <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 500;">Priority (1-10)</label>
+                                <input type="number" class="route-priority-input" data-route="${rName}" value="${priority}" min="1" max="10" style="background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: var(--text-primary); padding: 0.35rem; border-radius: 4px; font-size: 0.8rem; width: 100%; text-align: center;">
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 0.25rem; grid-column: span 2;">
+                                <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 500;">Weight Allocation</label>
+                                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                    <input type="range" class="route-weight-range" data-route="${rName}" value="${weight}" min="0" max="100" style="flex: 1; accent-color: var(--accent-orchid); cursor: pointer;">
+                                    <span class="weight-val" style="font-size: 0.8rem; color: var(--text-primary); font-weight: 600; width: 35px; text-align: right;">${weight}%</span>
+                                </div>
+                            </div>
+                            <div style="grid-column: span 2; display: flex; justify-content: flex-end; margin-top: 0.25rem;">
+                                <button class="btn-save-route" data-route="${rName}" style="background: var(--accent-orchid); border: none; color: white; padding: 0.4rem 0.85rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; font-weight: 600; transition: background 0.2s ease; display: flex; align-items: center; gap: 0.35rem;">
+                                    <i class="fa-solid fa-floppy-disk"></i> Save
+                                </button>
+                            </div>
+                        </div>
                     `;
                     
-                    tr.querySelector('.route-weight-range').addEventListener('input', (e) => {
-                        tr.querySelector('.weight-val').textContent = e.target.value + '%';
+                    card.querySelector('.route-weight-range').addEventListener('input', (e) => {
+                        card.querySelector('.weight-val').textContent = e.target.value + '%';
                     });
                     
-                    tr.querySelector('.btn-save-route').addEventListener('click', () => {
-                        const statusVal = tr.querySelector('.route-status-select').value;
-                        const priorityVal = parseInt(tr.querySelector('.route-priority-input').value);
-                        const weightVal = parseInt(tr.querySelector('.route-weight-range').value);
+                    card.querySelector('.btn-save-route').addEventListener('click', () => {
+                        const statusVal = card.querySelector('.route-status-select').value;
+                        const priorityVal = parseInt(card.querySelector('.route-priority-input').value);
+                        const weightVal = parseInt(card.querySelector('.route-weight-range').value);
                         
                         currentPlatformConfig.routes[rName] = {
                             status: statusVal,
@@ -2128,7 +2147,7 @@ function loadPlatformConfigUI() {
                         savePlatformConfig();
                     });
                     
-                    tbody.appendChild(tr);
+                    grid.appendChild(card);
                 });
             }
         });

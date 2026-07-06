@@ -186,7 +186,7 @@ class RoutingEngine:
         route_config = config.get("routes", {}).get(route.name.lower(), {})
         if "status" in route_config:
             try:
-                return RouteStatus(route_config["status"].upper())
+                return RouteStatus(route_config["status"].lower())
             except ValueError:
                 pass
 
