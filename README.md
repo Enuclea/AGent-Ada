@@ -1,65 +1,98 @@
-# AGent-Ada - Developer Assistant & Task Execution Harness
+# AGent-Ada: Task & Agent Orchestration Harness
 
-AGent-Ada is a modular developer assistant, task engine, and automation harness powered by Gemini, Claude, Grok, and local LLMs (via Ollama). It integrates a Discord bot interface, local/remote worker dispatches, and a dynamic execution routing framework to run assistant workflows.
+AGent-Ada is an extensible, AI-driven task orchestration engine and automation harness. It provides model routing, multi-agent delegation, prompt sanitization, custom execution pathways, and background worker orchestration.
 
 ---
 
 ## 🛠️ Core Capabilities
 
-### 1. Dynamic Execution Routing & Failover Engine
-AGent-Ada features a modular execution routing engine that decouples model invocation from underlying transports. It dynamically resolves execution pathways based on the model requested and configured route statuses:
-*   **AntiGravity CLI (`agy`)**: The default execution route that delegates prompts to the AntiGravity CLI (`agy`), utilizing Gemini developer APIs, Claude, or other pre-configured providers.
+### 1. Extensible Keyless Agent Loop
+The core harness is built around an asynchronous, non-blocking agent loop that manages:
+*   **Sequential Task Execution**: Complex instructions are decomposed into structured multi-step plans.
+*   **Background Subagent Spawning**: Spawns concurrent subagents to execute long-running tasks in the background without blocking the main session thread.
+*   **Unified State Persistence**: State is saved continuously via SQLite, supporting execution resumption and full telemetry logging.
+
+### 2. Execution Routing & Model Failover Engine
+AGent-Ada features a modular execution routing engine that decouples model invocation from underlying transports. It supports core AntiGravity CLI (`agy`), Grok fallback executions, local Ollama integrations, and custom execution pathways.
+
+*   **Core CLI (`agy`)**: The default execution path that delegates calls to the AntiGravity CLI (`agy`), utilizing Gemini developer APIs, Claude, or other pre-configured providers.
 *   **Grok Fallback (`grok`)**: Functions as a secondary execution route matching `agy` capabilities. It is configured to run when standard `agy` models fail or are bypassed.
-*   **Ollama Route (`ollama`)**: Integrates local Ollama models (e.g., `ollama/gemma4:12b`, `qwen3.5:9b`). It automatically loads target hosts from `config/ollama_hosts.json`.
+*   **Ollama (`ollama`)**: Integrates local Ollama LLMs (e.g., `ollama/gemma4:12b`, `qwen3.5:9b`). It automatically loads target hosts from `config/ollama_hosts.json`.
 
-### 2. Specialist Custom Routes (Bring Your Own Route - BYOR)
-The routing architecture is completely modular. You can define custom LLM wrappers, third-party API clients (e.g., OpenAI, Magica), or custom local gateways by placing Python modules into `src/agent/routes/custom/`.
+### 3. Centralized API Broker (`APIBroker`)
+All outgoing communications can be funneled through a thread-safe, centralized API Broker:
+*   **Automatic Rate Limiting**: Enforces API bucket limits to prevent credentials throttling.
+*   **Transient Retry & Exponential Backoff**: Automatically catches network failures, timeouts, and HTTP 429 rate limit statuses, applying exponential sleep backoffs to ensure robust request execution.
+*   **GET Cache Manager**: Caches standard GET queries with a customizable TTL to prevent redundant calls and minimize API resource consumption.
+*   **API Execution Auditing**: Logs details of every outgoing API call to a local SQLite table `api_call_logs`.
 
-### 3. Persistent SQLite-backed Agent Memory
-Maintains local application state and context using SQLite:
-*   **Memory Facts**: Records key-value pairings and facts to keep RAG context fresh across agent interactions.
-*   **Token Pruning & Context Merging**: Optimizes token consumption by automatically pruning and merging historical conversation logs.
-
-### 4. Remote Worker Compute Broker
-Supports worker discovery and dispatching:
-*   Queries active remote compute workers (e.g., Darwin host with browser and GPU capabilities).
-*   Safely dispatches heavy computational tasks from the hub to remote nodes.
+### 4. Input & Output Security Pipeline
+To protect your agents and system, all messages pass through an inline security sanitization pipeline:
+*   **Input Sanitization**: Blocks prompt injection attempts, malicious command escapes, and unsafe path traversals.
+*   **Output Redaction**: Automatically scrubs and redacts API keys, passwords, and sensitive environment secrets before responses are written or sent.
+*   **Custom Route Loader Security**: Custom route modules are statically scanned to block world-writable permissions or unsafe system calls (`eval(`, `exec(`, `os.system(`, etc.).
 
 ---
 
-## ⚙️ Route Configurations
+## 📐 System Architecture Diagram
 
-You can configure the status and execution priority of each route using environment variables in your `.env` or systemd service settings:
+```mermaid
+graph TD
+    User([User / Interface]) -->|Chat API / CLI / Discord| Web[Web Dashboard / Controller]
+    Web -->|Chat Request| Keyless[KeylessAgyAgent]
+    Keyless -->|Sanitize| Pipeline[SecurityPipeline]
+    Pipeline -->|Route Lookup| Routing[RoutingEngine]
+    Routing -->|Execute| AgyRoute[AgyRoute]
+    Routing -->|Execute| GrokRoute[GrokRoute]
+    Routing -->|Execute| OllamaRoute[OllamaRoute]
+    Routing -->|Execute| CustomRoute[Custom BYOR Routes]
+    AgyRoute -->|Subprocess| AgyCLI[AntiGravity CLI]
+    OllamaRoute -->|Local HTTP| OllamaDaemon[Ollama Service]
+    CustomRoute -->|Sandboxed Exec| CustomModule[Custom Python Plugin]
+```
 
-| Route | Status Variable | Default Status | Priority Variable | Default Priority |
-|---|---|---|---|---|
-| **Agy** | `ROUTE_AGY_STATUS` | `primary` | `ROUTE_AGY_PRIORITY` | `10` |
-| **Grok** | `ROUTE_GROK_STATUS` | `secondary` | `ROUTE_GROK_PRIORITY` | `20` |
-| **Ollama** | `ROUTE_OLLAMA_STATUS`| `secondary` | `ROUTE_OLLAMA_PRIORITY` | `30` |
+---
 
-*Route Statuses:*
-*   `primary`: Evaluated first during prompt execution.
-*   `secondary`: Used as a fallback sequence if primary routes fail.
-*   `urgent_only`: Only executed if the task priority is `INTERACTIVE` or `SCHEDULED_CRITICAL`.
-*   `off`: Completely disables the route.
+## 🔌 Decoupled Plugin System
+
+To keep the core harness clean and free from environmental pollution, all custom integrations, scraping scripts, and automation handlers can be placed into a root `/plugins/` directory.
+
+### How the Core Loads Plugins
+The core engine imports plugins dynamically at runtime using `importlib`. If the `/plugins/` folder is empty, the engine operates strictly as a generic model orchestration baseline.
+
+### Example Decoupled Plugin
+Below is a simple template for a decoupled plugin that registers a custom specialist subagent profile:
+
+```python
+# plugins/my_plugin/__init__.py
+from agent.core.registry import tool_registry
+
+def initialize_plugin():
+    # Register custom subagent instructions
+    tool_registry.register_subagent_profile(
+        name="log_cleaner",
+        system_instructions="You are a log cleaner. Scan text files and remove ANSI formatting characters."
+    )
+```
 
 ---
 
 ## 🔌 Bring Your Own Route (BYOR)
 
-Adding a custom LLM wrapper or gateway is straightforward:
+You can easily inject custom LLM wrappers, third-party API clients, or custom local gateways into the harness by dropping a Python module into the `src/agent/routes/custom/` directory.
 
-1. **Create the Route File**: Add a new `.py` file to `src/agent/routes/custom/` (e.g., `custom_openai.py`).
-2. **Inherit from `BaseRoute`**: Implement the interface defined in `src/agent/routes/base.py`:
+### Example Custom Route: Local Ollama Custom Gateway
+Here is an example showing how to implement a custom route targeting a specific Ollama model:
 
 ```python
+import httpx
 from typing import List, Optional
 from agent.routes.base import BaseRoute, RouteStatus
 
-class CustomOpenAIRoute(BaseRoute):
+class CustomOllamaRoute(BaseRoute):
     @property
     def name(self) -> str:
-        return "custom_openai"
+        return "custom_ollama"
 
     @property
     def default_status(self) -> RouteStatus:
@@ -67,11 +100,11 @@ class CustomOpenAIRoute(BaseRoute):
 
     @property
     def default_priority(self) -> int:
-        return 15
+        return 25
 
     @property
     def supported_models(self) -> List[str]:
-        return ["gpt-4o", "gpt-3.5-turbo"]
+        return ["ollama/llama3"]
 
     async def execute(
         self,
@@ -80,41 +113,119 @@ class CustomOpenAIRoute(BaseRoute):
         system_instructions: Optional[str] = None,
         timeout: Optional[float] = None,
         conversation_id: Optional[str] = None,
+        task_priority: Optional[int] = None,
     ) -> Optional[str]:
-        # Implement custom API calls or execution logic here
-        return "Custom LLM Response"
+        url = "http://localhost:11434/api/generate"
+        payload = {
+            "model": "llama3",
+            "prompt": prompt,
+            "system": system_instructions or "",
+            "stream": False
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout or 60.0) as client:
+                resp = await client.post(url, json=payload)
+                if resp.status_code == 200:
+                    return resp.json().get("response")
+        except Exception:
+            return None
 ```
-
-For a concrete starting point, refer to the template **[src/agent/routes/custom/magica_route.py.example](file:///home/dan/AGent-Ada/src/agent/routes/custom/magica_route.py.example)**.
 
 ---
 
-## 🗃️ Database Architecture
-AGent-Ada maintains agent state in a SQLite database (`history.db`) containing the following key tables:
-*   `memory_facts`: Stores key facts and metadata learned about the developer or environment.
-*   `memory_key_value`: Stores key-value parameters.
-*   `conversation_logs`: Stores conversation execution logs.
+## 💻 CLI Commands & Web Dashboard Features
+
+### CLI Commands
+*   **Run Prompt Directly**:
+    ```bash
+    .venv/bin/python -m agent.keyless "Create a checklist for SRE deployment"
+    ```
+*   **Execute Roundtable Manually**:
+    ```bash
+    .venv/bin/python scripts/roundtable.py --conversation-id my-convo-id
+    ```
+
+### Web Dashboard & Chat Controls
+The web interface exposes an administrative endpoint and a chat loop. You can issue special control commands inside the chat prompt:
+*   `/reload`: Evicts all active cached sessions, reloads the `/plugins/` directory, and clears environment variables to apply fresh updates.
+*   `/stop`: Instantly cancels all active background subagents and halts running plans for the active session.
 
 ---
 
-## 🚀 Running the System
+## ⚙️ Full Setup & systemd Service Guide
 
-### 1. Prerequisites
-Ensure Python 3.11+ is installed. Set up the virtual environment and install dependencies:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+### 1. Environment Configuration Example (`.env`)
+Create a `.env` file in the root workspace directory:
+
+```env
+# API Keys & Credentials
+DISCORD_BOT_TOKEN="your-bot-token"
+GEMINI_API_KEY="your-gemini-developer-key"
+
+# Route Customizations
+ROUTE_AGY_STATUS="primary"
+ROUTE_GROK_STATUS="secondary"
+ROUTE_OLLAMA_STATUS="off"
+
+# Loop controls
+VERIFICATION_LOOP_MINUTES=10
 ```
 
-### 2. Configure Ollama Hosts
-Copy the template configuration and modify the target Ollama hosts:
-```bash
-cp config/ollama_hosts.json.example config/ollama_hosts.json
+### 2. Systemd Service Templates
+
+Create the service file `/etc/systemd/system/ada.service`:
+
+```ini
+[Unit]
+Description=Ada Task Engine Core Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=agentuser
+WorkingDirectory=/opt/agent-ada
+ExecStart=/opt/agent-ada/.venv/bin/python -m agent.interfaces.web
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/agent-ada/.env
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-### 3. Run the Discord Bot
-Run the Discord assistant bot in the background:
-```bash
-PYTHONPATH=src nohup .venv/bin/python3 discord/bot.py > discord/bot.log 2>&1 &
+For the Discord connector, create `/etc/systemd/system/discord-bot.service`:
+
+```ini
+[Unit]
+Description=Ada Discord Front-End Bot
+After=ada.service
+Requires=ada.service
+
+[Service]
+Type=simple
+User=agentuser
+WorkingDirectory=/opt/agent-ada
+ExecStart=/opt/agent-ada/.venv/bin/python -m agent.interfaces.discord_bot
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/agent-ada/.env
+
+[Install]
+WantedBy=multi-user.target
 ```
+
+*   **Enable and Start Services**:
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now ada.service discord-bot.service
+    ```
+
+---
+
+## 🗄️ Database Architecture
+AGent-Ada maintains local application state in a SQLite database (`agent.db` or `enuclea.db`):
+*   `morgen_tasks`: Tracks calendar integration event statuses.
+*   `tracked_atera_items`: Maps tasks to external IT tickets/alert resources.
+*   `availability_alert_checks`: Manages offline alert check cycles.
+*   `daily_automation_rollups`: Consolidates multi-step daily tasks.
+*   `api_call_logs`: Auditing table logging execution times, status, and failures of broker requests.
