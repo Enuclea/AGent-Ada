@@ -39,9 +39,6 @@ def sanitize_output(response: str) -> str:
     # 2. Dynamic redaction of loaded environment variables/secrets
     sensitive_keys = [
         "DISCORD_BOT_TOKEN",
-        "MAGICA_API",
-        "1MIN_AI_API",
-        "MAGICA_API_KEY",
         "OPENAI_API_KEY",
         "CLAUDE_API_KEY",
         "GEMINI_API_KEY"

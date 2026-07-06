@@ -124,24 +124,6 @@ def ensure_default_scheduled_tasks(conn=None):
         proj_root = Path(__file__).resolve().parent.parent.parent.parent
         default_tasks = []
         
-        # 1. Gmail Email Check (only if sync script is present)
-        if (proj_root / "scratch" / "run_gmail_sync.py").exists():
-            default_tasks.append((
-                "gmail-check-task-id",
-                "Gmail Email Check",
-                "Check for new Gmail emails since last run, parse them using AI to check importance, and create Morgen tasks for important ones.",
-                "*/5 * * * *",
-            ))
-            
-        # 2. Stock Game Auto Check (only if stock game directory is present)
-        if (proj_root / "stock_game").exists():
-            default_tasks.append((
-                "stock-check-task-id",
-                "Stock Game Auto Check",
-                "Please check the stock game portfolio status using stock_game/portfolio.py status. Run the scan using stock_game/scan.py to identify new signals. If the 3-day cool-off has expired, make the necessary rebalancing adjustments (sell down heavy holdings to keep them under 33% and buy into strong buy tickers like JPM or IWM). Then commit the trades.",
-                "0 15 * * 1-5",
-            ))
-            
         # 3. Grace Timekeeper
         default_tasks.append((
             "grace-check-task-id",
@@ -164,22 +146,6 @@ def ensure_default_scheduled_tasks(conn=None):
             "Quiet Observer",
             "Ada: Run Quiet Observer pattern analyzer. Query the conversation history and step logs from the past 24 hours, identify patterns, bottlenecks, or automation opportunities, and write a summary report.",
             "0 8 * * *",
-        ))
-
-        # 6. Nightly Jules Code Review
-        default_tasks.append((
-            "nightly-jules-code-review-task-id",
-            "Nightly Jules Code Review",
-            "Ada: Run Nightly Jules Code Review. Spawns SEPARATE, ISOLATED Jules sessions using create_session in interactive mode to review public (/home/dan/AGent-Ada) and private (/home/dan/AGent) repositories. Do NOT share a single session or context between them to prevent private credentials, configurations, or proprietary code patterns from leaking into the public repository's review context. Jules must scan for bugs, inefficiencies, and performance gains in each repo, strictly adhering to the respective local .julesrules: in the public repo, maintain an extensible keyless baseline (generic only, all private features decoupled as plugins, no hardcoded integrations/keys, and no plugin dependencies in core); in the private repo, preserve private integrations/credentials/plugins and keep core files clean of custom feature pollution to prevent divergence. Do NOT approve the plan; leave the sessions in a stable pending plan state for morning developer review.",
-            "0 8 * * *",
-        ))
-
-        # 7. Public Code Roundtable
-        default_tasks.append((
-            "public-code-roundtable-task-id",
-            "Public Code Roundtable",
-            "Run a peer review roundtable of the public AGent-Ada codebase using Claude Opus 4.8, DeepSeek V3.2, and Grok 4.3 via Magica, consolidating findings into a prioritized report.",
-            "0 0 */3 * *",
         ))
         
         for task_id, name, prompt, cron_expr in default_tasks:
@@ -2201,43 +2167,7 @@ async def execute_scheduled_task(name: str, prompt: str):
             print(f"[Scheduled Task: {name}] Error: {e}")
             return
 
-    if name == "Gmail Email Check":
-        try:
-            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable or "python3", "scratch/run_gmail_sync.py",
-                cwd=proj_root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
-            stdout_str = stdout.decode("utf-8", errors="replace").strip()
-            stderr_str = stderr.decode("utf-8", errors="replace").strip()
-            
-            output = stdout_str
-            if stderr_str:
-                output += f"\n\nStderr Errors:\n{stderr_str}"
-            
-            has_no_new_mail = "No new emails detected since last check" in stdout_str or "no new emails detected" in stdout_str.lower()
-            is_pubsub_active = "Pub/Sub listener is active" in stdout_str
-            
-            if has_no_new_mail or is_pubsub_active:
-                print(f"[Scheduled Task: {name}] Quiet check: {stdout_str}")
-                return
 
-            conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-            memory.log_conversation_step(conversation_id, "assistant", output or "Gmail check completed with no output.")
-            print(f"[Scheduled Task: {name}] Executed directly via subprocess and logged. Return code: {proc.returncode}")
-            return
-        except Exception as e:
-            err_msg = f"Failed to execute Gmail check script: {e}"
-            print(f"[Scheduled Task: {name}] Error: {err_msg}")
-            # If it failed to run, we log it so the failure is visible
-            conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-            memory.log_conversation_step(conversation_id, "assistant", err_msg)
-            return
 
     if name == "Grace Timekeeper":
         conversation_id = f"sched-grace-timekeeper-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
@@ -2267,62 +2197,9 @@ async def execute_scheduled_task(name: str, prompt: str):
             memory.log_conversation_step(conversation_id, "assistant", err_msg)
             return
 
-    if name == "Stock Game Auto Check":
-        conversation_id = f"sched-stock-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-        try:
-            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable or "python3", "stock_game/strategy.py",
-                cwd=proj_root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
-            stdout_str = stdout.decode("utf-8", errors="replace").strip()
-            stderr_str = stderr.decode("utf-8", errors="replace").strip()
-            
-            output = stdout_str
-            if stderr_str:
-                output += f"\n\nStderr Errors:\n{stderr_str}"
-            
-            memory.log_conversation_step(conversation_id, "assistant", output or "Stock game auto-check completed with no output.")
-            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
-            return
-        except Exception as e:
-            err_msg = f"Failed to execute Stock Game Auto Check script: {e}"
-            print(f"[Scheduled Task: {name}] Error: {err_msg}")
-            memory.log_conversation_step(conversation_id, "assistant", err_msg)
-            return
 
-    if name == "Public Code Roundtable":
-        conversation_id = f"sched-public-code-roundtable-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-        try:
-            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable or "python3", "/home/dan/.agent/skills/public-code-roundtable/scripts/roundtable.py",
-                "--conversation-id", conversation_id,
-                cwd=proj_root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=360.0)
-            stdout_str = stdout.decode("utf-8", errors="replace").strip()
-            stderr_str = stderr.decode("utf-8", errors="replace").strip()
-            
-            output = stdout_str
-            if stderr_str:
-                output += f"\n\nStderr Errors:\n{stderr_str}"
-                
-            memory.log_conversation_step(conversation_id, "assistant", output or "Roundtable completed with no output.")
-            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
-            return
-        except Exception as e:
-            err_msg = f"Failed to execute Public Code Roundtable script: {e}"
-            print(f"[Scheduled Task: {name}] Error: {err_msg}")
-            memory.log_conversation_step(conversation_id, "assistant", err_msg)
-            return
+
+
 
     # Generic scheduled tasks: use a dedicated, isolated KeylessAgyAgent
     # This prevents cross-contamination of conversation context between background tasks

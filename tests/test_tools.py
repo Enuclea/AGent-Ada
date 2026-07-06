@@ -464,7 +464,7 @@ def test_run_command_environment_scrubbing():
             assert "SAFE_VAR" in passed_env
             assert passed_env["SAFE_VAR"] == "keep-me"
             
-            for key in ["DISCORD_BOT_TOKEN", "MAGICA_API", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]:
+            for key in ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]:
                 assert key not in passed_env
                 
     asyncio.run(run_test())

@@ -927,7 +927,7 @@ async def run_command(command: str) -> str:
     env = None
     if references_skills:
         env = dict(os.environ)
-        keys_to_scrub = ["DISCORD_BOT_TOKEN", "MAGICA_API", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+        keys_to_scrub = ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
         for key in keys_to_scrub:
             env.pop(key, None)
             

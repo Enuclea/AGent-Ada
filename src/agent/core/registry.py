@@ -177,15 +177,6 @@ class ToolRegistry:
             "Report any stalled or delayed tasks back to the parent agent."
         )
 
-        # Gmail Sync
-        if (proj_root / "scratch" / "run_gmail_sync.py").exists():
-            builtins["gmail_sync"] = (
-                "You are the Gmail & Morgen Sync Specialist agent. Your primary role is to sync incoming Gmail messages and update Morgen tasks.\n"
-                "The sync script is located at 'scratch/run_gmail_sync.py' in the workspace.\n"
-                "Directly execute this script using python to run the synchronization. Do not perform generic searches.\n"
-                "Report a concise summary of synced emails back to the parent agent."
-            )
-
         # Quiet Observer
         builtins["quiet_observer"] = (
             "You are the Quiet Observer Specialist agent. Your primary role is to analyze conversation logs, user commands, and tool calls to discover patterns and opportunities.\n"
@@ -201,15 +192,6 @@ class ToolRegistry:
             "Directly execute this script using python to perform the post-mortem analysis. Do not perform generic searches.\n"
             "Report the post-mortem summary back to the parent agent."
         )
-
-        # Stock Trader
-        if (proj_root / "stock_game").exists():
-            builtins["stock_trader"] = (
-                "You are the Stock Game Trading Specialist agent. Your primary role is to check stock portfolios and rebalance holdings.\n"
-                "The trading script is located at 'stock_game/strategy.py' in the workspace.\n"
-                "Directly execute this script using python. Do not perform generic searches.\n"
-                "Report the trade completion and portfolio balance status back to the parent agent."
-            )
 
         # Solar Monitor
         if (proj_root / "solar").exists() or (proj_root.parent / "solar").exists():
@@ -376,22 +358,6 @@ class ToolRegistry:
         }
 
         # Conditional specialists (only present if their workspace resources exist)
-        if (proj_root / "scratch" / "run_gmail_sync.py").exists():
-            configs["gmail_sync"] = {
-                "title": "Gmail & Morgen Sync Agent",
-                "domain": "Email synchronization, inbox checks, Morgen task sync",
-                "discord_channel": None,
-                "max_subagents": 0,
-                "delegation_triggers": ["gmail", "email check", "inbox", "morgen sync", "sync email", "new mail", "check mail"]
-            }
-        if (proj_root / "stock_game").exists():
-            configs["stock_trader"] = {
-                "title": "Stock Portfolio Manager",
-                "domain": "Stock portfolio checks, rebalancing, trading strategy",
-                "discord_channel": None,
-                "max_subagents": 0,
-                "delegation_triggers": ["stock", "portfolio", "rebalance", "trading", "shares", "stock game"]
-            }
         if (proj_root / "solar").exists() or (proj_root.parent / "solar").exists():
             configs["solar_monitor"] = {
                 "title": "Solar & Energy Monitor",
