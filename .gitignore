@@ -13,13 +13,22 @@ ENV/
 *.db
 *.db-shm
 *.db-wal
+enuclea/enuclea.db
+discord/discord_queue.db
+history.db
 
 # Logs
 *.log
+discord/*.log
+enuclea/*.log
+daemon.log
 
 # Environment/Secrets
 .env
 *.env
+discord/.env
+config/*
+!config/*.sample
 
 # IDE / Editor configuration
 .vscode/
@@ -30,13 +39,17 @@ ENV/
 # OS files
 .DS_Store
 Thumbs.db
-src/agent_ada.egg-info/
 
 # Handover / Process Documentation
 .oob-docs/
 
-# Custom modules (private extensions)
-discord/custom_modules/
-
 # Local custom plugins
 /plugins/
+
+# Build and Packaging
+agent_ada.egg-info/
+build/
+dist/
+
+# Discord Backups
+discord/channel_backups/

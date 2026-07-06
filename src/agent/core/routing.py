@@ -112,6 +112,28 @@ class RoutingEngine:
             # Exclude private modules and template files
             if file.name.startswith("_") or file.name.endswith(".example"):
                 continue
+
+            # --- Capability & Security Pre-check ---
+            try:
+                # 1. Verify owner & write permissions to prevent arbitrary write injections
+                stat_info = file.stat()
+                if stat_info.st_mode & 0o002:  # World-writable
+                    print(f"[ROUTING] Security block: Refusing to load custom route {file.name} (file is world-writable)")
+                    continue
+
+                # 2. Search for dangerous system invocation patterns
+                with open(file, "r", encoding="utf-8", errors="ignore") as f:
+                    code_content = f.read()
+                
+                dangerous_signatures = ["eval(", "exec(", "os.system(", "subprocess.Popen(", "subprocess.run("]
+                detected = [sig for sig in dangerous_signatures if sig in code_content]
+                if detected:
+                    print(f"[ROUTING] Security block: Refusing to load custom route {file.name} (detected dangerous signature(s): {detected})")
+                    continue
+            except Exception as se:
+                print(f"[ROUTING] Security check failed for {file.name}: {se}")
+                continue
+
             module_name = f"agent.routes.custom.{file.stem}"
             try:
                 module = importlib.import_module(module_name)

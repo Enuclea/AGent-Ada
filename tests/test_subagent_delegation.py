@@ -95,7 +95,7 @@ async def test_subagent_delegation_and_resumption():
          with TestClient(app) as client:
              # Run chat request which triggers the step execution loop
              payload = {
-                 "prompt": "Trigger plan step execution",
+                 "prompt": "implement plan step execution to spawn subagent",
                  "session_id": session_id
              }
              response = client.post("/api/chat", json=payload)

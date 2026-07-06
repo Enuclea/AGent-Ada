@@ -96,6 +96,31 @@ def test_subagent_messages_db_helpers():
     assert msgs[1]["role"] == "child"
     assert msgs[1]["message"] == "Feature complete"
 
+def test_get_subagents_status():
+    """Test retrieving subagent status and verifying that SPAWNED maps to active."""
+    # 1. Spawned subagent (should be active)
+    sub_id_active = "subagent-active-123"
+    memory.log_subagent_message(sub_id_active, "parent", "Spawning subagent with prompt: count to 10")
+    memory.log_subagent_message(sub_id_active, "subagent", "[SPAWNED] Subagent successfully spawned in background. Sandbox: /tmp/test")
+    
+    # 2. Completed subagent
+    sub_id_completed = "subagent-completed-123"
+    memory.log_subagent_message(sub_id_completed, "parent", "Spawning subagent with prompt: do something")
+    memory.log_subagent_message(sub_id_completed, "subagent", "[SUCCESS] Subagent finished successfully")
+    
+    # Query status
+    from agent.observability.telemetry import get_subagents_status
+    statuses = get_subagents_status()
+    
+    active_sub = next(s for s in statuses if s["subagent_id"] == sub_id_active)
+    completed_sub = next(s for s in statuses if s["subagent_id"] == sub_id_completed)
+    
+    assert active_sub["status"] == "active"
+    assert active_sub["completed_at"] is None
+    
+    assert completed_sub["status"] == "completed"
+    assert completed_sub["completed_at"] is not None
+
 def test_web_plan_and_telemetry_endpoints():
     """Test the web API endpoints for plans and telemetry."""
     sess_id = "test-sess-endpoints"
@@ -159,7 +184,7 @@ def test_model_fallback_routing(mock_get_or_create_agent):
     mock_get_or_create_agent.side_effect = side_effect
     
     response = client.post("/api/chat", json={
-        "prompt": "Hello",
+        "prompt": "implement fallback routing check for rate limiting",
         "session_id": "test-fallback-session",
         "model": "gemini-3.5-flash"
     })

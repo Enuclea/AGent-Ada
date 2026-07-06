@@ -173,6 +173,14 @@ def ensure_default_scheduled_tasks(conn=None):
             "Ada: Run Nightly Jules Code Review. Spawns SEPARATE, ISOLATED Jules sessions using create_session in interactive mode to review public (/home/dan/AGent-Ada) and private (/home/dan/AGent) repositories. Do NOT share a single session or context between them to prevent private credentials, configurations, or proprietary code patterns from leaking into the public repository's review context. Jules must scan for bugs, inefficiencies, and performance gains in each repo, strictly adhering to the respective local .julesrules: in the public repo, maintain an extensible keyless baseline (generic only, all private features decoupled as plugins, no hardcoded integrations/keys, and no plugin dependencies in core); in the private repo, preserve private integrations/credentials/plugins and keep core files clean of custom feature pollution to prevent divergence. Do NOT approve the plan; leave the sessions in a stable pending plan state for morning developer review.",
             "0 8 * * *",
         ))
+
+        # 7. Public Code Roundtable
+        default_tasks.append((
+            "public-code-roundtable-task-id",
+            "Public Code Roundtable",
+            "Run a peer review roundtable of the public AGent-Ada codebase using Claude Opus 4.8, DeepSeek V3.2, and Grok 4.3 via Magica, consolidating findings into a prioritized report.",
+            "0 0 */3 * *",
+        ))
         
         for task_id, name, prompt, cron_expr in default_tasks:
             cursor.execute("SELECT cron_expr FROM scheduled_tasks WHERE id = ?", (task_id,))
@@ -2279,6 +2287,35 @@ async def execute_scheduled_task(name: str, prompt: str):
             return
         except Exception as e:
             err_msg = f"Failed to execute Stock Game Auto Check script: {e}"
+            print(f"[Scheduled Task: {name}] Error: {err_msg}")
+            memory.log_conversation_step(conversation_id, "assistant", err_msg)
+            return
+
+    if name == "Public Code Roundtable":
+        conversation_id = f"sched-public-code-roundtable-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+        try:
+            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable or "python3", "/home/dan/.agent/skills/public-code-roundtable/scripts/roundtable.py",
+                "--conversation-id", conversation_id,
+                cwd=proj_root,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=360.0)
+            stdout_str = stdout.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            
+            output = stdout_str
+            if stderr_str:
+                output += f"\n\nStderr Errors:\n{stderr_str}"
+                
+            memory.log_conversation_step(conversation_id, "assistant", output or "Roundtable completed with no output.")
+            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
+            return
+        except Exception as e:
+            err_msg = f"Failed to execute Public Code Roundtable script: {e}"
             print(f"[Scheduled Task: {name}] Error: {err_msg}")
             memory.log_conversation_step(conversation_id, "assistant", err_msg)
             return

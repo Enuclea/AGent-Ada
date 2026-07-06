@@ -152,15 +152,18 @@ class ToolRegistry:
         if not agent_profile:
             return None
 
+        profile_key = agent_profile.lower().replace("-", "_")
+
         # 1. Check workspace customizations root (.agents/agents/<profile_name>/system_instructions.txt)
-        workspace_agent_dir = Path(os.getcwd()) / ".agents" / "agents" / agent_profile
-        inst_file = workspace_agent_dir / "system_instructions.txt"
-        if inst_file.exists() and inst_file.is_file():
-            try:
-                with open(inst_file, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-            except Exception:
-                pass
+        for key in (agent_profile, profile_key):
+            workspace_agent_dir = Path(os.getcwd()) / ".agents" / "agents" / key
+            inst_file = workspace_agent_dir / "system_instructions.txt"
+            if inst_file.exists() and inst_file.is_file():
+                try:
+                    with open(inst_file, "r", encoding="utf-8") as f:
+                        return f.read().strip()
+                except Exception:
+                    pass
 
         # 2. Check built-in profiles
         proj_root = self._get_workspace_root()
@@ -286,7 +289,22 @@ class ToolRegistry:
             "- For tasks that take more than a few seconds, background them and report the task ID."
         )
 
-        return builtins.get(agent_profile)
+        # Claude (Security Review Expert)
+        builtins["claude"] = (
+            "You are Claude, a senior security and architectural review expert. Your focus is to perform a rigorous code review of the workspace, looking intentionally for security vulnerabilities, API key leaks, input validation issues, path traversal risks, and architectural integrity. Critique the current solution and suggest robust, secure patches."
+        )
+
+        # DeepSeek (Logical Review Expert)
+        builtins["deepseek"] = (
+            "You are DeepSeek, a senior backend logic and correctness review expert. Your focus is to perform a detailed code review of the workspace, checking intentionally for logical correctness, algorithm efficiency, edge cases, error handling, and robust database operations. Critique the current solution and suggest precise, correct patches."
+        )
+
+        # Grok (Performance Review Expert)
+        builtins["grok"] = (
+            "You are Grok, a senior performance and efficiency review expert. Your focus is to perform a code review of the workspace, looking intentionally for performance bottlenecks, blocking I/O, synchronous resource locks, memory leaks, and redundant calculations. Critique the current solution and suggest highly optimized, clean patches."
+        )
+
+        return builtins.get(profile_key)
 
     def _get_specialist_configs(self) -> Dict[str, Dict[str, Any]]:
         """Returns the specialist configuration metadata for all registered specialists.
