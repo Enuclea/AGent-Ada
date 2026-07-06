@@ -29,6 +29,7 @@ daemon.log
 discord/.env
 config/*
 !config/*.sample
+config/ollama_hosts.json
 
 # IDE / Editor configuration
 .vscode/
@@ -47,7 +48,7 @@ Thumbs.db
 /plugins/
 
 # Build and Packaging
-agent_ada.egg-info/
+*.egg-info/
 build/
 dist/
 
