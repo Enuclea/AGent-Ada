@@ -1227,6 +1227,8 @@ async function pollQuotas() {
         if (Array.isArray(data)) {
             data.forEach(q => {
                 const family = q.model_family;
+                const pct_5h = q.pct_5h;
+                const pct_weekly = q.pct_weekly;
                 const rem_pct_5h = Math.max(0, Math.min(100, pct_5h));
                 const rem_pct_weekly = Math.max(0, Math.min(100, pct_weekly));
                 
