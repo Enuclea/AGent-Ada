@@ -2057,6 +2057,7 @@ document.querySelectorAll('.nav-tab-btn').forEach(btn => {
             if (panelId.includes('config')) {
                 loadPlatformConfigUI();
                 loadTenantRegistryUI();
+                loadRouteTelemetryUI();
             } else if (panelId.includes('marketplace')) {
                 loadMarketplaceUI();
             }
@@ -2333,6 +2334,107 @@ function loadMarketplaceUI() {
                     });
                     
                     skillsGrid.appendChild(card);
+                });
+            }
+        });
+}
+
+function loadRouteTelemetryUI() {
+    const btn = document.getElementById('refresh-telemetry-btn');
+    if (btn && !btn.dataset.bound) {
+        btn.dataset.bound = 'true';
+        btn.addEventListener('click', loadRouteTelemetryUI);
+    }
+
+    fetch('/api/telemetry/routes')
+        .then(res => res.json())
+        .then(data => {
+            if (data.status !== 'success') return;
+            
+            // 1. Render Health Bars / Graph
+            const container = document.getElementById('route-chart-container');
+            container.innerHTML = '';
+            
+            const routesData = {};
+            data.summary.forEach(item => {
+                const name = item.route_name.toUpperCase();
+                if (!routesData[name]) {
+                    routesData[name] = { success: 0, failed: 0, latencies: [] };
+                }
+                if (item.status === 'success') {
+                    routesData[name].success += item.count;
+                } else {
+                    routesData[name].failed += item.count;
+                }
+                if (item.avg_latency) {
+                    routesData[name].latencies.push(item.avg_latency);
+                }
+            });
+            
+            const routeNames = Object.keys(routesData);
+            if (routeNames.length === 0) {
+                container.innerHTML = '<p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">No telemetry data available yet.</p>';
+            } else {
+                routeNames.forEach(name => {
+                    const info = routesData[name];
+                    const total = info.success + info.failed;
+                    const successPct = total > 0 ? (info.success / total) * 100 : 0;
+                    const failedPct = total > 0 ? (info.failed / total) * 100 : 0;
+                    const avgLat = info.latencies.length > 0 ? (info.latencies.reduce((a, b) => a + b, 0) / info.latencies.length).toFixed(2) + 's' : 'N/A';
+                    
+                    const barRow = document.createElement('div');
+                    barRow.style.display = 'flex';
+                    barRow.style.flexDirection = 'column';
+                    barRow.style.gap = '0.35rem';
+                    barRow.style.padding = '0.5rem';
+                    barRow.style.background = 'rgba(255,255,255,0.01)';
+                    barRow.style.border = '1px solid rgba(255,255,255,0.03)';
+                    barRow.style.borderRadius = '6px';
+                    
+                    barRow.innerHTML = `
+                        <div style="display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 600; color: var(--text-primary);">
+                            <span>${name} <span style="font-weight: 400; color: var(--text-muted); font-size: 0.75rem;">(Avg: ${avgLat}, Total: ${total})</span></span>
+                            <span style="color: var(--accent-mint);">${successPct.toFixed(0)}% Success</span>
+                        </div>
+                        <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,0.05);">
+                            <div style="width: ${successPct}%; background: var(--accent-mint); transition: width 0.3s ease;"></div>
+                            <div style="width: ${failedPct}%; background: var(--accent-coral) || '#ff5555'; transition: width 0.3s ease;"></div>
+                        </div>
+                    `;
+                    container.appendChild(barRow);
+                });
+            }
+            
+            // 2. Render Recent History Table
+            const tbody = document.getElementById('route-telemetry-body');
+            tbody.innerHTML = '';
+            
+            if (data.recent.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="padding: 1rem; text-align: center; color: var(--text-muted);">No recent route executions.</td>
+                    </tr>
+                `;
+            } else {
+                data.recent.forEach(item => {
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid rgba(255,255,255,0.03)';
+                    
+                    const timeStr = item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A';
+                    const statusColor = item.status === 'success' ? 'var(--accent-mint)' : '#ff5555';
+                    const statusText = item.status === 'success' ? 'Success' : 'Failed';
+                    const latencyStr = item.latency ? item.latency.toFixed(2) + 's' : '0.00s';
+                    const detail = item.error_message || '-';
+                    
+                    tr.innerHTML = `
+                        <td style="padding: 0.5rem 0.75rem; color: var(--text-muted); white-space: nowrap;">${timeStr}</td>
+                        <td style="padding: 0.5rem 0.75rem; font-weight: 600; color: var(--text-primary); text-transform: uppercase;">${item.route_name}</td>
+                        <td style="padding: 0.5rem 0.75rem; color: var(--text-muted);">${item.model_name}</td>
+                        <td style="padding: 0.5rem 0.75rem; font-weight: 600; color: ${statusColor};">${statusText}</td>
+                        <td style="padding: 0.5rem 0.75rem; color: var(--text-muted);">${latencyStr}</td>
+                        <td style="padding: 0.5rem 0.75rem; color: var(--text-muted); font-size: 0.75rem; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${detail}">${detail}</td>
+                    `;
+                    tbody.appendChild(tr);
                 });
             }
         });

@@ -164,6 +164,19 @@ def init_db() -> None:
             timestamp TEXT
         )
         """)
+        # Route execution telemetry
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS route_telemetry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            route_name TEXT,
+            model_name TEXT,
+            status TEXT,
+            error_message TEXT,
+            latency REAL,
+            timestamp TEXT
+        )
+        """)
         # Main step logs
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS conversation_steps (

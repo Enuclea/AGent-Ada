@@ -470,3 +470,36 @@ def remove_worker(worker_id: str) -> None:
         pass
     finally:
         conn.close()
+
+
+def log_route_telemetry(
+    session_id: str,
+    route_name: str,
+    model_name: str,
+    status: str,
+    error_message: Optional[str] = None,
+    latency: float = 0.0
+) -> None:
+    """Records a route execution attempt in route_telemetry.
+
+    Args:
+        session_id: Active LLM chat session ID.
+        route_name: Name of the route invoked.
+        model_name: Name of the model requested.
+        status: Status of the execution (success, failed).
+        error_message: Optional error message details if failed.
+        latency: Time taken in seconds.
+    """
+    conn = _db.get_connection(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "INSERT INTO route_telemetry (session_id, route_name, model_name, status, error_message, latency, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session_id, route_name, model_name, status, error_message, latency, timestamp)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()

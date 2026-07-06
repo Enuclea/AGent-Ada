@@ -2743,6 +2743,60 @@ async def run_scheduler():
             pass
         await asyncio.sleep(5)
 
+@app.get("/api/telemetry/routes")
+async def get_route_telemetry_endpoint():
+    import sqlite3
+    import agent.storage.db as _db
+    conn = _db.get_connection(_db.DB_FILE_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT route_name, status, COUNT(*) as count, AVG(latency) as avg_latency
+            FROM route_telemetry
+            GROUP BY route_name, status
+        """)
+        summary_rows = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT id, session_id, route_name, model_name, status, error_message, latency, timestamp
+            FROM route_telemetry
+            ORDER BY timestamp DESC
+            LIMIT 100
+        """)
+        recent_rows = cursor.fetchall()
+        
+        summary = []
+        for r in summary_rows:
+            summary.append({
+                "route_name": r["route_name"],
+                "status": r["status"],
+                "count": r["count"],
+                "avg_latency": r["avg_latency"]
+            })
+            
+        recent = []
+        for r in recent_rows:
+            recent.append({
+                "id": r["id"],
+                "session_id": r["session_id"],
+                "route_name": r["route_name"],
+                "model_name": r["model_name"],
+                "status": r["status"],
+                "error_message": r["error_message"],
+                "latency": r["latency"],
+                "timestamp": r["timestamp"]
+            })
+            
+        return {
+            "status": "success",
+            "summary": summary,
+            "recent": recent
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+    finally:
+        conn.close()
+
 class PlatformConfigRequest(BaseModel):
     routes: Dict[str, Dict[str, Any]]
     plugins: Dict[str, bool]

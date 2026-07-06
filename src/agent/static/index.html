@@ -324,6 +324,47 @@
                         </div>
                     </div>
 
+                    <!-- Route Telemetry & Health Card -->
+                    <div class="widget-card glass-card">
+                        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                            <h2><i class="fa-solid fa-chart-bar" style="color: var(--accent-mint);"></i> Route Health & Telemetry</h2>
+                            <button id="refresh-telemetry-btn" style="background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); padding: 0.35rem 0.65rem; border-radius: 4px; color: var(--text-primary); cursor: pointer; font-size: 0.8rem; display: flex; align-items: center; gap: 0.35rem;">
+                                <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                            </button>
+                        </div>
+                        <div class="card-body" style="padding: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem;">
+                            <!-- Success/Failure Health Bars -->
+                            <div>
+                                <h3 style="margin: 0 0 0.75rem 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Route Success/Failure Volume</h3>
+                                <div id="route-chart-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                                    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">No telemetry data available yet.</p>
+                                </div>
+                            </div>
+                            
+                            <!-- Recent Activity Table -->
+                            <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 1rem;">
+                                <h3 style="margin: 0 0 0.75rem 0; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Recent Routing History</h3>
+                                <div style="max-height: 250px; overflow-y: auto; border: 1px solid var(--card-border); border-radius: 6px;">
+                                    <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem;">
+                                        <thead>
+                                            <tr style="background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.08); color: var(--text-muted);">
+                                                <th style="padding: 0.5rem 0.75rem;">Time</th>
+                                                <th style="padding: 0.5rem 0.75rem;">Route</th>
+                                                <th style="padding: 0.5rem 0.75rem;">Model</th>
+                                                <th style="padding: 0.5rem 0.75rem;">Status</th>
+                                                <th style="padding: 0.5rem 0.75rem;">Latency</th>
+                                                <th style="padding: 0.5rem 0.75rem;">Detail</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="route-telemetry-body">
+                                            <!-- Dynamically populated -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Tenant Instances Registry Card -->
                     <div class="widget-card glass-card">
                         <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">

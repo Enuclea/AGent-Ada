@@ -344,6 +344,8 @@ class RoutingEngine:
                             selected_route = route
                             break
                             
+                import time
+                start_time = time.time()
                 try:
                     print(f"[ROUTING] Attempting execution via route '{selected_route.name}' (Tier {priority_tier}) for model '{model}'")
                     res = await selected_route.execute(
@@ -353,10 +355,22 @@ class RoutingEngine:
                         timeout=timeout,
                         conversation_id=conversation_id
                     )
+                    latency = time.time() - start_time
                     if res is not None:
+                        try:
+                            from agent.observability.telemetry import log_route_telemetry
+                            log_route_telemetry(conversation_id or "system", selected_route.name, model, "success", latency=latency)
+                        except Exception:
+                            pass
                         return res
                     raise RuntimeError("Route returned None (completion empty or API error)")
                 except Exception as e:
+                    latency = time.time() - start_time
+                    try:
+                        from agent.observability.telemetry import log_route_telemetry
+                        log_route_telemetry(conversation_id or "system", selected_route.name, model, "failed", str(e), latency=latency)
+                    except Exception:
+                        pass
                     print(f"[ROUTING] Route '{selected_route.name}' failed: {e}")
                     last_error = e
                     tier_routes.remove(selected_route)
