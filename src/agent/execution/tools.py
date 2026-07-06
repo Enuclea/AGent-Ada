@@ -141,9 +141,12 @@ description: {description}
         if not script_filename:
             script_filename = "run.py"
         scripts_path = skill_path / "scripts"
-        scripts_path.mkdir(parents=True, exist_ok=True)
         
-        target_script = scripts_path / script_filename
+        target_script = (scripts_path / script_filename).resolve()
+        if not _is_safe_path(SKILLS_DIR, target_script):
+            return "Error: Directory traversal attempt in script_filename detected."
+            
+        scripts_path.mkdir(parents=True, exist_ok=True)
         with open(target_script, "w", encoding="utf-8") as f:
             f.write(script_content)
             
@@ -465,6 +468,48 @@ def view_repository_skill_code(skill_name: str) -> str:
                 
     return "\n".join(output)
 
+def _calculate_skill_hash(src_folder: Path) -> bytes:
+    import hashlib
+    hasher = hashlib.sha256()
+    file_paths = []
+    for root, dirs, files in os.walk(src_folder):
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for f in files:
+            if f != "signature.sig" and not f.startswith('.'):
+                file_paths.append(Path(root) / f)
+                
+    file_paths.sort(key=lambda p: p.relative_to(src_folder))
+    
+    for p in file_paths:
+        hasher.update(str(p.relative_to(src_folder)).encode('utf-8'))
+        try:
+            with open(p, "rb") as f:
+                while chunk := f.read(8192):
+                    hasher.update(chunk)
+        except Exception:
+            pass
+            
+    return hasher.digest()
+
+def _verify_skill_signature(src_folder: Path) -> bool:
+    sig_path = src_folder / "signature.sig"
+    if not sig_path.exists():
+        return False
+        
+    try:
+        with open(sig_path, "rb") as f:
+            signature = f.read()
+            
+        skill_hash = _calculate_skill_hash(src_folder)
+        
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        pub_key_bytes = bytes.fromhex("4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+        pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_key_bytes)
+        pub_key.verify(signature, skill_hash)
+        return True
+    except Exception:
+        return False
+
 def install_repository_skill(skill_name: str) -> str:
     """Downloads/copies a skill from the external repositories to the local active skills directory.
     
@@ -478,20 +523,24 @@ def install_repository_skill(skill_name: str) -> str:
         return f"Error: Skill '{skill_name}' not found in repositories."
         
     info = repo_skills[skill_name]
-    src_folder = info["path"]
+    src_folder = Path(info["path"])
     dest_folder = SKILLS_DIR / skill_name
     
+    # CRITICAL: Validate path containment BEFORE any folder creation or deletion
     if not _is_safe_path(SKILLS_DIR, dest_folder):
         return "Error: Directory traversal attempt detected."
         
+    # CRITICAL: Cryptographic signature verification
+    if not _verify_skill_signature(src_folder):
+        return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
+        
     import sys
-    if os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "1":
-        if sys.stdin.isatty():
-            ans = input(f"Explicit human confirmation required to install skill '{skill_name}'. Proceed? [y/N]: ")
-            if ans.strip().lower() not in ("y", "yes"):
-                return "Error: Skill installation cancelled by user."
-        else:
-            return f"Error: Explicit out-of-band human confirmation required to install skill '{skill_name}'."
+    if sys.stdin.isatty():
+        ans = input(f"Explicit human confirmation required to install skill '{skill_name}'. Proceed? [y/N]: ")
+        if ans.strip().lower() not in ("y", "yes"):
+            return "Error: Skill installation cancelled by user."
+    else:
+        return f"Error: Explicit out-of-band human confirmation required to install skill '{skill_name}'."
             
     import shutil
     try:
@@ -917,25 +966,21 @@ async def run_command(command: str) -> str:
     skills_dir_str = str(SKILLS_DIR.resolve())
     workspace_skills_dir_str = str(WORKSPACE_SKILLS_DIR.resolve())
     
-    references_skills = (
-        ".agent/skills" in command or 
-        ".agents/skills" in command or 
-        skills_dir_str in command or 
-        workspace_skills_dir_str in command
-    )
-    
-    env = None
-    if references_skills:
-        env = dict(os.environ)
-        keys_to_scrub = ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
-        extra_keys = os.environ.get("ADDITIONAL_SENSITIVE_KEYS")
-        if extra_keys:
-            keys_to_scrub.extend([k.strip() for k in extra_keys.split(",") if k.strip()])
-            
-        for key in keys_to_scrub:
-            env.pop(key, None)
-            
-        command = _sandbox_command_if_possible(command)
+    # CRITICAL: Always scrub environment variables for all executions to prevent token leakage
+    env = dict(os.environ)
+    keys_to_scrub = [
+        "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", 
+        "DISCORD_BOT_TOKEN", "MAGICA_API", "JULES_API", "1MIN_AI_API"
+    ]
+    extra_keys = os.environ.get("ADDITIONAL_SENSITIVE_KEYS")
+    if extra_keys:
+        keys_to_scrub.extend([k.strip() for k in extra_keys.split(",") if k.strip()])
+        
+    for key in keys_to_scrub:
+        env.pop(key, None)
+        
+    # CRITICAL: Always apply sandbox constraints to all executions by default
+    command = _sandbox_command_if_possible(command)
             
     # Print real-time progress update to stdout so it streams to the client
     print(f"\n⚙️ Running shell command: {command}...")

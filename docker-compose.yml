@@ -24,6 +24,8 @@ services:
       - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
       - /home/dan/.local/bin/agy:/app/.local/bin/agy
+      - /home/dan/AGent-Ada:/home/dan/AGent-Ada:rw
+      - /home/dan/AGent:/home/dan/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -59,6 +61,8 @@ services:
       - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
       - /home/dan/.local/bin/agy:/app/.local/bin/agy
+      - /home/dan/AGent-Ada:/home/dan/AGent-Ada:rw
+      - /home/dan/AGent:/home/dan/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -92,6 +96,8 @@ services:
       - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
       - /home/dan/.local/bin/agy:/app/.local/bin/agy
+      - /home/dan/AGent-Ada:/home/dan/AGent-Ada:rw
+      - /home/dan/AGent:/home/dan/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -124,6 +130,8 @@ services:
       - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
       - /home/dan/.local/bin/agy:/app/.local/bin/agy
+      - /home/dan/AGent-Ada:/home/dan/AGent-Ada:rw
+      - /home/dan/AGent:/home/dan/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app

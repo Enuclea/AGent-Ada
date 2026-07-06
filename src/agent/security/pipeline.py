@@ -32,8 +32,53 @@ class SecurityPipeline:
         if not prompt:
             return ""
         
+        # Normalize input to prevent obfuscation bypasses
+        # 1. Strip zero-width spaces and control characters
+        normalized = re.sub(r'[\u200b-\u200d\ufeff]', '', prompt)
+        
+        # 2. Normalize whitespace
+        normalized = re.sub(r'\s+', ' ', normalized).strip().lower()
+        
+        # 3. Check for Base64 encoded payloads that might decode to injections
+        b64_pat = r'[a-zA-Z0-9+/]{16,}={0,2}'
+        for match in re.finditer(b64_pat, normalized):
+            import base64
+            try:
+                decoded = base64.b64decode(match.group(0)).decode('utf-8', errors='ignore')
+                decoded_norm = re.sub(r'\s+', ' ', decoded).strip().lower()
+                if any(kw in decoded_norm for kw in ["ignore", "system override", "bypass", "instruction", "forget your"]):
+                    return "[injection attempt blocked (base64 obfuscated)]"
+            except Exception:
+                pass
+
+        # 4. Check semantic keywords & override phrases
+        semantic_patterns = [
+            r"ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions",
+            r"disregard\s+(?:all\s+)?(?:previous|prior)\s+(?:instructions|directives|rules|guidelines)",
+            r"system\s+override",
+            r"bypass\s+(?:all\s+)?restrictions",
+            r"forget\s+(?:your\s+)?(?:rules|instructions|directives|guidelines|identity|name)",
+            r"you\s+are\s+now\s+a\s+different\s+agent",
+            r"jailbreak",
+            r"developer\s+mode",
+            r"dan\s+mode",
+            r"do\s+anything\s+now",
+            r"override\s+system\s+prompt"
+        ]
+        
+        for pattern in semantic_patterns:
+            if re.search(pattern, normalized):
+                return "[injection attempt blocked]"
+        
         cleaned = prompt
-        for pattern in INJECTION_PATTERNS:
+        # Extra: check the expanded patterns on the original prompt
+        extended_patterns = INJECTION_PATTERNS + [
+            r"(?i)disregard\s+instructions",
+            r"(?i)jailbreak",
+            r"(?i)developer\s+mode",
+            r"(?i)dan\s+mode"
+        ]
+        for pattern in extended_patterns:
             cleaned = re.sub(pattern, "[injection attempt blocked]", cleaned)
         
         return cleaned

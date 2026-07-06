@@ -158,6 +158,9 @@ def apply_landlock(workspace_dir: str) -> None:
         res = libc.syscall(SYS_LANDLOCK_ADD_RULE, ruleset_fd, LANDLOCK_RULE_PATH_BENEATH, ctypes.byref(rule), 0)
         os.close(fd)
         if res < 0:
+            err = ctypes.get_errno()
+            if path in [workspace_dir, "/tmp"]:
+                raise OSError(err, f"Failed to add critical Landlock rule for {path}: {os.strerror(err)}")
             pass  # Ignore non-critical rule failure
 
     # Set no_new_privs (required to restrict self without CAP_SYS_ADMIN privileges)
