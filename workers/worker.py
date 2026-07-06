@@ -39,7 +39,6 @@ WORKER_ID = os.environ.get("WORKER_ID", f"worker-{socket.gethostname()}")
 HUB_URL = os.environ.get("HUB_URL", "http://localhost:8050").rstrip("/")
 API_KEY = os.environ.get("WORKER_API_KEY", "")
 WORKER_PORT = int(os.environ.get("WORKER_PORT", "8051"))
-WORKER_HOST = os.environ.get("WORKER_HOST", "")
 CAPABILITIES = [c.strip() for c in os.environ.get("WORKER_CAPABILITIES", "heavy_compute").split(",") if c.strip()]
 MAX_CONCURRENT = int(os.environ.get("WORKER_MAX_CONCURRENT", "3"))
 
@@ -114,10 +113,9 @@ async def _register_with_hub():
     caps = list(CAPABILITIES)
     if ollama_models and "ollama" not in caps:
         caps.append("ollama")
-    local_ip = WORKER_HOST or _get_local_ip()
     manifest = {
         "worker_id": WORKER_ID,
-        "host": f"{local_ip}:{WORKER_PORT}",
+        "host": f"{_get_local_ip()}:{WORKER_PORT}",
         "capabilities": caps,
         "platform": platform.system().lower(),
         "python_version": platform.python_version(),
@@ -151,6 +149,9 @@ async def _register_with_hub():
 
 def _get_local_ip() -> str:
     """Best-effort local IP detection for registration."""
+    env_ip = os.environ.get("WORKER_IP")
+    if env_ip:
+        return env_ip
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -159,6 +160,7 @@ def _get_local_ip() -> str:
         return ip
     except Exception:
         return "127.0.0.1"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

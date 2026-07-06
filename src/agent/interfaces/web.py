@@ -1193,6 +1193,30 @@ async def cancel_session(session_id: str):
 async def health_endpoint():
     return {"status": "healthy"}
 
+def _get_zerotier_ips() -> list[str]:
+    import socket
+    import fcntl
+    import struct
+    ips = []
+    try:
+        for _, name in socket.if_nameindex():
+            if name.startswith("zt"):
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    ip = socket.inet_ntoa(fcntl.ioctl(
+                        s.fileno(),
+                        0x8915,  # SIOCGIFADDR
+                        struct.pack('256s', name[:15].encode('utf-8'))
+                    )[20:24])
+                    ips.append(ip)
+                except Exception:
+                    pass
+                finally:
+                    s.close()
+    except Exception:
+        pass
+    return ips
+
 @app.get("/api/status")
 async def status_endpoint(session_id: Optional[str] = None):
     global active_agents
@@ -1214,8 +1238,12 @@ async def status_endpoint(session_id: Optional[str] = None):
         "model": session_data.get("model", "gemini-3.5-flash"),
         "workspace": os.getcwd(),
         "session_id": agent.conversation_id,
-        "skills": skills_list
+        "skills": skills_list,
+        "network": {
+            "zerotier_ips": _get_zerotier_ips()
+        }
     }
+
 
 @app.get("/api/skills")
 async def get_skills_endpoint():
