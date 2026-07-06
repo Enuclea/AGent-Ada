@@ -1,10 +1,10 @@
 <!-- markdownlint-disable MD013 MD033 -->
 # AGent-Ada: Task & Agent Orchestration Harness
 
-[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://python.org)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/maturity-production--grade-success.svg)](https://github.com/enuclea/agent-ada)
-[![Engine](https://img.shields.io/badge/integration-Google%20AntiGravity-orange.svg)](https://github.com/google/antigravity)
+[![Stage](https://img.shields.io/badge/maturity-production--grade-success.svg)](https://github.com/Enuclea/AGent-Ada)
+[![Engine](https://img.shields.io/badge/integration-Google%20AntiGravity-orange.svg)](https://github.com/google-antigravity/antigravity)
 
 **AGent-Ada** is a production-grade, extensible AI orchestration engine built on top of Google AntiGravity. It delivers intelligent model routing with cost-aware failover, multi-agent delegation, background task orchestration, and deep security controls—all while remaining completely **keyless** using your existing `agy` CLI configurations.
 
@@ -30,8 +30,7 @@ Get AGent-Ada running locally in under two minutes:
    ```
 
 2. **Configure Environment**:
-
-   Create a `.env` file in the root workspace directory (see [Setup](#setup) for details):
+   Copy `.env.example` to `.env` in the root workspace directory (see [Setup](#setup) for details):
 
    ```env
    GEMINI_API_KEY="your-gemini-developer-key"
@@ -50,7 +49,7 @@ Get AGent-Ada running locally in under two minutes:
 
 ### 1. Extensible Keyless Agent Loop
 
-The core harness is built around an asynchronous, non-blocking agent loop ([agent_loop.py](file:///home/dan/AGent-Ada/src/agent/core/agent_loop.py)) that manages:
+The core harness is built around an asynchronous, non-blocking agent loop ([agent_loop.py](src/agent/core/agent_loop.py)) that manages:
 
 * **Sequential Task Execution**: Complex instructions are decomposed into structured multi-step plans.
 * **Background Subagent Spawning**: Spawns concurrent subagents to execute long-running tasks in the background without blocking the main session thread.
@@ -75,7 +74,7 @@ All outgoing communications can be funneled through a thread-safe, centralized A
 
 ### 4. Input & Output Security Pipeline
 
-To protect your agents and system, all messages pass through an inline security sanitization pipeline ([pipeline.py](file:///home/dan/AGent-Ada/src/agent/security/pipeline.py)):
+To protect your agents and system, all messages pass through an inline security sanitization pipeline ([pipeline.py](src/agent/security/pipeline.py)):
 
 * **Input Sanitization**: Blocks prompt injection attempts, malicious command escapes, and unsafe path traversals.
 * **Output Redaction**: Automatically scrubs and redacts API keys, passwords, and sensitive environment secrets before responses are written or sent.
@@ -126,13 +125,13 @@ graph TD
 
 AGent-Ada implements a robust, multi-tier execution strategy to ensure continuous availability even during frontier API degradation:
 
-1. **Intelligent Routing Priority**: When a prompt is submitted, the [RoutingEngine](file:///home/dan/AGent-Ada/src/agent/core/routing.py) filters and orders active routes according to environment flags (e.g., `ROUTE_AGY_STATUS="primary"`, `ROUTE_GROK_STATUS="secondary"`).
+1. **Intelligent Routing Priority**: When a prompt is submitted, the [RoutingEngine](src/agent/core/routing.py) filters and orders active routes according to environment flags (e.g., `ROUTE_AGY_STATUS="primary"`, `ROUTE_GROK_STATUS="secondary"`).
 2. **Outage Detection & Circuit Breaker**: If a primary route (e.g., `agy` or a custom client route) raises a connection error or times out, the engine catches the exception and immediately fails over to the next configured fallback in the pipeline.
 3. **Background Health Check Tasks**: Upon a primary route failure, the system automatically spawns a background health checker (`check_primary_route_health`). This task sends periodic, non-blocking check prompts (every 60 seconds) to determine when the primary API recovers. Once recovery is verified, it resets the routing state.
 4. **Interactive vs. Scheduled Execution**: Scheduled tasks can be restricted to low-cost or offline routes (such as Ollama), while user-facing interactive queries are routed with higher priority to low-latency cloud routes.
 
 > [!NOTE]
-> For implementation details and verification of the model failover sequence under simulated network outages, refer to the detailed [Failover Plan Doc](file:///home/dan/AGent-Ada/docs/failover_plan.md) and [test_failover.py](file:///home/dan/AGent-Ada/tests/test_failover.py).
+> For implementation details and verification of the model failover sequence under simulated network outages, refer to the detailed [Failover Plan Doc](docs/failover_plan.md) and [test_failover.py](tests/test_failover.py).
 
 ---
 
@@ -239,7 +238,7 @@ AGent-Ada comes pre-equipped with an observability suite built for operators:
 
 * **Detailed Telemetry Tables**: The engine continuously records execution state changes in `telemetry_logs` and token usage metrics in `token_telemetry`.
 * **Outbound API Auditing**: Outbound requests funneled through the API Broker are logged to the `api_call_logs` table, tracking route endpoints, response status codes, latencies, and network retry statistics.
-* **Quiet Observer & PubSub**: The [telemetry.py](file:///home/dan/AGent-Ada/src/agent/observability/telemetry.py) module supports publish-subscribe notification loops, feeding task completions and service alerts directly into Discord frontends or external logging endpoints.
+* **Quiet Observer & PubSub**: The [telemetry.py](src/agent/observability/telemetry.py) module supports publish-subscribe notification loops, feeding task completions and service alerts directly into Discord frontends or external logging endpoints.
 
 ---
 
@@ -408,11 +407,11 @@ The following tables are created by Enuclea LLC extension plugins and are used f
 
 ## 🗺️ Roadmap & Upcoming Features
 
-* [ ] **Unified Plugin Marketplace**: Graphical registry to install, update,
+- [ ] **Unified Plugin Marketplace**: Graphical registry to install, update,
   and manage community-made extensions.
-* [ ] **Sandboxed WebAssembly (Wasm) Runtime**: Execute third-party custom
+- [ ] **Sandboxed WebAssembly (Wasm) Runtime**: Execute third-party custom
   routes in a highly restricted sandbox instead of raw Python `importlib`.
-* [ ] **Advanced Agent Evaluation Suite**: Automation pipelines to test model
+- [ ] **Advanced Agent Evaluation Suite**: Automation pipelines to test model
   output variations against regression targets.
-* [ ] **Expanded Built-in Providers**: Standard routes for DeepSeek-R1,
+- [ ] **Expanded Built-in Providers**: Standard routes for DeepSeek-R1,
   Anthropic Direct APIs, and local Llama.cpp servers.
