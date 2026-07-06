@@ -14,7 +14,7 @@ class AgyRoute(BaseRoute):
 
     @property
     def default_priority(self) -> int:
-        return 10
+        return 5
 
     @property
     def supported_models(self) -> List[str]:

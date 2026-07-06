@@ -6,6 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ada-core
+    user: "1000:1000"
     restart: unless-stopped
     network_mode: "host"
     pid: "host"
@@ -19,12 +20,14 @@ services:
       - ./src/agent/static:/app/src/agent/static
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
-      - /home/dan/.gemini/config:/app/.gemini/config
+      - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
+      - /home/dan/.local/bin/agy:/app/.local/bin/agy
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
       - AGENT_DB_PATH=/data/history.db
+      - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -36,6 +39,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ada-config
+    user: "1000:1000"
     restart: unless-stopped
     network_mode: "host"
     pid: "host"
@@ -50,14 +54,16 @@ services:
       - ./src/agent/static:/app/src/agent/static
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
-      - /home/dan/.gemini/config:/app/.gemini/config
+      - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
+      - /home/dan/.local/bin/agy:/app/.local/bin/agy
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
       - AGENT_DB_PATH=/data/history.db
       - CORE_API_URL=http://127.0.0.1:8000
       - HOST_COMMAND_CHANNEL_IP=127.0.0.1
+      - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
     depends_on:
       - ada-core
 
@@ -66,6 +72,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ada-bot
+    user: "1000:1000"
     restart: unless-stopped
     network_mode: "host"
     pid: "host"
@@ -79,13 +86,15 @@ services:
       - ./discord:/app/discord
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
-      - /home/dan/.gemini/config:/app/.gemini/config
+      - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
+      - /home/dan/.local/bin/agy:/app/.local/bin/agy
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
       - AGENT_DB_PATH=/data/history.db
       - AGENT_API_BASE=http://127.0.0.1:8000
       - RUN_DISCORD_BOT=true
+      - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
     depends_on:
       - ada-core

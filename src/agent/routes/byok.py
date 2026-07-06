@@ -34,8 +34,8 @@ class BYOKRoute(BaseRoute):
 
     @property
     def default_priority(self) -> int:
-        # High execution priority (runs early alongside agy)
-        return 5
+        # Standard API fallback priority
+        return 10
 
     @property
     def supported_models(self) -> List[str]:

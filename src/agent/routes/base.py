@@ -8,10 +8,10 @@ from typing import List, Optional
 
 def get_harness_path() -> Optional[str]:
     """Resolves the path to the system-wide agy binary."""
-    if os.path.exists("/.dockerenv"):
-        return None
     if "ANTIGRAVITY_HARNESS_PATH" in os.environ:
         return os.environ["ANTIGRAVITY_HARNESS_PATH"]
+    if os.path.exists("/.dockerenv"):
+        return None
     
     # Check system PATH for 'agy'
     agy_path = shutil.which("agy")
