@@ -155,8 +155,9 @@ class ToolRegistry:
         profile_key = agent_profile.lower().replace("-", "_")
 
         # 1. Check workspace customizations root (.agents/agents/<profile_name>/system_instructions.txt)
+        proj_root = self._get_workspace_root()
         for key in (agent_profile, profile_key):
-            workspace_agent_dir = Path(os.getcwd()) / ".agents" / "agents" / key
+            workspace_agent_dir = proj_root / ".agents" / "agents" / key
             inst_file = workspace_agent_dir / "system_instructions.txt"
             if inst_file.exists() and inst_file.is_file():
                 try:
@@ -166,7 +167,6 @@ class ToolRegistry:
                     pass
 
         # 2. Check built-in profiles
-        proj_root = self._get_workspace_root()
         builtins = {}
 
         # Grace Timekeeper
@@ -192,21 +192,6 @@ class ToolRegistry:
             "Directly execute this script using python to perform the post-mortem analysis. Do not perform generic searches.\n"
             "Report the post-mortem summary back to the parent agent."
         )
-
-        # Solar Monitor
-        if (proj_root / "solar").exists() or (proj_root.parent / "solar").exists():
-            solar_path = proj_root / "solar" / "snapshot.py"
-            if not solar_path.exists():
-                solar_path = proj_root.parent / "solar" / "snapshot.py"
-            solar_venv_py = solar_path.parent / ".venv" / "bin" / "python3"
-            if not solar_venv_py.exists():
-                solar_venv_py = "python3"
-            builtins["solar_monitor"] = (
-                "You are the Solar Monitor Specialist agent. Your primary role is to read real-time solar generation, grid, and battery metrics.\n"
-                f"The solar tool is located at '{solar_path}' in the system.\n"
-                f"Directly execute '{solar_venv_py} {solar_path}' using the run_command tool to get power/generation stats. Do not perform generic codebase searches or bot inspections.\n"
-                "Report the summarized power metrics back to the parent agent."
-            )
 
         # Lacie (Software Architect)
         builtins["lacie"] = (
@@ -357,15 +342,27 @@ class ToolRegistry:
             "delegation_triggers": ["post-mortem", "error analysis", "evaluate errors", "meta evaluation", "log metrics"]
         }
 
-        # Conditional specialists (only present if their workspace resources exist)
-        if (proj_root / "solar").exists() or (proj_root.parent / "solar").exists():
-            configs["solar_monitor"] = {
-                "title": "Solar & Energy Monitor",
-                "domain": "Solar generation, grid power, battery metrics",
-                "discord_channel": None,
-                "max_subagents": 0,
-                "delegation_triggers": ["solar", "battery", "grid power", "power generation", "solar panel"]
-            }
+        # 3. Dynamic custom specialists from workspace custom directory (.agents/agents/<profile_name>/config.json)
+        workspace_agents_dir = proj_root / ".agents" / "agents"
+        if workspace_agents_dir.exists() and workspace_agents_dir.is_dir():
+            import json
+            for folder in workspace_agents_dir.iterdir():
+                if folder.is_dir():
+                    config_file = folder / "config.json"
+                    if config_file.exists() and config_file.is_file():
+                        try:
+                            with open(config_file, "r", encoding="utf-8") as f:
+                                cfg_data = json.load(f)
+                            profile_key = folder.name.lower().replace("-", "_")
+                            # Add standard keys if missing
+                            cfg_data.setdefault("title", folder.name.replace("_", " ").title())
+                            cfg_data.setdefault("domain", "Custom specialist task execution")
+                            cfg_data.setdefault("discord_channel", None)
+                            cfg_data.setdefault("max_subagents", 0)
+                            cfg_data.setdefault("delegation_triggers", [])
+                            configs[profile_key] = cfg_data
+                        except Exception as e:
+                            print(f"[REGISTRY] Failed to load custom specialist config for '{folder.name}': {e}")
 
         self._configs_cache = configs
         return configs

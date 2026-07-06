@@ -2134,9 +2134,23 @@ async def fork_session_endpoint(req: ForkRequest):
 
     return {"status": "success", "new_session_id": new_session_id}
 
+# Registry for custom scheduled task handlers (registered by plugins)
+# Keys are task names, values are async callables: handler(prompt: str) -> None
+_custom_scheduled_task_handlers = {}
+
+def register_scheduled_task_handler(name: str, handler):
+    _custom_scheduled_task_handlers[name] = handler
+
 # Background scheduler execution
 async def execute_scheduled_task(name: str, prompt: str):
     """Executes a scheduled task using an isolated agent instance (not the shared default)."""
+    if name in _custom_scheduled_task_handlers:
+        try:
+            await _custom_scheduled_task_handlers[name](prompt)
+        except Exception as e:
+            print(f"[Scheduled Task: {name}] Custom handler error: {e}")
+        return
+
     if name == "Meta-Evaluation":
         try:
             from agent.evaluation.meta_evaluation import run_meta_evaluation
@@ -2167,7 +2181,43 @@ async def execute_scheduled_task(name: str, prompt: str):
             print(f"[Scheduled Task: {name}] Error: {e}")
             return
 
+    if name == "Gmail Email Check":
+        try:
+            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable or "python3", "scratch/run_gmail_sync.py",
+                cwd=proj_root,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+            stdout_str = stdout.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            
+            output = stdout_str
+            if stderr_str:
+                output += f"\n\nStderr Errors:\n{stderr_str}"
+            
+            has_no_new_mail = "No new emails detected since last check" in stdout_str or "no new emails detected" in stdout_str.lower()
+            is_pubsub_active = "Pub/Sub listener is active" in stdout_str
+            
+            if has_no_new_mail or is_pubsub_active:
+                print(f"[Scheduled Task: {name}] Quiet check: {stdout_str}")
+                return
 
+            conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+            memory.log_conversation_step(conversation_id, "assistant", output or "Gmail check completed with no output.")
+            print(f"[Scheduled Task: {name}] Executed directly via subprocess and logged. Return code: {proc.returncode}")
+            return
+        except Exception as e:
+            err_msg = f"Failed to execute Gmail check script: {e}"
+            print(f"[Scheduled Task: {name}] Error: {err_msg}")
+            # If it failed to run, we log it so the failure is visible
+            conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+            memory.log_conversation_step(conversation_id, "assistant", err_msg)
+            return
 
     if name == "Grace Timekeeper":
         conversation_id = f"sched-grace-timekeeper-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
@@ -2197,9 +2247,62 @@ async def execute_scheduled_task(name: str, prompt: str):
             memory.log_conversation_step(conversation_id, "assistant", err_msg)
             return
 
+    if name == "Stock Game Auto Check":
+        conversation_id = f"sched-stock-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+        try:
+            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable or "python3", "stock_game/strategy.py",
+                cwd=proj_root,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+            stdout_str = stdout.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            
+            output = stdout_str
+            if stderr_str:
+                output += f"\n\nStderr Errors:\n{stderr_str}"
+            
+            memory.log_conversation_step(conversation_id, "assistant", output or "Stock game auto-check completed with no output.")
+            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
+            return
+        except Exception as e:
+            err_msg = f"Failed to execute Stock Game Auto Check script: {e}"
+            print(f"[Scheduled Task: {name}] Error: {err_msg}")
+            memory.log_conversation_step(conversation_id, "assistant", err_msg)
+            return
 
-
-
+    if name == "Public Code Roundtable":
+        conversation_id = f"sched-public-code-roundtable-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+        try:
+            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable or "python3", "/home/dan/.agent/skills/public-code-roundtable/scripts/roundtable.py",
+                "--conversation-id", conversation_id,
+                cwd=proj_root,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=360.0)
+            stdout_str = stdout.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+            
+            output = stdout_str
+            if stderr_str:
+                output += f"\n\nStderr Errors:\n{stderr_str}"
+                
+            memory.log_conversation_step(conversation_id, "assistant", output or "Roundtable completed with no output.")
+            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
+            return
+        except Exception as e:
+            err_msg = f"Failed to execute Public Code Roundtable script: {e}"
+            print(f"[Scheduled Task: {name}] Error: {err_msg}")
+            memory.log_conversation_step(conversation_id, "assistant", err_msg)
+            return
 
     # Generic scheduled tasks: use a dedicated, isolated KeylessAgyAgent
     # This prevents cross-contamination of conversation context between background tasks

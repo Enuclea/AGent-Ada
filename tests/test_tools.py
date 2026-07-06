@@ -464,7 +464,13 @@ def test_run_command_environment_scrubbing():
             assert "SAFE_VAR" in passed_env
             assert passed_env["SAFE_VAR"] == "keep-me"
             
-            for key in ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]:
+            expected_scrubbed = ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+            import os
+            extra_keys = os.environ.get("ADDITIONAL_SENSITIVE_KEYS")
+            if extra_keys:
+                expected_scrubbed.extend([k.strip() for k in extra_keys.split(",") if k.strip()])
+                
+            for key in expected_scrubbed:
                 assert key not in passed_env
                 
     asyncio.run(run_test())

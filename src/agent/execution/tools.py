@@ -928,6 +928,10 @@ async def run_command(command: str) -> str:
     if references_skills:
         env = dict(os.environ)
         keys_to_scrub = ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+        extra_keys = os.environ.get("ADDITIONAL_SENSITIVE_KEYS")
+        if extra_keys:
+            keys_to_scrub.extend([k.strip() for k in extra_keys.split(",") if k.strip()])
+            
         for key in keys_to_scrub:
             env.pop(key, None)
             

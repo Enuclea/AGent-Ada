@@ -43,6 +43,10 @@ def sanitize_output(response: str) -> str:
         "CLAUDE_API_KEY",
         "GEMINI_API_KEY"
     ]
+    extra_keys = os.environ.get("ADDITIONAL_SENSITIVE_KEYS")
+    if extra_keys:
+        sensitive_keys.extend([k.strip() for k in extra_keys.split(",") if k.strip()])
+        
     for key in sensitive_keys:
         val = os.environ.get(key)
         if val and len(val) > 6:
