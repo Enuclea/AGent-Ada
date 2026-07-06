@@ -54,3 +54,10 @@ dist/
 
 # Discord Backups
 discord/channel_backups/
+
+# Scratch temporary files and environments
+scratch/.local/
+scratch/bin/
+scratch/snapshots/
+scratch/.cache/
+
