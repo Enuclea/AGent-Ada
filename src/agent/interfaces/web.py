@@ -2195,9 +2195,6 @@ async def execute_scheduled_task(name: str, prompt: str):
             print(f"[Scheduled Task: {name}] Error: {e}")
             return
 
-    if name == "Gmail Email Check":
-        print(f"[Scheduled Task: {name}] Execution is disabled.")
-        return
 
     if name == "Grace Timekeeper":
         conversation_id = f"sched-grace-timekeeper-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"

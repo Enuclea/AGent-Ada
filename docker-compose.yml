@@ -20,6 +20,7 @@ services:
       - ./src/agent/static:/app/src/agent/static
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
+      - ./scratch:/app/scratch
       - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
       - /home/dan/.local/bin/agy:/app/.local/bin/agy
@@ -54,6 +55,7 @@ services:
       - ./src/agent/static:/app/src/agent/static
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
+      - ./scratch:/app/scratch
       - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
       - /home/dan/.local/bin/agy:/app/.local/bin/agy
@@ -86,6 +88,7 @@ services:
       - ./discord:/app/discord
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
+      - ./scratch:/app/scratch
       - /home/dan/.gemini:/app/.gemini
       - /home/dan/.agent:/app/.agent
       - /home/dan/.local/bin/agy:/app/.local/bin/agy
