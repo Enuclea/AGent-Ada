@@ -101,3 +101,33 @@ services:
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
     depends_on:
       - ada-core
+
+  ada-pubsub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ada-pubsub
+    user: "1000:1000"
+    restart: unless-stopped
+    network_mode: "host"
+    pid: "host"
+    command: ["python", "src/agent/observability/pubsub_listener.py"]
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+      - ./config:/app/config
+      - ./plugins:/app/plugins
+      - ./.agents:/app/.agents
+      - ./enuclea:/app/enuclea
+      - ./scratch:/app/scratch
+      - /home/dan/.gemini:/app/.gemini
+      - /home/dan/.agent:/app/.agent
+      - /home/dan/.local/bin/agy:/app/.local/bin/agy
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HOME=/app
+      - AGENT_DB_PATH=/data/history.db
+      - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
+    depends_on:
+      - ada-core
