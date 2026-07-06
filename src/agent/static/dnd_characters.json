@@ -1,52 +1,52 @@
 {
   "characters": [
     {
-      "name": "Eldrin",
-      "stats": {
-        "Strength": 15,
-        "Dexterity": 16,
-        "Constitution": 6,
-        "Intelligence": 16,
-        "Wisdom": 17,
-        "Charisma": 12
-      },
-      "suggested_class": "Cleric"
-    },
-    {
-      "name": "Alaric",
-      "stats": {
-        "Strength": 12,
-        "Dexterity": 11,
-        "Constitution": 14,
-        "Intelligence": 6,
-        "Wisdom": 15,
-        "Charisma": 18
-      },
-      "suggested_class": "Bard"
-    },
-    {
       "name": "Aurelia",
       "stats": {
-        "Strength": 11,
-        "Dexterity": 9,
-        "Constitution": 17,
-        "Intelligence": 16,
-        "Wisdom": 14,
-        "Charisma": 12
+        "Strength": 16,
+        "Dexterity": 14,
+        "Constitution": 12,
+        "Intelligence": 17,
+        "Wisdom": 11,
+        "Charisma": 11
       },
-      "suggested_class": "Barbarian"
+      "suggested_class": "Wizard"
     },
     {
-      "name": "Eowyn",
+      "name": "Lyra",
       "stats": {
-        "Strength": 17,
-        "Dexterity": 13,
-        "Constitution": 10,
-        "Intelligence": 11,
-        "Wisdom": 15,
-        "Charisma": 8
+        "Strength": 12,
+        "Dexterity": 16,
+        "Constitution": 6,
+        "Intelligence": 14,
+        "Wisdom": 11,
+        "Charisma": 13
       },
-      "suggested_class": "Fighter"
+      "suggested_class": "Rogue"
+    },
+    {
+      "name": "Maeve",
+      "stats": {
+        "Strength": 11,
+        "Dexterity": 14,
+        "Constitution": 12,
+        "Intelligence": 16,
+        "Wisdom": 9,
+        "Charisma": 13
+      },
+      "suggested_class": "Wizard"
+    },
+    {
+      "name": "Thorne",
+      "stats": {
+        "Strength": 14,
+        "Dexterity": 11,
+        "Constitution": 12,
+        "Intelligence": 15,
+        "Wisdom": 6,
+        "Charisma": 11
+      },
+      "suggested_class": "Wizard"
     }
   ]
 }

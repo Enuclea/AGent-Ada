@@ -2224,62 +2224,6 @@ async def execute_scheduled_task(name: str, prompt: str):
             memory.log_conversation_step(conversation_id, "assistant", err_msg)
             return
 
-    if name == "Stock Game Auto Check":
-        conversation_id = f"sched-stock-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-        try:
-            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable or "python3", "stock_game/strategy.py",
-                cwd=proj_root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
-            stdout_str = stdout.decode("utf-8", errors="replace").strip()
-            stderr_str = stderr.decode("utf-8", errors="replace").strip()
-            
-            output = stdout_str
-            if stderr_str:
-                output += f"\n\nStderr Errors:\n{stderr_str}"
-            
-            memory.log_conversation_step(conversation_id, "assistant", output or "Stock game auto-check completed with no output.")
-            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
-            return
-        except Exception as e:
-            err_msg = f"Failed to execute Stock Game Auto Check script: {e}"
-            print(f"[Scheduled Task: {name}] Error: {err_msg}")
-            memory.log_conversation_step(conversation_id, "assistant", err_msg)
-            return
-
-    if name == "Public Code Roundtable":
-        conversation_id = f"sched-public-code-roundtable-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-        try:
-            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable or "python3", "/home/dan/.agent/skills/public-code-roundtable/scripts/roundtable.py",
-                "--conversation-id", conversation_id,
-                cwd=proj_root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=360.0)
-            stdout_str = stdout.decode("utf-8", errors="replace").strip()
-            stderr_str = stderr.decode("utf-8", errors="replace").strip()
-            
-            output = stdout_str
-            if stderr_str:
-                output += f"\n\nStderr Errors:\n{stderr_str}"
-                
-            memory.log_conversation_step(conversation_id, "assistant", output or "Roundtable completed with no output.")
-            print(f"[Scheduled Task: {name}] Executed directly via subprocess. Return code: {proc.returncode}")
-            return
-        except Exception as e:
-            err_msg = f"Failed to execute Public Code Roundtable script: {e}"
-            print(f"[Scheduled Task: {name}] Error: {err_msg}")
-            memory.log_conversation_step(conversation_id, "assistant", err_msg)
-            return
 
     # Generic scheduled tasks: use a dedicated, isolated KeylessAgyAgent
     # This prevents cross-contamination of conversation context between background tasks
