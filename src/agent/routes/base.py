@@ -10,8 +10,15 @@ def get_harness_path() -> Optional[str]:
     """Resolves the path to the system-wide agy binary."""
     if "ANTIGRAVITY_HARNESS_PATH" in os.environ:
         return os.environ["ANTIGRAVITY_HARNESS_PATH"]
+    
+    # Check default mounted paths even if inside Docker
+    docker_fallback = "/app/.local/bin/agy"
+    if os.path.exists(docker_fallback) and os.path.isfile(docker_fallback):
+        return docker_fallback
+
     if os.path.exists("/.dockerenv"):
         return None
+
     
     # Check system PATH for 'agy'
     agy_path = shutil.which("agy")

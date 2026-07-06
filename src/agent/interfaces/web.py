@@ -2932,7 +2932,10 @@ async def get_tenant_instances():
     
     ports_path = Path("/home/ada/public_ada_bot/ports.json")
     if not ports_path.exists():
+        ports_path = Path.home() / "AGent" / "scratch" / "public_ada_bot" / "ports.json"
+    if not ports_path.exists():
         ports_path = Path("/home/dan/AGent/scratch/public_ada_bot/ports.json")
+
         
     tenants = []
     if ports_path.exists():

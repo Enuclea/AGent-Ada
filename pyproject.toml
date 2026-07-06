@@ -1,30 +1,42 @@
-[project]
-name = "agent-ada"
-version = "0.1.0"
-description = "Ada Task Engine and dashboard binding with keyless AntiGravity CLI gateway"
-readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-    "fastapi>=0.110.0",
-    "uvicorn>=0.28.0",
-    "pydantic>=2.6.0",
-    "google-antigravity>=0.1.4",
-    "python-dotenv>=1.0.0",
-    "rich>=13.0.0",
-    "prompt-toolkit>=3.0.0",
-    "aiohttp>=3.9.0",
-    "pytest>=8.0.0",
-    "discord-py>=2.7.1",
-    "yt-dlp",
-]
-
-[project.scripts]
-ada = "agent.cli:main"
-
 [build-system]
 requires = ["setuptools>=61.0.0"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "agent"
+version = "0.1.0"
+description = "Hermes-style CLI wrapper around the Google AntiGravity SDK"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "google-antigravity",
+    "rich",
+    "prompt-toolkit",
+    "fastapi",
+    "uvicorn",
+    "discord-py>=2.7.1",
+    "aiohttp>=3.14.1",
+    "google-auth-oauthlib>=1.4.0",
+    "google-auth-httplib2>=0.4.0",
+    "google-api-python-client>=2.197.0",
+]
+
+[project.scripts]
+agent = "agent.cli:main"
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agent = ["static/*", "static/**/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
