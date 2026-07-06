@@ -40,6 +40,11 @@ def setup_module():
     finally:
         conn.close()
 
+def test_health_endpoint():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "healthy"}
+
 @patch("agent.web.get_or_create_agent")
 def test_status_endpoint(mock_get_agent):
     mock_agent = AsyncMock()

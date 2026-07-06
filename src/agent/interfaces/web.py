@@ -1204,6 +1204,10 @@ async def cancel_session(session_id: str):
         
     return {"status": "success", "message": "Execution stopped.", "cancelled_subagents": cancelled_subs}
 
+@app.get("/health")
+async def health_endpoint():
+    return {"status": "healthy"}
+
 @app.get("/api/status")
 async def status_endpoint(session_id: Optional[str] = None):
     global active_agents

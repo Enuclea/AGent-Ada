@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  agent-ada:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent-ada
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Persist local database files (bind local ./data to /data)
+      - ./data:/data
+      # Mount configuration keys (Google, Morgen, Discord, etc.)
+      - ./config:/app/config
+      # Mount custom plugins for hot-reloading capability
+      - ./plugins:/app/plugins
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Explicitly route the SQLite database file to the persistent volume mount
+      - AGENT_DB_PATH=/data/history.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
