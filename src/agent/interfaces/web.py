@@ -204,7 +204,9 @@ def discover_language_server():
         return None, None, []
     
     inodes = set()
+    owner_uid = None
     try:
+        owner_uid = os.stat(f"/proc/{pid}").st_uid
         fd_dir = f"/proc/{pid}/fd"
         for fd in os.listdir(fd_dir):
             link = os.readlink(os.path.join(fd_dir, fd))
@@ -224,7 +226,16 @@ def discover_language_server():
                 local_addr = parts[1]
                 state = parts[3]
                 inode = parts[9]
-                if state == "0A" and inode in inodes:  # 0A is LISTEN
+                socket_uid = int(parts[7])
+                
+                is_match = False
+                if state == "0A":  # LISTEN
+                    if inodes and inode in inodes:
+                        is_match = True
+                    elif not inodes and owner_uid is not None and socket_uid == owner_uid:
+                        is_match = True
+                        
+                if is_match:
                     ip_hex, port_hex = local_addr.split(":")
                     port = int(port_hex, 16)
                     if ip_hex == "0100007F" or ip_hex == "00000000":
