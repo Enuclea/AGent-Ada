@@ -61,3 +61,8 @@ scratch/bin/
 scratch/snapshots/
 scratch/.cache/
 
+# Binary executables
+**/agy
+**/grok
+
+
