@@ -8,6 +8,8 @@ from typing import List, Optional
 
 def get_harness_path() -> Optional[str]:
     """Resolves the path to the system-wide agy binary."""
+    if os.path.exists("/.dockerenv"):
+        return None
     if "ANTIGRAVITY_HARNESS_PATH" in os.environ:
         return os.environ["ANTIGRAVITY_HARNESS_PATH"]
     
@@ -112,6 +114,8 @@ class BaseRoute(ABC):
 
     def supports_model(self, model: str) -> bool:
         """Returns True if this route supports the given model name."""
+        if self.name.lower() == "agy" and get_harness_path() is None:
+            return False
         model_lower = model.lower()
         # Ollama models should only go to the Ollama route
         if model_lower.startswith("ollama/") and self.name.lower() != "ollama":

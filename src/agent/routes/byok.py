@@ -73,6 +73,11 @@ class BYOKRoute(BaseRoute):
         gemini_key = os.environ.get("GEMINI_API_KEY")
         if gemini_key and ("gemini" in model_lower or model_lower == "default"):
             actual_model = model if "gemini" in model_lower else "gemini-1.5-flash"
+            if "3.5" in actual_model or "2.5" in actual_model:
+                if "pro" in actual_model:
+                    actual_model = "gemini-1.5-pro"
+                else:
+                    actual_model = "gemini-1.5-flash"
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{actual_model}:generateContent?key={gemini_key}"
             headers = {"Content-Type": "application/json"}
             payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
