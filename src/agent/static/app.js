@@ -1229,8 +1229,8 @@ async function pollQuotas() {
                 const family = q.model_family;
                 const pct_5h = q.pct_5h;
                 const pct_weekly = q.pct_weekly;
-                const rem_pct_5h = Math.max(0, Math.min(100, pct_5h));
-                const rem_pct_weekly = Math.max(0, Math.min(100, pct_weekly));
+                const used_pct_5h = Math.max(0, Math.min(100, 100 - pct_5h));
+                const used_pct_weekly = Math.max(0, Math.min(100, 100 - pct_weekly));
                 
                 const prefix = (family === 'gemini') ? 'gemini' : 'claude';
                 
@@ -1268,12 +1268,12 @@ async function pollQuotas() {
                     }
                 }
                 
-                if (val5h) val5h.textContent = `${rem_pct_5h.toFixed(1)}%`;
-                if (valWeekly) valWeekly.textContent = `${rem_pct_weekly.toFixed(1)}%`;
+                if (val5h) val5h.textContent = `${used_pct_5h.toFixed(1)}%`;
+                if (valWeekly) valWeekly.textContent = `${used_pct_weekly.toFixed(1)}%`;
                 
                 if (bar5h) {
-                    bar5h.style.width = `${rem_pct_5h}%`;
-                    bar5h.className = 'quota-progress-bar ' + (rem_pct_5h < 20.0 ? 'low' : (rem_pct_5h < 50.0 ? 'medium' : 'high'));
+                    bar5h.style.width = `${used_pct_5h}%`;
+                    bar5h.className = 'quota-progress-bar ' + (used_pct_5h > 80.0 ? 'low' : (used_pct_5h > 50.0 ? 'medium' : 'high'));
                     if (q.reset_5h) {
                         bar5h.title = `Next Reset: ${new Date(q.reset_5h).toLocaleString()}`;
                     } else {
@@ -1281,8 +1281,8 @@ async function pollQuotas() {
                     }
                 }
                 if (barWeekly) {
-                    barWeekly.style.width = `${rem_pct_weekly}%`;
-                    barWeekly.className = 'quota-progress-bar ' + (rem_pct_weekly < 20.0 ? 'low' : (rem_pct_weekly < 50.0 ? 'medium' : 'high'));
+                    barWeekly.style.width = `${used_pct_weekly}%`;
+                    barWeekly.className = 'quota-progress-bar ' + (used_pct_weekly > 80.0 ? 'low' : (used_pct_weekly > 50.0 ? 'medium' : 'high'));
                     if (q.reset_weekly) {
                         barWeekly.title = `Next Reset: ${new Date(q.reset_weekly).toLocaleString()}`;
                     } else {
