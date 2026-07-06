@@ -4,6 +4,30 @@ This guide provides templates and instructions on how to securely pass authentic
 
 ---
 
+## 🔑 0. Initial Host Authentication Setup
+
+Before running the Docker containers, you must install and authenticate the `agy` and `grok` CLIs on your host machine:
+
+### 1. Install & Authenticate Google AntiGravity (`agy`)
+Ensure that the `agy` binary is on your host path and run the authentication flow:
+```bash
+# Log in to Google Cloud application credentials (reused by agy keyless)
+gcloud auth application-default login
+```
+Verify the local CLI run on the host:
+```bash
+agy -p "Test completion" --model gemini
+```
+
+### 2. Install & Authenticate xAI Grok CLI (`grok`)
+Ensure that `grok` is installed and run its authentication command:
+```bash
+grok auth login
+```
+Verify that `~/.grok/auth.json` was created successfully on the host.
+
+---
+
 ## 🔑 1. xAI Grok CLI Authentication
 
 In this environment, `grok` is connected via **OAuth** (OIDC flow) rather than an API key. Its credentials (tokens, expiry, refresh tokens) are managed inside `~/.grok/auth.json`. 
@@ -124,4 +148,52 @@ docker compose exec agent-ada-worker agy -p "hello" --model gemini
 # Verify grok route inside the container (uses the mounted ~/.grok OAuth configuration)
 docker compose exec agent-ada-worker grok -p "hello" --model grok-4.3
 ```
+
+---
+
+## 🖥️ 5. Host Control Worker Deployment (Host Escaping)
+
+Because the core server is run inside Docker, it operates inside a separate filesystem namespace. To enable the containerized Ada Task Engine to run local commands, execute script files, or control system services on the host machine, you must run the **Ada Host Control Worker** on the host.
+
+### Local Installation Instructions:
+1. Ensure the user-level systemd user config directory exists:
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   ```
+2. Write the service file `~/.config/systemd/user/ada-host-worker.service`:
+   ```ini
+   [Unit]
+   Description=Ada Host Control Worker (Host Execution Agent)
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Type=simple
+   WorkingDirectory=/home/dan/AGent/workers
+   Environment="WORKER_ID=host-worker-control"
+   Environment="HUB_URL=http://127.0.0.1:8000"
+   Environment="WORKER_PORT=8051"
+   Environment="WORKER_CAPABILITIES=host_control,heavy_compute,docker"
+   Environment="WORKER_MAX_CONCURRENT=3"
+   ExecStart=/home/dan/AGent/.venv/bin/python worker.py
+   Restart=always
+   RestartSec=5
+   Environment="PATH=/home/dan/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+   [Install]
+   WantedBy=default.target
+   ```
+3. Enable and start the user service on the host:
+   ```bash
+   # Reload systemd configuration
+   systemctl --user daemon-reload
+   
+   # Enable and start the service
+   systemctl --user enable ada-host-worker.service
+   systemctl --user start ada-host-worker.service
+   ```
+4. Verify that the worker is online and registered with the hub:
+   ```bash
+   curl -s http://127.0.0.1:8050/api/workers | jq
+   ```
 
