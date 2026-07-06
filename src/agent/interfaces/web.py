@@ -6,11 +6,12 @@ import sqlite3
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from agent import memory, tools, __version__
@@ -302,59 +303,8 @@ async def run_quota_refresh_loop():
 
 def load_plugins(app: FastAPI) -> None:
     """Dynamically loads core integrations and web routes from the plugins directories."""
-    import sys
-    import importlib.util
-    
-    # Ensure project root is in sys.path for plugin imports
-    _root = str(Path(__file__).resolve().parent.parent.parent)
-    if _root not in sys.path:
-        sys.path.append(_root)
-
-    # Try importing agent.plugins to get its __path__
-    try:
-        import agent.plugins
-        plugin_paths = list(agent.plugins.__path__)
-    except ImportError:
-        # Fallback to local plugins folder if package structure is not initialized
-        plugin_paths = [str(Path(__file__).parent.parent / "plugins")]
-        
-    loaded_plugin_names = set()
-    for path_str in plugin_paths:
-        plugins_dir = Path(path_str)
-        if not plugins_dir.exists() or not plugins_dir.is_dir():
-            continue
-        for item in plugins_dir.iterdir():
-            if item.is_dir() and (item / "__init__.py").exists():
-                if item.name in loaded_plugin_names:
-                    continue
-                try:
-                    # Dynamic import package __init__.py
-                    spec = importlib.util.spec_from_file_location(f"agent.plugins.{item.name}", item / "__init__.py")
-                    module = importlib.util.module_from_spec(spec)
-                    
-                    # Ensure the intermediate 'agent.plugins' package is registered
-                    if "agent.plugins" not in sys.modules:
-                        try:
-                            import agent.plugins
-                            sys.modules["agent.plugins"] = agent.plugins
-                        except ImportError:
-                            pass
-                    sys.modules[f"agent.plugins.{item.name}"] = module
-                    spec.loader.exec_module(module)
-                    
-                    # Execute setup contract
-                    if hasattr(module, "setup_plugin"):
-                        module.setup_plugin(
-                            app=app,
-                            register_tools=tools.register_plugin_tools,
-                            register_scheduled_task=memory.ensure_plugin_scheduled_task
-                        )
-                        print(f"[PLUGINS] Successfully loaded plugin package '{item.name}'")
-                    loaded_plugin_names.add(item.name)
-                except Exception as e:
-                    import traceback
-                    print(f"[PLUGINS] Failed to load plugin package '{item.name}': {e}")
-                    traceback.print_exc()
+    from agent.core.plugins import plugin_manager
+    plugin_manager.load_plugins(app)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -396,8 +346,66 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Ada Task Engine Dashboard", lifespan=lifespan)
 
-# Load dynamically registered plugins at module import time
-load_plugins(app)
+# Catch-all proxy route for ada-core execution APIs when running as ada-config
+CORE_API_URL = os.environ.get("CORE_API_URL")
+if CORE_API_URL:
+    import httpx
+    
+    proxy_routes = [
+        "/api/chat",
+        "/api/subagents/spawn",
+        "/api/status",
+        "/api/sessions",
+        "/api/tasks",
+        "/api/subagents",
+        "/api/schedules"
+    ]
+    
+    async def proxy_request(request: Request):
+        path = request.url.path
+        query = request.url.query
+        method = request.method
+        headers = dict(request.headers)
+        headers.pop("host", None)
+        
+        body = await request.body()
+        target_url = f"{CORE_API_URL}{path}"
+        if query:
+            target_url = f"{target_url}?{query}"
+            
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.request(
+                    method=method,
+                    url=target_url,
+                    headers=headers,
+                    content=body,
+                    timeout=120.0
+                )
+            # Create a response with starlette's Response
+            return Response(
+                content=res.content,
+                status_code=res.status_code,
+                headers=dict(res.headers)
+            )
+        except Exception as pe:
+            return Response(
+                content=json.dumps({"detail": f"Proxy request failed: {pe}"}).encode(),
+                status_code=502,
+                headers={"Content-Type": "application/json"}
+            )
+            
+    for route in proxy_routes:
+        app.api_route(route, methods=["GET", "POST", "PUT", "DELETE"])(proxy_request)
+        app.api_route(f"{route}/{{path:path}}", methods=["GET", "POST", "PUT", "DELETE"])(proxy_request)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 from agent.core.orchestrator import orchestration_service
 
@@ -2134,12 +2142,7 @@ async def fork_session_endpoint(req: ForkRequest):
 
     return {"status": "success", "new_session_id": new_session_id}
 
-# Registry for custom scheduled task handlers (registered by plugins)
-# Keys are task names, values are async callables: handler(prompt: str) -> None
-_custom_scheduled_task_handlers = {}
-
-def register_scheduled_task_handler(name: str, handler):
-    _custom_scheduled_task_handlers[name] = handler
+from agent.core.plugins import _custom_scheduled_task_handlers, register_scheduled_task_handler
 
 # Background scheduler execution
 async def execute_scheduled_task(name: str, prompt: str):
@@ -2182,42 +2185,8 @@ async def execute_scheduled_task(name: str, prompt: str):
             return
 
     if name == "Gmail Email Check":
-        try:
-            proj_root = str(Path(__file__).resolve().parent.parent.parent.parent)
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable or "python3", "scratch/run_gmail_sync.py",
-                cwd=proj_root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
-            stdout_str = stdout.decode("utf-8", errors="replace").strip()
-            stderr_str = stderr.decode("utf-8", errors="replace").strip()
-            
-            output = stdout_str
-            if stderr_str:
-                output += f"\n\nStderr Errors:\n{stderr_str}"
-            
-            has_no_new_mail = "No new emails detected since last check" in stdout_str or "no new emails detected" in stdout_str.lower()
-            is_pubsub_active = "Pub/Sub listener is active" in stdout_str
-            
-            if has_no_new_mail or is_pubsub_active:
-                print(f"[Scheduled Task: {name}] Quiet check: {stdout_str}")
-                return
-
-            conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-            memory.log_conversation_step(conversation_id, "assistant", output or "Gmail check completed with no output.")
-            print(f"[Scheduled Task: {name}] Executed directly via subprocess and logged. Return code: {proc.returncode}")
-            return
-        except Exception as e:
-            err_msg = f"Failed to execute Gmail check script: {e}"
-            print(f"[Scheduled Task: {name}] Error: {err_msg}")
-            # If it failed to run, we log it so the failure is visible
-            conversation_id = f"sched-gmail-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-            memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
-            memory.log_conversation_step(conversation_id, "assistant", err_msg)
-            return
+        print(f"[Scheduled Task: {name}] Execution is disabled.")
+        return
 
     if name == "Grace Timekeeper":
         conversation_id = f"sched-grace-timekeeper-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
@@ -2821,6 +2790,189 @@ async def run_scheduler():
         except Exception:
             pass
         await asyncio.sleep(5)
+
+class PlatformConfigRequest(BaseModel):
+    routes: Dict[str, Dict[str, Any]]
+    plugins: Dict[str, bool]
+    skills: Dict[str, bool]
+
+@app.get("/api/config/platform")
+async def get_platform_config():
+    import os
+    import json
+    from pathlib import Path
+    
+    # 1. Load config file
+    db_path = os.environ.get("AGENT_DB_PATH")
+    if db_path:
+        config_path = Path(db_path).parent / "platform_config.json"
+    else:
+        config_path = Path(os.getcwd()) / "data" / "platform_config.json"
+        
+    config_data = {}
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+        except Exception:
+            pass
+            
+    # Ensure standard groups exist
+    config_data.setdefault("routes", {})
+    config_data.setdefault("plugins", {})
+    config_data.setdefault("skills", {})
+
+    # 2. Discover available routes
+    from agent.core.routing import routing_engine
+    available_routes = []
+    for r in routing_engine.routes.values():
+        available_routes.append({
+            "name": r.name,
+            "type": "custom" if "custom" in str(r.__class__.__module__) else "built-in",
+            "default_status": r.default_status.value,
+            "default_priority": r.default_priority
+        })
+
+    # 3. Discover available plugins
+    from agent.core.plugins import plugin_manager
+    plugin_manager.discover_plugins()
+    available_plugins = []
+    for name, plugin in plugin_manager.plugins.items():
+        available_plugins.append({
+            "name": name,
+            "path": str(plugin.path)
+        })
+
+    # 4. Discover available skills
+    from agent.core.registry import tool_registry
+    available_skills = []
+    workspace_skills = Path(os.getcwd()) / ".agents" / "skills"
+    skills_paths = [tools.SKILLS_DIR]
+    if workspace_skills.exists() and workspace_skills.is_dir():
+        skills_paths.append(workspace_skills)
+        
+    seen_paths = set()
+    for path in skills_paths:
+        if path.exists() and path.is_dir():
+            for folder in path.iterdir():
+                if folder.is_dir():
+                    folder_resolved = str(folder.resolve())
+                    if folder_resolved in seen_paths:
+                        continue
+                    seen_paths.add(folder_resolved)
+                    skill_md = folder / "SKILL.md"
+                    if skill_md.exists():
+                        try:
+                            with open(skill_md, "r", encoding="utf-8") as f:
+                                content = f.read()
+                            fm = tools._parse_frontmatter(content)
+                            available_skills.append({
+                                "name": fm.get("name", folder.name),
+                                "description": fm.get("description", "No description.")
+                            })
+                        except Exception:
+                            pass
+
+    return {
+        "status": "success",
+        "config": config_data,
+        "available_routes": available_routes,
+        "available_plugins": available_plugins,
+        "available_skills": available_skills
+    }
+
+@app.post("/api/config/platform")
+async def save_platform_config(req: PlatformConfigRequest):
+    import os
+    import json
+    from pathlib import Path
+    
+    db_path = os.environ.get("AGENT_DB_PATH")
+    if db_path:
+        config_path = Path(db_path).parent / "platform_config.json"
+    else:
+        config_path = Path(os.getcwd()) / "data" / "platform_config.json"
+        
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    payload = {
+        "routes": req.routes,
+        "plugins": req.plugins,
+        "skills": req.skills
+    }
+    
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            
+        # Hot-reload configurations
+        from agent.core.registry import tool_registry
+        tool_registry._skills.clear()
+        tool_registry.discover_skills()
+        
+        from agent.core.plugins import plugin_manager
+        plugin_manager.reset()
+        plugin_manager.load_plugins(app)
+        
+        return {"status": "success", "message": "Configuration saved and hot-reloaded successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save configuration: {e}")
+
+@app.get("/api/config/tenants")
+async def get_tenant_instances():
+    import os
+    import json
+    from pathlib import Path
+    
+    ports_path = Path("/home/ada/public_ada_bot/ports.json")
+    if not ports_path.exists():
+        ports_path = Path("/home/dan/AGent/scratch/public_ada_bot/ports.json")
+        
+    tenants = []
+    if ports_path.exists():
+        try:
+            with open(ports_path, "r") as f:
+                ports_data = json.load(f)
+            for owner_id, info in ports_data.items():
+                port = info.get("port") if isinstance(info, dict) else info
+                tenants.append({
+                    "owner_id": owner_id,
+                    "port": port,
+                    "status": "RUNNING"
+                })
+        except Exception:
+            pass
+    return {"status": "success", "tenants": tenants}
+
+@app.post("/api/config/tenants/{owner_id}/{action}")
+async def control_tenant_instance(owner_id: str, action: str):
+    import os
+    import json
+    import asyncio
+    
+    if action not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+        
+    try:
+        host_ip = os.environ.get("HOST_COMMAND_CHANNEL_IP", "127.0.0.1")
+        reader, writer = await asyncio.open_connection(host_ip, 8002)
+        
+        payload = {"action": action, "owner_id": owner_id}
+        writer.write(json.dumps(payload).encode() + b"\n")
+        await writer.drain()
+        
+        data = await reader.read(4096)
+        response = json.loads(data.decode().strip())
+        writer.close()
+        await writer.wait_closed()
+        
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with host command channel: {e}")
+
+
+# Load dynamically registered plugins during application initialization (after module is fully loaded)
+load_plugins(app)
 
 # Mount static files directory
 static_dir = Path(__file__).parent.parent / "static"

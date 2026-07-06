@@ -102,7 +102,7 @@ def main() -> None:
     
     # Global/chat arguments
     parser.add_argument(
-        "-q", "--query",
+        "-q", "--query", "-p", "--prompt", "--print",
         type=str,
         help="Run a single query, print response with thoughts, and exit.",
     )
@@ -136,7 +136,7 @@ def main() -> None:
         help="Directory to save/load conversation history",
     )
     parser.add_argument(
-        "-y", "--yes",
+        "-y", "--yes", "--dangerously-skip-permissions",
         action="store_true",
         help="Auto-approve all tool calls (no interactive confirmation prompt)",
     )

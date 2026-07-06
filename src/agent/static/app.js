@@ -2042,3 +2042,280 @@ function showTaskDetails(task) {
 window.showSubagentDetails = showSubagentDetails;
 window.showTaskDetails = showTaskDetails;
 window.getSubagentEmoji = getSubagentEmoji;
+
+// Tab Navigation Logic
+document.querySelectorAll('.nav-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.nav-tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        
+        btn.classList.add('active');
+        const panelId = btn.getAttribute('data-tab');
+        const panel = document.getElementById(panelId);
+        if (panel) {
+            panel.classList.add('active');
+            
+            if (panelId.includes('config')) {
+                loadPlatformConfigUI();
+                loadTenantRegistryUI();
+            } else if (panelId.includes('marketplace')) {
+                loadMarketplaceUI();
+            }
+        }
+    });
+});
+
+let currentPlatformConfig = { routes: {}, plugins: {}, skills: {} };
+
+function loadPlatformConfigUI() {
+    fetch('/api/config/platform')
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                currentPlatformConfig = data.config;
+                const tbody = document.getElementById('routes-config-body');
+                tbody.innerHTML = '';
+                
+                data.available_routes.forEach(route => {
+                    const rName = route.name.toLowerCase();
+                    const cfg = currentPlatformConfig.routes[rName] || {};
+                    const status = cfg.status || route.default_status;
+                    const priority = cfg.priority !== undefined ? cfg.priority : route.default_priority;
+                    const weight = cfg.weight !== undefined ? cfg.weight : 100;
+                    
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+                    tr.innerHTML = `
+                        <td style="padding: 0.75rem; font-weight: 600; color: var(--text-primary);">${route.name.toUpperCase()}</td>
+                        <td style="padding: 0.75rem; color: var(--text-muted); font-size: 0.85rem;">${route.type}</td>
+                        <td style="padding: 0.75rem;">
+                            <select class="route-status-select" data-route="${rName}" style="background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: var(--text-primary); padding: 0.25rem; border-radius: 4px; font-size: 0.85rem;">
+                                <option value="PRIMARY" ${status === 'PRIMARY' ? 'selected' : ''}>Primary</option>
+                                <option value="SECONDARY" ${status === 'SECONDARY' ? 'selected' : ''}>Secondary</option>
+                                <option value="URGENT_ONLY" ${status === 'URGENT_ONLY' ? 'selected' : ''}>Urgent Only</option>
+                                <option value="OFF" ${status === 'OFF' ? 'selected' : ''}>Off</option>
+                            </select>
+                        </td>
+                        <td style="padding: 0.75rem;">
+                            <input type="number" class="route-priority-input" data-route="${rName}" value="${priority}" min="1" max="10" style="width: 55px; background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: var(--text-primary); padding: 0.25rem; border-radius: 4px; text-align: center; font-size: 0.85rem;">
+                        </td>
+                        <td style="padding: 0.75rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; width: 150px;">
+                                <input type="range" class="route-weight-range" data-route="${rName}" value="${weight}" min="0" max="100" style="flex: 1; accent-color: var(--accent-orchid); cursor: pointer;">
+                                <span class="weight-val" style="width: 35px; text-align: right; font-size: 0.85rem; color: var(--text-muted);">${weight}%</span>
+                            </div>
+                        </td>
+                        <td style="padding: 0.75rem;">
+                            <button class="btn-save-route" data-route="${rName}" style="background: var(--accent-orchid); border: none; color: white; padding: 0.35rem 0.75rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; font-weight: 500; transition: background 0.3s ease;">
+                                Save
+                            </button>
+                        </td>
+                    `;
+                    
+                    tr.querySelector('.route-weight-range').addEventListener('input', (e) => {
+                        tr.querySelector('.weight-val').textContent = e.target.value + '%';
+                    });
+                    
+                    tr.querySelector('.btn-save-route').addEventListener('click', () => {
+                        const statusVal = tr.querySelector('.route-status-select').value;
+                        const priorityVal = parseInt(tr.querySelector('.route-priority-input').value);
+                        const weightVal = parseInt(tr.querySelector('.route-weight-range').value);
+                        
+                        currentPlatformConfig.routes[rName] = {
+                            status: statusVal,
+                            priority: priorityVal,
+                            weight: weightVal
+                        };
+                        savePlatformConfig();
+                    });
+                    
+                    tbody.appendChild(tr);
+                });
+            }
+        });
+}
+
+function savePlatformConfig() {
+    fetch('/api/config/platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(currentPlatformConfig)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log("[CONFIG] Saved platform configuration successfully.");
+        } else {
+            alert('Failed to save config: ' + data.detail);
+        }
+    })
+    .catch(err => alert('Save configuration error: ' + err.message));
+}
+
+function loadTenantRegistryUI() {
+    const tbody = document.getElementById('tenants-config-body');
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 1.5rem; color: var(--text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> Fetching tenants status...</td></tr>`;
+
+    fetch('/api/config/tenants')
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                tbody.innerHTML = '';
+                if (data.tenants.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 1.5rem; color: var(--text-muted);">No tenant instances registered.</td></tr>`;
+                    return;
+                }
+                
+                data.tenants.forEach(tenant => {
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+                    tr.innerHTML = `
+                        <td style="padding: 0.75rem; font-weight: 500; color: var(--text-primary); font-family: monospace;">${tenant.owner_id}</td>
+                        <td style="padding: 0.75rem; color: var(--text-muted); font-size: 0.85rem;">Port ${tenant.port}</td>
+                        <td style="padding: 0.75rem;">
+                            <span style="display: inline-flex; align-items: center; gap: 0.35rem; color: var(--accent-mint); font-weight: 600; font-size: 0.85rem;">
+                                <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-mint);"></span>
+                                ${tenant.status}
+                            </span>
+                        </td>
+                        <td style="padding: 0.75rem;">
+                            <button class="btn-tenant-down" data-owner="${tenant.owner_id}" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #ef4444; padding: 0.35rem 0.75rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem;">
+                                Stop
+                            </button>
+                        </td>
+                    `;
+                    
+                    tr.querySelector('.btn-tenant-down').addEventListener('click', () => {
+                        if (confirm(`Are you sure you want to stop and remove tenant ${tenant.owner_id}?`)) {
+                            controlTenant(tenant.owner_id, 'down');
+                        }
+                    });
+                    
+                    tbody.appendChild(tr);
+                });
+            }
+        });
+}
+
+function controlTenant(ownerId, action) {
+    fetch(`/api/config/tenants/${ownerId}/${action}`, { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                alert(`Tenant ${ownerId} execution successfully requested: ${action}`);
+                loadTenantRegistryUI();
+            } else {
+                alert(`Tenant operation failed: ${data.message || data.detail}`);
+            }
+        })
+        .catch(err => alert('Tenant control API error: ' + err.message));
+}
+
+// Bind tenant creator trigger
+const provisionBtn = document.getElementById('provision-tenant-btn');
+if (provisionBtn) {
+    provisionBtn.addEventListener('click', () => {
+        const ownerId = prompt("Enter Discord Owner ID / Tenant ID to provision:");
+        if (ownerId) {
+            controlTenant(ownerId.trim(), 'up');
+        }
+    });
+}
+
+function loadMarketplaceUI() {
+    fetch('/api/config/platform')
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                currentPlatformConfig = data.config;
+                
+                // Plugins Grid
+                const pluginsGrid = document.getElementById('plugins-marketplace-grid');
+                pluginsGrid.innerHTML = '';
+                data.available_plugins.forEach(plugin => {
+                    const pName = plugin.name;
+                    const enabled = currentPlatformConfig.plugins[pName] !== false; // default true
+                    
+                    const card = document.createElement('div');
+                    card.style.background = 'rgba(255, 255, 255, 0.02)';
+                    card.style.border = '1px solid var(--card-border)';
+                    card.style.borderRadius = '8px';
+                    card.style.padding = '1rem';
+                    card.style.display = 'flex';
+                    card.style.flexDirection = 'column';
+                    card.style.justifyContent = 'space-between';
+                    card.innerHTML = `
+                        <div>
+                            <h4 style="margin: 0 0 0.5rem 0; font-size: 0.95rem; color: var(--text-primary); font-weight: 600;">${pName}</h4>
+                            <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0 0 1rem 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Path: ${plugin.path}</p>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.75rem;">
+                            <span class="toggle-status" style="font-size: 0.8rem; color: ${enabled ? 'var(--accent-mint)' : 'var(--text-muted)'}; font-weight: 600;">${enabled ? 'Enabled' : 'Disabled'}</span>
+                            <label style="position: relative; display: inline-block; width: 34px; height: 18px; cursor: pointer;">
+                                <input type="checkbox" class="plugin-toggle" ${enabled ? 'checked' : ''} style="opacity: 0; width: 0; height: 0;">
+                                <span class="slider" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: ${enabled ? 'var(--accent-orchid)' : 'rgba(255,255,255,0.1)'}; transition: .3s; border-radius: 18px;"></span>
+                            </label>
+                        </div>
+                    `;
+                    
+                    const input = card.querySelector('input');
+                    const slider = card.querySelector('.slider');
+                    const statusText = card.querySelector('.toggle-status');
+                    input.addEventListener('change', (e) => {
+                        const isChecked = e.target.checked;
+                        slider.style.backgroundColor = isChecked ? 'var(--accent-orchid)' : 'rgba(255,255,255,0.1)';
+                        statusText.textContent = isChecked ? 'Enabled' : 'Disabled';
+                        statusText.style.color = isChecked ? 'var(--accent-mint)' : 'var(--text-muted)';
+                        currentPlatformConfig.plugins[pName] = isChecked;
+                        savePlatformConfig();
+                    });
+                    
+                    pluginsGrid.appendChild(card);
+                });
+
+                // Skills Grid
+                const skillsGrid = document.getElementById('skills-marketplace-grid');
+                skillsGrid.innerHTML = '';
+                data.available_skills.forEach(skill => {
+                    const sName = skill.name;
+                    const enabled = currentPlatformConfig.skills[sName] !== false; // default true
+                    
+                    const card = document.createElement('div');
+                    card.style.background = 'rgba(255, 255, 255, 0.02)';
+                    card.style.border = '1px solid var(--card-border)';
+                    card.style.borderRadius = '8px';
+                    card.style.padding = '1rem';
+                    card.style.display = 'flex';
+                    card.style.flexDirection = 'column';
+                    card.style.justifyContent = 'space-between';
+                    card.innerHTML = `
+                        <div>
+                            <h4 style="margin: 0 0 0.5rem 0; font-size: 0.95rem; color: var(--text-primary); font-weight: 600;">${sName}</h4>
+                            <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0 0 1rem 0; height: 32px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">${skill.description}</p>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.75rem;">
+                            <span class="toggle-status" style="font-size: 0.8rem; color: ${enabled ? 'var(--accent-mint)' : 'var(--text-muted)'}; font-weight: 600;">${enabled ? 'Enabled' : 'Disabled'}</span>
+                            <label style="position: relative; display: inline-block; width: 34px; height: 18px; cursor: pointer;">
+                                <input type="checkbox" class="skill-toggle" ${enabled ? 'checked' : ''} style="opacity: 0; width: 0; height: 0;">
+                                <span class="slider" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: ${enabled ? 'var(--accent-orchid)' : 'rgba(255,255,255,0.1)'}; transition: .3s; border-radius: 18px;"></span>
+                            </label>
+                        </div>
+                    `;
+                    
+                    const input = card.querySelector('input');
+                    const slider = card.querySelector('.slider');
+                    const statusText = card.querySelector('.toggle-status');
+                    input.addEventListener('change', (e) => {
+                        const isChecked = e.target.checked;
+                        slider.style.backgroundColor = isChecked ? 'var(--accent-orchid)' : 'rgba(255,255,255,0.1)';
+                        statusText.textContent = isChecked ? 'Enabled' : 'Disabled';
+                        statusText.style.color = isChecked ? 'var(--accent-mint)' : 'var(--text-muted)';
+                        currentPlatformConfig.skills[sName] = isChecked;
+                        savePlatformConfig();
+                    });
+                    
+                    skillsGrid.appendChild(card);
+                });
+            }
+        });
+}

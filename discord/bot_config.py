@@ -8,7 +8,7 @@ CONFIG_FILE_PATH = Path(__file__).parent / "config.json"
 
 def load_config() -> Dict[str, Any]:
     """Loads the configuration from the central AGent server, falling back to config.json."""
-    api_base = "http://127.0.0.1:8050"
+    api_base = "http://127.0.0.1:8051"
     if CONFIG_FILE_PATH.exists():
         try:
             with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
@@ -53,7 +53,7 @@ def save_config(config: Dict[str, Any]) -> None:
         print(f"Error saving local config fallback: {e}")
 
     # Central brokered API push
-    api_base = config.get("agent_api_base", "http://127.0.0.1:8050")
+    api_base = config.get("agent_api_base", "http://127.0.0.1:8051")
     try:
         payload = json.dumps({"config_data": config}).encode("utf-8")
         req = urllib.request.Request(
@@ -139,7 +139,8 @@ def remove_channel(channel_id: str) -> bool:
     return False
 
 def get_agent_api_base() -> str:
-    return load_config().get("agent_api_base", "http://127.0.0.1:8050")
+    import os
+    return os.environ.get("AGENT_API_BASE") or load_config().get("agent_api_base", "http://127.0.0.1:8050")
 
 def get_roleplay_guild_ids() -> List[int]:
     return load_config().get("roleplay_guild_ids", [980680159961178123, 1518055111987953814])

@@ -156,6 +156,23 @@ class RoutingEngine:
         """
         self.routes[route.name.lower()] = route
 
+    def _load_platform_config(self) -> dict:
+        import os
+        import json
+        from pathlib import Path
+        db_path = os.environ.get("AGENT_DB_PATH")
+        if db_path:
+            config_path = Path(db_path).parent / "platform_config.json"
+        else:
+            config_path = Path(os.getcwd()) / "data" / "platform_config.json"
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
     def get_route_status(self, route: BaseRoute) -> RouteStatus:
         """Determines the status of a route based on environment variables or defaults.
 
@@ -165,6 +182,14 @@ class RoutingEngine:
         Returns:
             The RouteStatus representing whether the route is PRIMARY, SECONDARY, etc.
         """
+        config = self._load_platform_config()
+        route_config = config.get("routes", {}).get(route.name.lower(), {})
+        if "status" in route_config:
+            try:
+                return RouteStatus(route_config["status"].upper())
+            except ValueError:
+                pass
+
         env_key = f"ROUTE_{route.name.upper()}_STATUS"
         status_str = os.environ.get(env_key, route.default_status.value).lower()
         try:
@@ -181,11 +206,37 @@ class RoutingEngine:
         Returns:
             An integer representing execution order (lower is higher priority).
         """
+        config = self._load_platform_config()
+        route_config = config.get("routes", {}).get(route.name.lower(), {})
+        if "priority" in route_config:
+            try:
+                return int(route_config["priority"])
+            except ValueError:
+                pass
+
         env_key = f"ROUTE_{route.name.upper()}_PRIORITY"
         try:
             return int(os.environ.get(env_key, str(route.default_priority)))
         except ValueError:
             return route.default_priority
+
+    def get_route_weight(self, route: BaseRoute) -> float:
+        """Determines the selection weight of a route.
+
+        Args:
+            route: The route to check.
+
+        Returns:
+            A float representing selection probability relative to other routes.
+        """
+        config = self._load_platform_config()
+        route_config = config.get("routes", {}).get(route.name.lower(), {})
+        if "weight" in route_config:
+            try:
+                return float(route_config["weight"])
+            except ValueError:
+                pass
+        return 100.0
 
     def resolve_routes(self, model: str, task_priority: TaskPriority = TaskPriority.INTERACTIVE) -> List[BaseRoute]:
         """Resolves and orders active routes that support the given model.
@@ -260,46 +311,67 @@ class RoutingEngine:
         if not routes:
             raise RuntimeError(f"No active routes support the model '{model}' for task priority {task_priority.name}")
 
+        # Group routes by priority tier
+        from collections import defaultdict
+        import random
+        
+        by_priority = defaultdict(list)
+        for r in routes:
+            priority = self.get_route_priority(r)
+            by_priority[priority].append(r)
+            
+        sorted_priorities = sorted(by_priority.keys())
         last_error = None
-        for i, route in enumerate(routes):
-            try:
-                print(f"[ROUTING] Attempting execution via route '{route.name}' for model '{model}'")
-                res = await route.execute(
-                    prompt=prompt,
-                    model=model,
-                    system_instructions=system_instructions,
-                    timeout=timeout,
-                    conversation_id=conversation_id
-                )
-                if res is not None:
-                    return res
-            except Exception as e:
-                print(f"[ROUTING] Route '{route.name}' failed: {e}")
-                last_error = e
+        
+        # Execute priority tiers sequentially
+        for priority_tier in sorted_priorities:
+            tier_routes = list(by_priority[priority_tier])
+            
+            while tier_routes:
+                # Proportional weighted selection within the active tier
+                weights = [self.get_route_weight(r) for r in tier_routes]
+                total_weight = sum(weights)
+                
+                if total_weight <= 0:
+                    selected_route = random.choice(tier_routes)
+                else:
+                    r_val = random.uniform(0, total_weight)
+                    cumulative = 0.0
+                    selected_route = tier_routes[-1]
+                    for route, weight in zip(tier_routes, weights):
+                        cumulative += weight
+                        if r_val <= cumulative:
+                            selected_route = route
+                            break
+                            
+                try:
+                    print(f"[ROUTING] Attempting execution via route '{selected_route.name}' (Tier {priority_tier}) for model '{model}'")
+                    res = await selected_route.execute(
+                        prompt=prompt,
+                        model=model,
+                        system_instructions=system_instructions,
+                        timeout=timeout,
+                        conversation_id=conversation_id
+                    )
+                    if res is not None:
+                        return res
+                    raise RuntimeError("Route returned None (completion empty or API error)")
+                except Exception as e:
+                    print(f"[ROUTING] Route '{selected_route.name}' failed: {e}")
+                    last_error = e
+                    tier_routes.remove(selected_route)
 
-                # Check if this was a primary route and we are about to failover to magica or onemin
-                if route.name in ("agy", "byok") and i + 1 < len(routes):
-                    next_route = routes[i + 1]
-                    if next_route.name in ("magica", "onemin"):
-                        # Determine cause of failure
-                        err_msg = str(e).lower()
-                        is_quota = any(k in err_msg for k in ("quota", "429", "rate limit", "rate_limit", "exhausted", "capacity"))
-                        
-                        if not is_quota:
-                            # Connection/frontier model failure - notify user & schedule check
-                            warning_msg = f"⚠️ Primary route '{route.name}' failed ({e}). Failing over to {next_route.name}..."
-                            print(f"[ROUTING] {warning_msg}")
-                            
-                            # Log thought step in conversation if conversation_id is available
-                            if conversation_id:
-                                try:
-                                    from agent.storage.conversation import log_conversation_step
-                                    log_conversation_step(conversation_id, "thought", warning_msg)
-                                except Exception as le:
-                                    print(f"[ROUTING] Failed to log failover thought: {le}")
-                            
-                            # Spawn background health checker
-                            asyncio.create_task(check_primary_route_health(route.name, model))
+                    # Trigger health checks and notifications for primary failures
+                    if selected_route.name in ("agy", "byok"):
+                        warning_msg = f"⚠️ Primary route '{selected_route.name}' failed ({e}). Failing over..."
+                        print(f"[ROUTING] {warning_msg}")
+                        if conversation_id:
+                            try:
+                                from agent.storage.conversation import log_conversation_step
+                                log_conversation_step(conversation_id, "thought", warning_msg)
+                            except Exception as le:
+                                print(f"[ROUTING] Failed to log failover thought: {le}")
+                        asyncio.create_task(check_primary_route_health(selected_route.name, model))
 
         raise RuntimeError(f"All execution routes failed. Last error: {last_error or 'No response'}")
 

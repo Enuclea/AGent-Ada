@@ -1,0 +1,52 @@
+{
+  "characters": [
+    {
+      "name": "Eldrin",
+      "stats": {
+        "Strength": 15,
+        "Dexterity": 16,
+        "Constitution": 6,
+        "Intelligence": 16,
+        "Wisdom": 17,
+        "Charisma": 12
+      },
+      "suggested_class": "Cleric"
+    },
+    {
+      "name": "Alaric",
+      "stats": {
+        "Strength": 12,
+        "Dexterity": 11,
+        "Constitution": 14,
+        "Intelligence": 6,
+        "Wisdom": 15,
+        "Charisma": 18
+      },
+      "suggested_class": "Bard"
+    },
+    {
+      "name": "Aurelia",
+      "stats": {
+        "Strength": 11,
+        "Dexterity": 9,
+        "Constitution": 17,
+        "Intelligence": 16,
+        "Wisdom": 14,
+        "Charisma": 12
+      },
+      "suggested_class": "Barbarian"
+    },
+    {
+      "name": "Eowyn",
+      "stats": {
+        "Strength": 17,
+        "Dexterity": 13,
+        "Constitution": 10,
+        "Intelligence": 11,
+        "Wisdom": 15,
+        "Charisma": 8
+      },
+      "suggested_class": "Fighter"
+    }
+  ]
+}

@@ -17,15 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create data directory and set permissions
 RUN mkdir -p /data && chown -R nobody:nogroup /data /app
 
-# Copy package management files first to leverage Docker cache
+# Copy package management files and source code first
 COPY pyproject.toml README.md ./
+COPY src/ ./src/
+COPY enuclea/ ./enuclea/
+COPY discord/ ./discord/
 
 # Install the dependencies
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -e .
-
-# Copy the rest of the application
-COPY src/ ./src/
 
 # Set ownership of all copied files to nobody
 RUN chown -R nobody:nogroup /app
@@ -44,4 +44,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the web dashboard API by default
-CMD ["python", "-m", "agent.interfaces.web"]
+CMD ["python", "-m", "agent.cli", "ui", "--port", "8000", "--host", "0.0.0.0"]

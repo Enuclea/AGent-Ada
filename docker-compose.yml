@@ -1,29 +1,75 @@
 version: '3.8'
 
 services:
-  agent-ada:
+  ada-core:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: agent-ada
+    container_name: ada-core
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     env_file:
       - .env
     volumes:
-      # Persist local database files (bind local ./data to /data)
       - ./data:/data
-      # Mount configuration keys (Google, Morgen, Discord, etc.)
       - ./config:/app/config
-      # Mount custom plugins for hot-reloading capability
       - ./plugins:/app/plugins
+      - ./src/agent/routes/custom:/app/src/agent/routes/custom
+      - ./src/agent/static:/app/src/agent/static
     environment:
       - PYTHONUNBUFFERED=1
-      # Explicitly route the SQLite database file to the persistent volume mount
+      - HOME=/app
       - AGENT_DB_PATH=/data/history.db
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  ada-config:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ada-config
+    restart: unless-stopped
+    command: ["python", "-m", "agent.cli", "ui", "--port", "8050", "--host", "0.0.0.0"]
+    ports:
+      - "8050:8050"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+      - ./config:/app/config
+      - ./plugins:/app/plugins
+      - ./src/agent/routes/custom:/app/src/agent/routes/custom
+      - ./src/agent/static:/app/src/agent/static
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HOME=/app
+      - AGENT_DB_PATH=/data/history.db
+      - CORE_API_URL=http://ada-core:8000
+      - HOST_COMMAND_CHANNEL_IP=10.121.15.100
+    depends_on:
+      - ada-core
+
+  ada-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ada-bot
+    restart: unless-stopped
+    command: ["python", "discord/bot.py"]
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+      - ./config:/app/config
+      - ./plugins:/app/plugins
+      - ./discord:/app/discord
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HOME=/app
+      - AGENT_DB_PATH=/data/history.db
+      - AGENT_API_BASE=http://ada-core:8000
+      - RUN_DISCORD_BOT=true
+    depends_on:
+      - ada-core

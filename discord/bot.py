@@ -361,7 +361,11 @@ def save_joined_members():
             })
         data[str(guild.id)] = guild_data
         
-    members_file = Path(__file__).parent / "members.json"
+    db_dir = os.environ.get("AGENT_DB_PATH")
+    if db_dir:
+        members_file = Path(db_dir).parent / "members.json"
+    else:
+        members_file = Path(__file__).parent / "members.json"
     try:
         with open(members_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -1317,9 +1321,9 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     # Pre-flight check: confirm AGent server is online
     if not await check_agent_server_status():
         if placeholder:
-            await placeholder.edit(content="❌ **Error**: Cannot connect to the local AGent Task Engine daemon on port 8050. Please ensure the daemon is running.")
+            await placeholder.edit(content="❌ **Error**: Cannot connect to the local AGent Task Engine daemon on port 8051. Please ensure the daemon is running.")
         else:
-            await channel.send("❌ **Error**: Cannot connect to the local AGent Task Engine daemon on port 8050. Please ensure the daemon is running.")
+            await channel.send("❌ **Error**: Cannot connect to the local AGent Task Engine daemon on port 8051. Please ensure the daemon is running.")
         return
 
     # Tight Security Controls:
@@ -2488,7 +2492,7 @@ async def cmd_assess_channel(ctx, target_channel: str = None):
             raise commands.ChannelNotFound(target_channel if target_channel else channel.name)
     
     if not await check_agent_server_status():
-        await ctx.send("❌ **Error**: Cannot connect to the local AGent Task Engine daemon on port 8050.")
+        await ctx.send("❌ **Error**: Cannot connect to the local AGent Task Engine daemon on port 8051.")
         return
         
     placeholder = await ctx.send(f"🔄 **Preparing Assessment**: Retrieving discussion history for {channel.mention}...")
@@ -3045,55 +3049,66 @@ if __name__ == "__main__":
         print("[CRITICAL] DISCORD_BOT_TOKEN is not configured inside config/api_keys.json or .env. Cannot start.")
         sys.exit(1)
 
-    # Auto-start AGent daemon if not running
+    # Auto-start AGent daemon if not running (only for localhost API bases)
     daemon_running = False
-    try:
-        # Pinging '/' static mount on port 8050 as a fast lightweight check
-        with urllib.request.urlopen("http://127.0.0.1:8050/", timeout=1.0) as response:
-            if response.status == 200:
-                daemon_running = True
-                print("[INFO] Local AGent daemon is already running on port 8050.")
-    except Exception:
-        pass
-
-    if not daemon_running:
-        print("[INFO] Local AGent daemon not detected on port 8050. Spawning daemon automatically...")
-        py_bin = sys.executable or "python3"
+    is_localhost = "127.0.0.1" in AGENT_API_BASE or "localhost" in AGENT_API_BASE
+    
+    if is_localhost:
         try:
-            env = os.environ.copy()
-            # Set PYTHONPATH to include the project 'src' directory
-            env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
-            
-            # Open log file to capture daemon output
-            log_file = open("web_daemon.log", "w", encoding="utf-8")
-            
-            popen_kwargs = {
-                "env": env,
-                "stdout": log_file,
-                "stderr": log_file,
-            }
-            if os.name == "posix":
-                popen_kwargs["start_new_session"] = True
+            # Pinging static mount as a fast lightweight check
+            with urllib.request.urlopen(f"{AGENT_API_BASE}/", timeout=1.0) as response:
+                if response.status == 200:
+                    daemon_running = True
+                    print(f"[INFO] Local AGent daemon is already running on {AGENT_API_BASE}.")
+        except Exception:
+            pass
+
+        if not daemon_running:
+            print(f"[INFO] Local AGent daemon not detected on {AGENT_API_BASE}. Spawning daemon automatically...")
+            py_bin = sys.executable or "python3"
+            try:
+                env = os.environ.copy()
+                env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
                 
-            subprocess.Popen(
-                [py_bin, "-m", "uvicorn", "agent.web:app", "--host", "127.0.0.1", "--port", "8050"],
-                **popen_kwargs
-            )
-            
-            # Wait and verify daemon health
-            for attempt in range(5):
-                time.sleep(1.0)
-                try:
-                    with urllib.request.urlopen("http://127.0.0.1:8050/", timeout=1.0) as response:
-                        if response.status == 200:
-                            print("[INFO] Local AGent daemon spawned successfully on port 8050.")
-                            break
-                except Exception:
-                    pass
-            else:
-                print("[WARNING] Spawned daemon, but could not verify readiness on port 8050.")
-        except Exception as e:
-            print(f"[ERROR] Failed to spawn local AGent daemon: {e}")
+                log_file = open("web_daemon.log", "w", encoding="utf-8")
+                
+                popen_kwargs = {
+                    "env": env,
+                    "stdout": log_file,
+                    "stderr": log_file,
+                }
+                if os.name == "posix":
+                    popen_kwargs["start_new_session"] = True
+                    
+                # Extract port from AGENT_API_BASE
+                port_match = re.search(r":(\d+)", AGENT_API_BASE)
+                port = port_match.group(1) if port_match else "8051"
+                
+                subprocess.Popen(
+                    [py_bin, "-m", "uvicorn", "agent.web:app", "--host", "127.0.0.1", "--port", port],
+                    **popen_kwargs
+                )
+                
+                for attempt in range(5):
+                    time.sleep(1.0)
+                    try:
+                        with urllib.request.urlopen(f"{AGENT_API_BASE}/", timeout=1.0) as response:
+                            if response.status == 200:
+                                print(f"[INFO] Local AGent daemon spawned successfully on port {port}.")
+                                break
+                    except Exception:
+                        pass
+                else:
+                    print(f"[WARNING] Spawned daemon, but could not verify readiness on port {port}.")
+            except Exception as e:
+                print(f"[ERROR] Failed to spawn local AGent daemon: {e}")
+    else:
+        print(f"[INFO] Connecting to containerized core execution daemon: {AGENT_API_BASE}")
+        daemon_running = True
 
     # Start the Discord bot
-    bot.run(token)
+    import os
+    if os.environ.get("RUN_DISCORD_BOT", "false").lower() != "true" and "PYTEST_CURRENT_TEST" not in os.environ:
+        print("[INFO] Discord bot startup sequence is disabled to prevent competition with the live bot.")
+    else:
+        bot.run(token)
