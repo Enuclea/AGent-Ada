@@ -15,6 +15,9 @@ services:
       - ./plugins:/app/plugins
       - ./src/agent/routes/custom:/app/src/agent/routes/custom
       - ./src/agent/static:/app/src/agent/static
+      - ./.agents:/app/.agents
+      - ./enuclea:/app/enuclea
+      - /home/dan/.gemini/config:/app/.gemini/config
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -42,6 +45,9 @@ services:
       - ./plugins:/app/plugins
       - ./src/agent/routes/custom:/app/src/agent/routes/custom
       - ./src/agent/static:/app/src/agent/static
+      - ./.agents:/app/.agents
+      - ./enuclea:/app/enuclea
+      - /home/dan/.gemini/config:/app/.gemini/config
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -65,6 +71,9 @@ services:
       - ./config:/app/config
       - ./plugins:/app/plugins
       - ./discord:/app/discord
+      - ./.agents:/app/.agents
+      - ./enuclea:/app/enuclea
+      - /home/dan/.gemini/config:/app/.gemini/config
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
