@@ -12,7 +12,7 @@ def _is_safe_path(base_dir, path) -> bool:
         base_path = Path(base_dir).resolve()
         target_path = Path(path).resolve()
         # Verify target is strictly within base_path
-        if not (base_path == target_path or base_path in target_path.parents):
+        if base_path not in target_path.parents:
             return False
             
         # Walk up from target_path to base_path, verifying that any symlinks resolve inside base_path
