@@ -6,6 +6,65 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Callable
 from types import ModuleType
 
+def verify_plugin_ast_safety(plugin_path: Path) -> None:
+    """Statically scans all Python files in the plugin package for unsafe calls."""
+    import ast
+    
+    class SafetyVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.errors = []
+            self.os_aliases = {"os"}
+            self.sub_aliases = {"subprocess"}
+            
+        def visit_Import(self, node):
+            for name in node.names:
+                if name.name == "os":
+                    self.os_aliases.add(name.asname or "os")
+                elif name.name == "subprocess":
+                    self.sub_aliases.add(name.asname or "subprocess")
+            self.generic_visit(node)
+            
+        def visit_ImportFrom(self, node):
+            forbidden_imports = {
+                "os": {"system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
+                "subprocess": {"run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"}
+            }
+            if node.module in forbidden_imports:
+                for name in node.names:
+                    if name.name in forbidden_imports[node.module]:
+                        self.errors.append(f"Forbidden import: {name.name} from {node.module}")
+            self.generic_visit(node)
+            
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Name):
+                if node.func.id in ("eval", "exec"):
+                    self.errors.append(f"Forbidden function call: {node.func.id}()")
+            elif isinstance(node.func, ast.Attribute):
+                func_name = node.func.attr
+                module_name = ""
+                if isinstance(node.func.value, ast.Name):
+                    module_name = node.func.value.id
+                
+                if module_name in self.os_aliases and func_name in ("system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"):
+                    self.errors.append(f"Forbidden system call: {module_name}.{func_name}()")
+                elif module_name in self.sub_aliases and func_name in ("run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"):
+                    self.errors.append(f"Forbidden subprocess call: {module_name}.{func_name}()")
+                elif func_name in ("eval", "exec"):
+                    self.errors.append(f"Forbidden call: .{func_name}()")
+            self.generic_visit(node)
+
+    for py_file in plugin_path.rglob("*.py"):
+        try:
+            with open(py_file, "r", encoding="utf-8", errors="replace") as f:
+                code = f.read()
+            tree = ast.parse(code, filename=str(py_file))
+            visitor = SafetyVisitor()
+            visitor.visit(tree)
+            if visitor.errors:
+                raise ValueError(f"AST safety check failed for {py_file.name}: {', '.join(visitor.errors)}")
+        except SyntaxError as se:
+            raise ValueError(f"AST syntax error in {py_file.name}: {se}")
+
 class PluginState(str, Enum):
     DISCOVERED = "DISCOVERED"
     LOADING = "LOADING"
@@ -114,6 +173,9 @@ class PluginManager:
 
             plugin.state = PluginState.LOADING
             try:
+                # Perform AST safety check first
+                verify_plugin_ast_safety(plugin.path)
+
                 # Dynamic import package __init__.py
                 spec = importlib.util.spec_from_file_location(f"agent.plugins.{name}", plugin.path / "__init__.py")
                 module = importlib.util.module_from_spec(spec)

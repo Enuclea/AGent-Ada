@@ -230,8 +230,19 @@ async def spawn_subagent(
     
     def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
         try:
-            resolved = (base_path / rel_str).resolve()
-            return base_path == resolved or base_path in resolved.parents
+            base_resolved = base_path.resolve()
+            resolved = (base_resolved / rel_str).resolve()
+            if not (base_resolved == resolved or base_resolved in resolved.parents):
+                return False
+            # Walk up from resolved to base_resolved, verifying that any symlinks resolve inside base_resolved
+            curr = resolved
+            while curr != base_resolved and curr != curr.parent:
+                if curr.is_symlink():
+                    resolved_link = curr.resolve()
+                    if not (base_resolved == resolved_link or base_resolved in resolved_link.parents):
+                        return False
+                curr = curr.parent
+            return True
         except Exception:
             return False
 
@@ -351,6 +362,7 @@ async def run_boardroom(
     boardroom_id = str(uuid.uuid4())
     sandbox_dir = Path("/tmp") / f"boardroom_sandbox_{boardroom_id}"
     await asyncio.to_thread(sandbox_dir.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(sandbox_dir.chmod, 0o700)
     
     current_workspace = os.getcwd()
     base_ws = Path(current_workspace).resolve()
@@ -358,8 +370,19 @@ async def run_boardroom(
     
     def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
         try:
-            resolved = (base_path / rel_str).resolve()
-            return base_path == resolved or base_path in resolved.parents
+            base_resolved = base_path.resolve()
+            resolved = (base_resolved / rel_str).resolve()
+            if not (base_resolved == resolved or base_resolved in resolved.parents):
+                return False
+            # Walk up from resolved to base_resolved, verifying that any symlinks resolve inside base_resolved
+            curr = resolved
+            while curr != base_resolved and curr != curr.parent:
+                if curr.is_symlink():
+                    resolved_link = curr.resolve()
+                    if not (base_resolved == resolved_link or base_resolved in resolved_link.parents):
+                        return False
+                curr = curr.parent
+            return True
         except Exception:
             return False
 

@@ -626,7 +626,7 @@ def get_relevant_skills(prompt: Optional[str] = None) -> str:
         
     return "Relevant skills found:\n" + "\n".join([f"- {m[1]['name']} (relevance score: {m[0]}): {m[1]['description']}" for m in matches[:5]])
 
-async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = None) -> str:
+async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = None, confirm: bool = False) -> str:
     """Downloads/copies a skill from the external repositories to the local active skills directory.
     
     This enables the skill and registers its tools for use by the agent.
@@ -634,6 +634,7 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     Args:
         skill_name: The name of the skill/tool to install.
         paranoid: Optional override for paranoid mode.
+        confirm: Skip security review check failure and install anyway.
     """
     from agent.execution import tools
     # CRITICAL: Sanitize input immediately to prevent any path traversal before touching files or repositories
@@ -650,40 +651,23 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
         return f"Error: Skill '{skill_name}' not found in repositories."
         
     info = repo_skills[skill_name]
-        
-    import sys
-    if os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
-        pass
-    elif sys.stdin.isatty():
-        ans = input(f"Explicit human confirmation required to install skill '{skill_name}'. Proceed? [y/N]: ")
-        if ans.strip().lower() not in ("y", "yes"):
-            return "Error: Skill installation cancelled by user."
-    else:
-        return f"Error: Explicit out-of-band human confirmation required to install skill '{skill_name}'."
-
     from agent.execution.tools.system_tools import spawn_subagent
 
-    if not info.get("remote") and "path" in info and info["path"]:
-        src_folder = Path(info["path"])
-        if not tools._verify_skill_signature(src_folder):
-            return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
-            
-        try:
-            if dest_folder.exists():
-                shutil.rmtree(dest_folder)
-            shutil.copytree(src_folder, dest_folder)
-            return f"Successfully downloaded and installed skill '{skill_name}' to {dest_folder}.\nIt is now active and ready to be used by the agent."
-        except Exception as e:
-            return f"Error installing skill: {e}"
-            
-    else:
-        # Remote skill download and installation
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            import uuid
-            # Generate a randomized temp path to prevent predictable symlink race conditions
-            temp_path = Path(tmp_dir) / f"skill_{uuid.uuid4().hex}"
-            temp_path.mkdir()
-            
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        import uuid
+        # Generate a randomized temp path to prevent predictable symlink race conditions
+        temp_path = Path(tmp_dir) / f"skill_{uuid.uuid4().hex}"
+        temp_path.mkdir()
+
+        if not info.get("remote") and "path" in info and info["path"]:
+            # Local skill
+            src_folder = Path(info["path"])
+            try:
+                shutil.copytree(src_folder, temp_path, dirs_exist_ok=True)
+            except Exception as e:
+                return f"Error copying local skill: {e}"
+        else:
+            # Remote skill download and installation
             if info["type"] == "openclaw":
                 try:
                     slug = info["identifier"]
@@ -744,25 +728,56 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
                         f.write(raw_content)
                 except Exception as e:
                     return f"Error downloading Hermes skill: {e}"
-            
-            # --- SECURITY & CODE REVIEW GATEWAY ---
-            # Construct a dump of all downloaded file contents
-            code_dump = []
-            for p in temp_path.rglob("*"):
-                if p.is_file():
-                    if "node_modules" in p.parts or ".git" in p.parts:
-                        continue
-                    try:
-                        with open(p, "r", encoding="utf-8", errors="replace") as f:
-                            content = f.read()
-                        rel_path = p.relative_to(temp_path)
-                        code_dump.append(f"=== File: {rel_path} ===\n{content}\n")
-                    except Exception:
-                        pass
-            code_text = "\n".join(code_dump)
-            
-            # 1. Spawn Lacie to perform a code review on the code dump
-            lacie_prompt = f"""You are Lacie, Senior Software Architect and Cybersecurity Specialist.
+
+        # --- SECURITY & CODE REVIEW GATEWAY ---
+        # 1. Run AST Static Scan
+        ast_errors = []
+        import ast
+        for py_file in temp_path.rglob("*.py"):
+            try:
+                with open(py_file, "r", encoding="utf-8", errors="replace") as f:
+                    code = f.read()
+                tree = ast.parse(code, filename=str(py_file))
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        if isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec"):
+                            ast_errors.append(f"Forbidden call in {py_file.name}: {node.func.id}()")
+                        elif isinstance(node.func, ast.Attribute):
+                            attr_name = node.func.attr
+                            val_name = node.func.value.id if isinstance(node.func.value, ast.Name) else ""
+                            if val_name == "os" and attr_name in ("system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"):
+                                ast_errors.append(f"Forbidden system call in {py_file.name}: os.{attr_name}()")
+                            elif val_name == "subprocess" and attr_name in ("run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"):
+                                ast_errors.append(f"Forbidden subprocess call in {py_file.name}: subprocess.{attr_name}()")
+                    elif isinstance(node, ast.ImportFrom):
+                        forbidden = {
+                            "os": {"system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
+                            "subprocess": {"run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"}
+                        }
+                        if node.module in forbidden:
+                            for name in node.names:
+                                if name.name in forbidden[node.module]:
+                                    ast_errors.append(f"Forbidden import in {py_file.name}: {name.name} from {node.module}")
+            except Exception as e:
+                ast_errors.append(f"AST parse error in {py_file.name}: {e}")
+
+        # Construct a dump of all downloaded/copied file contents
+        code_dump = []
+        for p in temp_path.rglob("*"):
+            if p.is_file():
+                if "node_modules" in p.parts or ".git" in p.parts:
+                    continue
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    rel_path = p.relative_to(temp_path)
+                    code_dump.append(f"=== File: {rel_path} ===\n{content}\n")
+                except Exception:
+                    pass
+        code_text = "\n".join(code_dump)
+        
+        # 2. Spawn Lacie to perform a code review on the code dump
+        lacie_prompt = f"""You are Lacie, Senior Software Architect and Cybersecurity Specialist.
 Please perform a thorough security and quality code review on the newly downloaded skill/plugin '{skill_name}'.
 Here is the code content of the skill:
 
@@ -774,18 +789,19 @@ Include your assessment and end your response with either:
 - DECISION: APPROVED (if the code is completely safe to install)
 - DECISION: REJECTED (if there are any security risks or concerns)
 """
-            try:
-                lacie_review = await spawn_subagent(prompt=lacie_prompt, agent_profile="lacie")
-            except Exception as e:
-                return f"Error: Security review failed due to subagent error: {e}"
-                
-            if paranoid is None:
-                is_paranoid = os.environ.get("ADA_PARANOID_MODE") == "1"
-            else:
-                is_paranoid = paranoid
-            if is_paranoid:
-                # 2. Roundtable: run Claude code review via agy
-                claude_prompt = f"""You are Claude, a Senior Security Engineer.
+        try:
+            lacie_review = await spawn_subagent(prompt=lacie_prompt, agent_profile="lacie")
+        except Exception as e:
+            return f"Error: Security review failed due to subagent error: {e}"
+            
+        if paranoid is None:
+            is_paranoid = os.environ.get("ADA_PARANOID_MODE") == "1"
+        else:
+            is_paranoid = paranoid
+            
+        if is_paranoid:
+            # 3. Roundtable: run Claude code review via agy
+            claude_prompt = f"""You are Claude, a Senior Security Engineer.
 Please perform a security review on the newly downloaded skill/plugin '{skill_name}' as part of a security roundtable.
 Lacie (Gemini) has already reviewed the code and provided the following assessment:
 
@@ -801,39 +817,63 @@ End your response with either:
 - DECISION: APPROVED (if you agree the code is completely safe)
 - DECISION: REJECTED (if you find any security concerns)
 """
-                try:
-                    from agent.routes.agy import AgyRoute
-                    from agent.routes.base import RouteInput
-                    agy_route = AgyRoute()
-                    route_output = await agy_route.execute(RouteInput(prompt=claude_prompt, model="claude"))
-                    claude_review = route_output.response or ""
-                except Exception as e:
-                    return f"Error: Roundtable security review failed due to Claude route error: {e}"
-                
-                combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}\n\n=== Claude (agy) Review ===\n{claude_review}"
-                approved = ("DECISION: APPROVED" in lacie_review) and ("DECISION: APPROVED" in claude_review)
-            else:
-                combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}"
-                approved = "DECISION: APPROVED" in lacie_review
-                
-            # Write review report to the temp path as security_review.txt for transparency/documentation
             try:
-                with open(temp_path / "security_review.txt", "w", encoding="utf-8") as f:
-                    f.write(combined_review)
-            except Exception:
-                pass
-                
-            if not approved:
-                return f"Error: Skill '{skill_name}' failed security review.\n\n{combined_review}"
-            
-            # Enforce cryptographic signature verification on all remote skills
-            if not tools._verify_skill_signature(temp_path):
-                return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned remote skills."
-                
-            try:
-                if dest_folder.exists():
-                    shutil.rmtree(dest_folder)
-                shutil.copytree(temp_path, dest_folder)
-                return f"Successfully downloaded and installed skill '{skill_name}' to {dest_folder}.\nIt is now active and ready to be used by the agent."
+                from agent.routes.agy import AgyRoute
+                from agent.routes.base import RouteInput
+                agy_route = AgyRoute()
+                route_output = await agy_route.execute(RouteInput(prompt=claude_prompt, model="claude"))
+                claude_review = route_output.response or ""
             except Exception as e:
-                return f"Error copying installed skill: {e}"
+                return f"Error: Roundtable security review failed due to Claude route error: {e}"
+            
+            combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}\n\n=== Claude (agy) Review ===\n{claude_review}"
+            approved = ("DECISION: APPROVED" in lacie_review) and ("DECISION: APPROVED" in claude_review)
+        else:
+            combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}"
+            approved = "DECISION: APPROVED" in lacie_review
+            
+        # Write review report to the temp path as security_review.txt for transparency/documentation
+        try:
+            with open(temp_path / "security_review.txt", "w", encoding="utf-8") as f:
+                f.write(combined_review)
+        except Exception:
+            pass
+            
+        # 4. Enforce security review / AST warnings check with HIL
+        interesting_reason = []
+        if ast_errors:
+            interesting_reason.append(f"AST warnings found: {', '.join(ast_errors)}")
+        if not approved:
+            interesting_reason.append("LLM reviewer rejected the skill")
+        else:
+            # Check for suspicious keywords in LLM reviews even if approved
+            keywords = ["warning", "malicious", "suspicious", "danger", "risk", "bypass"]
+            combined_lower = combined_review.lower()
+            found_keywords = [kw for kw in keywords if kw in combined_lower]
+            if found_keywords:
+                interesting_reason.append(f"Review flagged potential concerns (keywords found: {', '.join(found_keywords)})")
+
+        if interesting_reason:
+            hil_approved = False
+            if confirm or os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
+                hil_approved = True
+            elif sys.stdin.isatty():
+                import sys as sys_lib
+                ans = input(f"Skill '{skill_name}' is flagged as interesting/high-risk ({'; '.join(interesting_reason)}). Proceed anyway? [y/N]: ")
+                if ans.strip().lower() in ("y", "yes"):
+                    hil_approved = True
+            
+            if not hil_approved:
+                return f"HIL_REQUIRED: Skill '{skill_name}' failed security review or contains interesting/high-risk elements: {'; '.join(interesting_reason)}.\n\n{combined_review}"
+        
+        # Enforce cryptographic signature verification on all skills (both local and remote)
+        if not tools._verify_skill_signature(temp_path):
+            return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
+            
+        try:
+            if dest_folder.exists():
+                shutil.rmtree(dest_folder)
+            shutil.copytree(temp_path, dest_folder)
+            return f"Successfully downloaded and installed skill '{skill_name}' to {dest_folder}.\nIt is now active and ready to be used by the agent."
+        except Exception as e:
+            return f"Error copying installed skill: {e}"

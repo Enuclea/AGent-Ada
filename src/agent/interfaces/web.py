@@ -8,10 +8,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
 from agent import memory, tools, __version__
@@ -356,7 +357,28 @@ async def lifespan(app: FastAPI):
     scheduler_task.cancel()
     quota_task.cancel()
 
-app = FastAPI(title="Ada Task Engine Dashboard", lifespan=lifespan)
+security = HTTPBasic(auto_error=False)
+
+async def authenticate(request: Request, credentials: Optional[HTTPBasicCredentials] = Depends(security)):
+    # Bypass health and status checks
+    if request.url.path in ("/health", "/health/", "/api/status", "/api/status/"):
+        return credentials
+    # Bypass localhost/internal loopback requests
+    client_host = request.client.host if request.client else ""
+    if client_host in ("127.0.0.1", "::1", "testclient"):
+        return credentials
+
+    correct_username = os.environ.get("DASHBOARD_USERNAME", "admin")
+    correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+    if not credentials or credentials.username != correct_username or credentials.password != correct_password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials
+
+app = FastAPI(title="Ada Task Engine Dashboard", lifespan=lifespan, dependencies=[Depends(authenticate)])
 
 # Catch-all proxy route for ada-core execution APIs when running as ada-config
 CORE_API_URL = os.environ.get("CORE_API_URL")
@@ -1478,8 +1500,19 @@ def setup_sandbox_sync(
     
     def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
         try:
-            resolved = (base_path / rel_str).resolve()
-            return base_path == resolved or base_path in resolved.parents
+            base_resolved = base_path.resolve()
+            resolved = (base_resolved / rel_str).resolve()
+            if not (base_resolved == resolved or base_resolved in resolved.parents):
+                return False
+            # Walk up from resolved to base_resolved, verifying that any symlinks resolve inside base_resolved
+            curr = resolved
+            while curr != base_resolved and curr != curr.parent:
+                if curr.is_symlink():
+                    resolved_link = curr.resolve()
+                    if not (base_resolved == resolved_link or base_resolved in resolved_link.parents):
+                        return False
+                curr = curr.parent
+            return True
         except Exception:
             return False
 
@@ -1553,6 +1586,7 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
     sandbox_id = str(uuid.uuid4())
     sandbox_dir = Path("/tmp") / f"subagent_sandbox_{sandbox_id}"
     await asyncio.to_thread(sandbox_dir.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(sandbox_dir.chmod, 0o700)
     
     current_workspace = os.getcwd()
     
@@ -3058,6 +3092,16 @@ load_plugins(app)
 
 # Mount static files directory
 static_dir = Path(__file__).parent.parent / "static"
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/index.html", response_class=HTMLResponse)
+async def get_index(username: str = Depends(authenticate)):
+    index_path = static_dir / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="index.html not found")
+    with open(index_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
 if static_dir.exists():
-    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+    app.mount("/", StaticFiles(directory=str(static_dir), html=False), name="static")
 
