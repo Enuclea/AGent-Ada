@@ -3,6 +3,8 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 import unittest
+import pytest
+pytestmark = [pytest.mark.slow, pytest.mark.integration]
 from unittest.mock import AsyncMock, MagicMock, patch
 import os
 import sqlite3

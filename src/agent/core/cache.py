@@ -136,6 +136,18 @@ async def get_cached_response(
         conn.close()
 
     # --- Level 2: Semantic Vector / TF-IDF Fallback ---
+    # Disable L2 similarity cache for structured, templated, or system-driver prompts
+    # to prevent false positive collisions on boilerplate.
+    is_structured = (
+        "[System Instructions]" in prompt 
+        or "[User Prompt]" in prompt 
+        or "Given the user request:" in prompt
+        or "You are a plan decomposer" in prompt
+        or "You are executing Step" in prompt
+    )
+    if is_structured:
+        return None
+
     conn = get_connection(DB_FILE_PATH)
     try:
         cursor = conn.cursor()

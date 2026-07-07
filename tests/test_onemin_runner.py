@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import pytest
+pytestmark = [pytest.mark.slow, pytest.mark.integration]
 import sqlite3
 import aiohttp
 from unittest.mock import patch, MagicMock

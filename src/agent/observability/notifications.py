@@ -168,3 +168,41 @@ def send_direct_discord_message(channel_id: int, text: str) -> bool:
             print(f"[NOTIFICATIONS] Failed to send chunk to channel {channel_id}: {e}", file=sys.stderr)
             success = False
     return success
+
+
+def send_direct_discord_file(channel_id: int, file_path: str, text: str = "") -> bool:
+    """Post a file to a specified Discord channel as an attachment via Bot API.
+    
+    Args:
+        channel_id: The target channel ID.
+        file_path: The local path of the file to send.
+        text: Optional text content to include with the file.
+        
+    Returns:
+        True if the file was sent successfully, False otherwise.
+    """
+    import requests
+    token = get_bot_token()
+    if not token:
+        print("[NOTIFICATIONS] No Discord bot token found.")
+        return False
+
+    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+    headers = {
+        "Authorization": f"Bot {token}",
+        "User-Agent": "DiscordBot (https://github.com/Rapptz/discord.py 2.3.2) Python/3.10"
+    }
+
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": f}
+            data = {"content": text} if text else {}
+            resp = requests.post(url, headers=headers, files=files, data=data)
+            if resp.status_code in (200, 201):
+                return True
+            else:
+                print(f"[NOTIFICATIONS] Failed to upload file, status: {resp.status_code}, response: {resp.text}")
+                return False
+    except Exception as e:
+        print(f"[NOTIFICATIONS] Exception in send_direct_discord_file: {e}")
+        return False

@@ -51,6 +51,8 @@ class SecurityPipeline:
             except Exception:
                 pass
 
+        cleaned = re.sub(r'[\u200b-\u200d\ufeff]', '', prompt)
+
         # 4. Check semantic keywords & override phrases
         semantic_patterns = [
             r"ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions",
@@ -66,20 +68,16 @@ class SecurityPipeline:
             r"override\s+system\s+prompt"
         ]
         
-        for pattern in semantic_patterns:
-            if re.search(pattern, normalized):
-                return "[injection attempt blocked]"
-        
-        cleaned = prompt
-        # Extra: check the expanded patterns on the original prompt
-        extended_patterns = INJECTION_PATTERNS + [
-            r"(?i)disregard\s+instructions",
-            r"(?i)jailbreak",
-            r"(?i)developer\s+mode",
-            r"(?i)dan\s+mode"
+        all_patterns = semantic_patterns + INJECTION_PATTERNS + [
+            r"disregard\s+instructions",
+            r"jailbreak",
+            r"developer\s+mode",
+            r"dan\s+mode"
         ]
-        for pattern in extended_patterns:
-            cleaned = re.sub(pattern, "[injection attempt blocked]", cleaned)
+        
+        for pattern in all_patterns:
+            pat = pattern if pattern.startswith("(?i)") else r"(?i)" + pattern
+            cleaned = re.sub(pat, "[injection attempt blocked]", cleaned)
         
         return cleaned
 

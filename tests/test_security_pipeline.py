@@ -1,5 +1,6 @@
 import os
 import pytest
+pytestmark = pytest.mark.security
 from unittest.mock import patch, MagicMock, AsyncMock
 from agent.security.pipeline import sanitize_input, sanitize_output
 from agent.keyless import KeylessAgyAgent, KeylessAgyResponse

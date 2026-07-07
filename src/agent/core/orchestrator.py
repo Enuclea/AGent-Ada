@@ -31,6 +31,16 @@ class OrchestrationService:
         self.session_locks: Dict[str, asyncio.Lock] = {}
         self._pre_tool_hooks: List[Callable[[str, str, Dict[str, Any]], None]] = []
 
+        # Explicitly wire Landlock sandboxing into OrchestrationService initialization
+        import os
+        if os.environ.get("ADA_DISABLE_SANDBOX", "false").lower() != "true":
+            try:
+                from agent.core.landlock import apply_landlock
+                apply_landlock(os.getcwd())
+                print(f"[Sandbox] Landlock sandbox restrictions applied to OrchestrationService startup.")
+            except Exception as e:
+                print(f"[Sandbox] Warning: Failed to apply Landlock sandbox: {e}")
+
     def register_pre_tool_hook(self, hook_fn: Callable[[str, str, Dict[str, Any]], None]) -> None:
         """Registers a pre-tool execution filter callback.
 

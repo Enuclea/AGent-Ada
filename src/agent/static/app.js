@@ -1769,11 +1769,11 @@ async function viewRepoSkill(skill) {
 }
 
 // Trigger Skill Installation
-async function installRepoSkill(skillName, button, isParanoid = false, confirmOverride = false) {
+async function installRepoSkill(skillName, button, isParanoid = false) {
     button.disabled = true;
     button.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Installing...`;
     try {
-        const res = await fetch(`/api/repo-skills/${encodeURIComponent(skillName)}/install?paranoid=${isParanoid}&confirm=${confirmOverride}`, {
+        const res = await fetch(`/api/repo-skills/${encodeURIComponent(skillName)}/install?paranoid=${isParanoid}`, {
             method: 'POST'
         });
         if (res.ok) {
@@ -1787,15 +1787,7 @@ async function installRepoSkill(skillName, button, isParanoid = false, confirmOv
             loadStatus();
         } else {
             const errData = await res.json();
-            const errMsg = errData.detail || 'Error installing skill.';
-            if (errMsg.startsWith("HIL_REQUIRED:")) {
-                const reason = errMsg.replace("HIL_REQUIRED:", "").trim();
-                const userConfirmed = confirm(`⚠️ SECURITY REVIEW WARNING ⚠️\n\n${reason}\n\nDo you want to override and install this skill anyway?`);
-                if (userConfirmed) {
-                    return installRepoSkill(skillName, button, isParanoid, true);
-                }
-            }
-            throw new Error(errMsg);
+            throw new Error(errData.detail || 'Error installing skill.');
         }
     } catch (err) {
         button.disabled = false;

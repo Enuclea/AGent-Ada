@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 import pytest
+pytestmark = [pytest.mark.browser, pytest.mark.slow]
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

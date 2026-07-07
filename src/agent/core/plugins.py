@@ -11,6 +11,13 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
     import ast
     
     class SafetyVisitor(ast.NodeVisitor):
+        ALLOWED_MODULES = {
+            "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
+            "asyncio", "logging", "math", "time", "agent", "google", "contextlib",
+            "enum", "dataclasses", "types", "sqlite3", "urllib", "enuclea", "traceback",
+            "fcntl", "sys", "os", "subprocess", "random", "playwright"
+        }
+
         def __init__(self):
             self.errors = []
             self.os_aliases = {"os"}
@@ -18,6 +25,10 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
             
         def visit_Import(self, node):
             for name in node.names:
+                parts = name.name.split(".")
+                top_level = parts[0]
+                if top_level not in self.ALLOWED_MODULES:
+                    self.errors.append(f"Forbidden import: {name.name}")
                 if name.name == "os":
                     self.os_aliases.add(name.asname or "os")
                 elif name.name == "subprocess":
@@ -25,6 +36,12 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
             self.generic_visit(node)
             
         def visit_ImportFrom(self, node):
+            if node.module:
+                parts = node.module.split(".")
+                top_level = parts[0]
+                if top_level not in self.ALLOWED_MODULES:
+                    self.errors.append(f"Forbidden import from module: {node.module}")
+            
             forbidden_imports = {
                 "os": {"system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
                 "subprocess": {"run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"}
@@ -36,9 +53,10 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
             self.generic_visit(node)
             
         def visit_Call(self, node):
+            forbidden_builtins = ("eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr")
             if isinstance(node.func, ast.Name):
-                if node.func.id in ("eval", "exec"):
-                    self.errors.append(f"Forbidden function call: {node.func.id}()")
+                if node.func.id in forbidden_builtins:
+                    self.errors.append(f"Forbidden dynamic built-in: {node.func.id}()")
             elif isinstance(node.func, ast.Attribute):
                 func_name = node.func.attr
                 module_name = ""
@@ -49,8 +67,14 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
                     self.errors.append(f"Forbidden system call: {module_name}.{func_name}()")
                 elif module_name in self.sub_aliases and func_name in ("run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"):
                     self.errors.append(f"Forbidden subprocess call: {module_name}.{func_name}()")
-                elif func_name in ("eval", "exec"):
+                elif func_name in forbidden_builtins:
                     self.errors.append(f"Forbidden call: .{func_name}()")
+            self.generic_visit(node)
+
+        def visit_Attribute(self, node):
+            forbidden_attrs = ("__dict__", "__class__", "__bases__", "__subclasses__", "__getattribute__", "__getattr__", "__setattr__", "__delattr__")
+            if node.attr in forbidden_attrs:
+                self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
             self.generic_visit(node)
 
     for py_file in plugin_path.rglob("*.py"):

@@ -240,7 +240,7 @@ def ensure_plugin_scheduled_task(name: str, prompt: str, cron_expr: str) -> None
     import uuid
     
     try:
-        from agent.interfaces.web import get_next_cron_run
+        from agent.core.scheduler import get_next_cron_run
         next_run_dt = get_next_cron_run(cron_expr, datetime.now(timezone.utc))
         next_run = next_run_dt.isoformat()
     except Exception:

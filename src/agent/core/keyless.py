@@ -673,6 +673,10 @@ class KeylessAgyAgent:
             The API string response if successful, or None on failure.
         """
         import aiohttp
+        from agent.security.pipeline import SecurityPipeline
+        
+        pipeline = SecurityPipeline()
+        sanitized_prompt = pipeline.sanitize_input(full_prompt)
         
         # 1. Gemini direct API
         gemini_key: Optional[str] = os.environ.get("GEMINI_API_KEY")
@@ -680,13 +684,14 @@ class KeylessAgyAgent:
             actual_model: str = model_name if "gemini" in model_name.lower() else "gemini-1.5-flash"
             url: str = f"https://generativelanguage.googleapis.com/v1beta/models/{actual_model}:generateContent?key={gemini_key}"
             headers: Dict[str, str] = {"Content-Type": "application/json"}
-            payload: Dict[str, Any] = {"contents": [{"parts": [{"text": full_prompt}]}]}
+            payload: Dict[str, Any] = {"contents": [{"parts": [{"text": sanitized_prompt}]}]}
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, headers=headers, json=payload, timeout=self.timeout or 30.0) as resp:
                         if resp.status == 200:
                             data: Dict[str, Any] = await resp.json()
-                            return data["candidates"][0]["content"]["parts"][0]["text"]
+                            res = data["candidates"][0]["content"]["parts"][0]["text"]
+                            return pipeline.sanitize_output(res)
             except Exception as e:
                 print(f"[DIRECT-API] Gemini API call failed: {e}")
 
@@ -703,14 +708,15 @@ class KeylessAgyAgent:
             payload = {
                 "model": actual_model,
                 "max_tokens": 4096,
-                "messages": [{"role": "user", "content": full_prompt}]
+                "messages": [{"role": "user", "content": sanitized_prompt}]
             }
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, headers=headers, json=payload, timeout=self.timeout or 30.0) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            return data["content"][0]["text"]
+                            res = data["content"][0]["text"]
+                            return pipeline.sanitize_output(res)
             except Exception as e:
                 print(f"[DIRECT-API] Anthropic API call failed: {e}")
 
@@ -725,14 +731,15 @@ class KeylessAgyAgent:
             }
             payload = {
                 "model": actual_model,
-                "messages": [{"role": "user", "content": full_prompt}]
+                "messages": [{"role": "user", "content": sanitized_prompt}]
             }
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, headers=headers, json=payload, timeout=self.timeout or 30.0) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            return data["choices"][0]["message"]["content"]
+                            res = data["choices"][0]["message"]["content"]
+                            return pipeline.sanitize_output(res)
             except Exception as e:
                 print(f"[DIRECT-API] OpenAI API call failed: {e}")
 
@@ -743,7 +750,7 @@ class KeylessAgyAgent:
             url = f"{ollama_host}/api/generate"
             payload = {
                 "model": actual_model,
-                "prompt": full_prompt,
+                "prompt": sanitized_prompt,
                 "stream": False
             }
             try:
@@ -751,7 +758,8 @@ class KeylessAgyAgent:
                     async with session.post(url, json=payload, timeout=self.timeout or 60.0) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            return data["response"]
+                            res = data["response"]
+                            return pipeline.sanitize_output(res)
             except Exception as e:
                 print(f"[LOCAL-OLLAMA] Ollama call failed: {e}")
                 

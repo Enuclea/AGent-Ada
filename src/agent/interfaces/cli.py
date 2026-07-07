@@ -268,6 +268,17 @@ def main() -> None:
     if session_id and session_id.endswith(".db"):
         session_id = session_id[:-3]
 
+    # Apply Landlock sandboxing on startup if not disabled
+    if os.environ.get("ADA_DISABLE_SANDBOX", "false").lower() != "true":
+        try:
+            from agent.core.landlock import apply_landlock
+            # Use specified workspace or default to current working directory
+            workspace_dir = args.workspace[0] if args.workspace else os.getcwd()
+            apply_landlock(workspace_dir)
+            print(f"[Sandbox] Landlock sandbox restrictions applied for workspace: {workspace_dir}")
+        except Exception as e:
+            print(f"[Sandbox] Warning: Failed to apply Landlock sandbox: {e}")
+
     # Run the agent async loop
     try:
         asyncio.run(

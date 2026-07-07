@@ -1,5 +1,6 @@
 import os
 import pytest
+pytestmark = [pytest.mark.slow, pytest.mark.integration]
 import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 from agent.keyless import KeylessAgyAgent

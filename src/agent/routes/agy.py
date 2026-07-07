@@ -100,8 +100,7 @@ class AgyRoute(BaseRoute):
             except Exception as e:
                 err_msg = f"Failed to spawn streaming subprocess: {e}"
                 print(f"[ROUTE: agy] {err_msg}")
-                is_rate_limit = any(k in err_msg.lower() for k in ["quota", "rate limit", "429", "limit exceeded"])
-                return RouteOutput(latency=time.time() - start_time, error=err_msg, rate_limit_breached=is_rate_limit)
+                return RouteOutput(latency=time.time() - start_time, error=err_msg)
 
         # Non-streaming execution with cost/congestion-aware candidate failovers
         last_err = None
@@ -179,9 +178,4 @@ class AgyRoute(BaseRoute):
                     break
 
         print(f"[ROUTE: agy] Execution failed after trying all candidates. Last error: {last_err}")
-        is_rate_limit = False
-        if last_err:
-            last_err_lower = last_err.lower()
-            if any(k in last_err_lower for k in ["quota", "rate limit", "429", "limit exceeded"]):
-                is_rate_limit = True
-        return RouteOutput(latency=time.time() - start_time, error=last_err, rate_limit_breached=is_rate_limit)
+        return RouteOutput(latency=time.time() - start_time, error=last_err)

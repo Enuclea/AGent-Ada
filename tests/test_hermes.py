@@ -2,6 +2,7 @@ import os
 import tempfile
 import sqlite3
 import pytest
+pytestmark = [pytest.mark.slow, pytest.mark.integration]
 import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -155,8 +156,9 @@ async def test_run_command_timeout():
             await tools.run_command("sleep 100")
         assert "timed out after 60 seconds" in str(exc_info.value)
 
+@pytest.mark.anyio
 @patch("agent.web.get_or_create_agent")
-def test_model_fallback_routing(mock_get_or_create_agent):
+async def test_model_fallback_routing(mock_get_or_create_agent):
     """Test model fallback routing when a model encounters a 429 quota exception."""
     mock_agent_primary = AsyncMock()
     mock_agent_primary.chat.side_effect = Exception("429 rate limit exceeded or quota exhausted")
@@ -183,11 +185,13 @@ def test_model_fallback_routing(mock_get_or_create_agent):
             
     mock_get_or_create_agent.side_effect = side_effect
     
-    response = client.post("/api/chat", json={
-        "prompt": "implement fallback routing check for rate limiting",
-        "session_id": "test-fallback-session",
-        "model": "gemini-3.5-flash"
-    })
+    from httpx import AsyncClient, ASGITransport
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post("/api/chat", json={
+            "prompt": "implement fallback routing check for rate limiting",
+            "session_id": "test-fallback-session",
+            "model": "gemini-3.5-flash"
+        })
     
     assert response.status_code == 200
     chunks = response.text

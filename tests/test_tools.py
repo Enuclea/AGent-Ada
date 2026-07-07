@@ -298,7 +298,8 @@ def test_repository_skills(temp_skills_dir, mock_external_dirs):
     
     # Verify install_repository_skill
     with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
-        with mock.patch("agent.execution.tools._verify_skill_signature", return_value=True):
+        with mock.patch("agent.execution.tools._verify_skill_signature", return_value=True), \
+             mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value="DECISION: APPROVED"):
             import asyncio
             install_res = asyncio.run(tools.install_repository_skill("apple-notes"))
     assert "Successfully downloaded and installed skill" in install_res
@@ -493,6 +494,7 @@ def test_run_command_environment_scrubbing():
 def test_create_and_improve_skill_hitl_confirmations(temp_skills_dir):
     """Test that create_agent_skill and improve_agent_skill require HITL confirmation when not confirmed."""
     import os
+    import asyncio
     from unittest.mock import patch
     
     # Temporarily remove environmental confirmation
@@ -550,6 +552,57 @@ def test_create_and_improve_skill_hitl_confirmations(temp_skills_dir):
             assert "Successfully updated skill" in res_improve
 
 
+def test_install_repository_skill_4step(temp_skills_dir, mock_external_dirs):
+    """Test the hardened 4-step security review flow with JSON-structured reviews."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    async def run_test():
+        hermes_path = mock_external_dirs["hermes_skills"]
+        skill_folder = hermes_path / "test-4step"
+        skill_folder.mkdir(parents=True, exist_ok=True)
+        with open(skill_folder / "SKILL.md", "w") as f:
+            f.write("---\nname: test-4step\ndescription: Test 4-step\n---\n# Test 4-step")
+
+        # Mock dependencies
+        mock_verify = patch("agent.execution.tools._verify_skill_signature", return_value=True)
+        
+        # Scenario 1: Clean, safe primary review JSON -> Installs immediately
+        primary_json_ok = '```json\n{"safe": true, "findings": [], "requires_hil": false, "proceed_recommended": true}\n```'
+        mock_spawn = patch("agent.execution.tools.system_tools.spawn_subagent", return_value=primary_json_ok)
+        
+        with mock_verify, mock_spawn, patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
+            res = await tools.install_repository_skill("test-4step", paranoid=False)
+            assert "Successfully downloaded and installed" in res
+            
+        # Clean up
+        import shutil
+        shutil.rmtree(temp_skills_dir / "test-4step", ignore_errors=True)
+
+        # Scenario 2: Unsafe primary review -> triggers secondary review, blocks without confirm
+        primary_json_unsafe = '```json\n{"safe": false, "findings": ["uses subprocess.run"], "requires_hil": true, "proceed_recommended": false}\n```'
+        secondary_json_ok = '```json\n{"safe": true, "findings": [], "requires_hil": false, "proceed_recommended": true}\n```'
+        
+        mock_spawn_unsafe = patch("agent.execution.tools.system_tools.spawn_subagent", return_value=primary_json_unsafe)
+        
+        mock_agy_output = MagicMock()
+        mock_agy_output.response = secondary_json_ok
+        mock_agy = MagicMock()
+        mock_agy.execute = AsyncMock(return_value=mock_agy_output)
+        mock_agy_route = patch("agent.routes.agy.AgyRoute", return_value=mock_agy)
+
+        # Non-interactive, no confirm -> returns HIL_REQUIRED
+        with mock_verify, mock_spawn_unsafe, mock_agy_route, \
+             patch("sys.stdin.isatty", side_effect=[True, False]), \
+             patch("builtins.input", return_value="y"), \
+             patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "0"}):
+            res = await tools.install_repository_skill("test-4step", paranoid=False)
+            assert "HIL_REQUIRED" in res
+            assert "uses subprocess.run" in res
+
+    asyncio.run(run_test())
+
+
 def test_subprocess_sandboxing_landlock():
     """Test that commands referencing skill paths are wrapped in the sandbox and executed."""
     import asyncio
@@ -560,6 +613,7 @@ def test_subprocess_sandboxing_landlock():
         assert "landlock_test_ok" in res
 
     asyncio.run(run_test())
+
 
 
 
