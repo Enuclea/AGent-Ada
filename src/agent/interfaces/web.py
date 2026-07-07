@@ -3008,6 +3008,34 @@ async def control_tenant_instance(owner_id: str, action: str):
         raise HTTPException(status_code=500, detail=f"Failed to communicate with host command channel: {e}")
 
 
+@app.get("/api/gemini/file")
+async def get_gemini_file(path: str):
+    from fastapi.responses import FileResponse
+    from fastapi import HTTPException
+    import mimetypes
+    from pathlib import Path
+    
+    resolved_path = Path(path).resolve()
+    allowed_roots = [
+        Path("/app/.gemini").resolve(),
+        Path("/app/scratch").resolve(),
+        Path("/data").resolve()
+    ]
+    
+    is_allowed = any(resolved_path.is_relative_to(root) for root in allowed_roots)
+    if not is_allowed:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    if not resolved_path.exists() or not resolved_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    content_type, _ = mimetypes.guess_type(str(resolved_path))
+    if not content_type:
+        content_type = "application/octet-stream"
+        
+    return FileResponse(str(resolved_path), media_type=content_type)
+
+
 # Load dynamically registered plugins during application initialization (after module is fully loaded)
 load_plugins(app)
 

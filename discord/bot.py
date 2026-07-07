@@ -1593,6 +1593,13 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                         if file_path.exists() and file_path.is_file():
                             files_to_send.append(discord.File(fp=str(file_path), filename=name))
                             
+                    # Support file:/// links from IDE/subagents
+                    file_matches = re.findall(r"file://(/[^\s)]+)", chunk)
+                    for path_str in file_matches:
+                        file_path = Path(path_str)
+                        if file_path.exists() and file_path.is_file():
+                            files_to_send.append(discord.File(fp=str(file_path), filename=file_path.name))
+                            
                     if files_to_send:
                         await channel.send(chunk, files=files_to_send)
                     else:
