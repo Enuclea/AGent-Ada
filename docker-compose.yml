@@ -21,11 +21,15 @@ services:
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
       - ./scratch:/app/scratch
-      - /home/dan/.gemini:/app/.gemini
-      - /home/dan/.agent:/app/.agent
-      - /home/dan/.local/bin/agy:/app/.local/bin/agy
-      - /home/dan/AGent-Ada:/home/dan/AGent-Ada:rw
-      - /home/dan/AGent:/home/dan/AGent:rw
+      - ${HOME}/.gemini:/app/.gemini
+      - ${HOME}/.agent:/app/.agent
+      # Note: Mounts the Google AntiGravity CLI binary from the host.
+      # The agy CLI must be installed and configured on the host for the user running docker compose.
+      - ${HOME}/.local/bin/agy:/app/.local/bin/agy
+      # Note: Local workspace directory mounts giving AI agents host filesystem access.
+      # Customize these local path decisions to match your installation.
+      - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
+      - ${HOME}/AGent:${HOME}/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -58,11 +62,15 @@ services:
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
       - ./scratch:/app/scratch
-      - /home/dan/.gemini:/app/.gemini
-      - /home/dan/.agent:/app/.agent
-      - /home/dan/.local/bin/agy:/app/.local/bin/agy
-      - /home/dan/AGent-Ada:/home/dan/AGent-Ada:rw
-      - /home/dan/AGent:/home/dan/AGent:rw
+      - ${HOME}/.gemini:/app/.gemini
+      - ${HOME}/.agent:/app/.agent
+      # Note: Mounts the Google AntiGravity CLI binary from the host.
+      # The agy CLI must be installed and configured on the host for the user running docker compose.
+      - ${HOME}/.local/bin/agy:/app/.local/bin/agy
+      # Note: Local workspace directory mounts giving AI agents host filesystem access.
+      # Customize these local path decisions to match your installation.
+      - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
+      - ${HOME}/AGent:${HOME}/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -93,11 +101,15 @@ services:
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
       - ./scratch:/app/scratch
-      - /home/dan/.gemini:/app/.gemini
-      - /home/dan/.agent:/app/.agent
-      - /home/dan/.local/bin/agy:/app/.local/bin/agy
-      - /home/dan/AGent-Ada:/home/dan/AGent-Ada:rw
-      - /home/dan/AGent:/home/dan/AGent:rw
+      - ${HOME}/.gemini:/app/.gemini
+      - ${HOME}/.agent:/app/.agent
+      # Note: Mounts the Google AntiGravity CLI binary from the host.
+      # The agy CLI must be installed and configured on the host for the user running docker compose.
+      - ${HOME}/.local/bin/agy:/app/.local/bin/agy
+      # Note: Local workspace directory mounts giving AI agents host filesystem access.
+      # Customize these local path decisions to match your installation.
+      - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
+      - ${HOME}/AGent:${HOME}/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -127,11 +139,15 @@ services:
       - ./.agents:/app/.agents
       - ./enuclea:/app/enuclea
       - ./scratch:/app/scratch
-      - /home/dan/.gemini:/app/.gemini
-      - /home/dan/.agent:/app/.agent
-      - /home/dan/.local/bin/agy:/app/.local/bin/agy
-      - /home/dan/AGent-Ada:/home/dan/AGent-Ada:rw
-      - /home/dan/AGent:/home/dan/AGent:rw
+      - ${HOME}/.gemini:/app/.gemini
+      - ${HOME}/.agent:/app/.agent
+      # Note: Mounts the Google AntiGravity CLI binary from the host.
+      # The agy CLI must be installed and configured on the host for the user running docker compose.
+      - ${HOME}/.local/bin/agy:/app/.local/bin/agy
+      # Note: Local workspace directory mounts giving AI agents host filesystem access.
+      # Customize these local path decisions to match your installation.
+      - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
+      - ${HOME}/AGent:${HOME}/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app

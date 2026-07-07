@@ -308,13 +308,16 @@ class RoutingEngine:
             RuntimeError: If no routes support the model or if all eligible routes fail.
         """
         # Check cache before executing routes
-        try:
-            from agent.core.cache import get_cached_response, set_cached_response
-            cached_res = await get_cached_response(model, prompt, system_instructions)
-            if cached_res is not None:
-                return cached_res
-        except Exception as e:
-            print(f"[ROUTING: CACHE] Cache retrieval error: {e}")
+        import sys
+        cache_enabled = os.environ.get("ADA_CACHE_ENABLED", "true").lower() == "true"
+        if cache_enabled and ("pytest" not in sys.modules or os.environ.get("ADA_TEST_CACHE") == "true"):
+            try:
+                from agent.core.cache import get_cached_response, set_cached_response
+                cached_res = await get_cached_response(model, prompt, system_instructions)
+                if cached_res is not None:
+                    return cached_res
+            except Exception as e:
+                print(f"[ROUTING: CACHE] Cache retrieval error: {e}")
 
         routes = self.resolve_routes(model, task_priority)
         if not routes:
@@ -371,10 +374,11 @@ class RoutingEngine:
                             log_route_telemetry(conversation_id or "system", selected_route.name, model, "success", latency=latency)
                         except Exception:
                             pass
-                        try:
-                            await set_cached_response(model, prompt, system_instructions, res)
-                        except Exception as e:
-                            print(f"[ROUTING: CACHE] Cache write error: {e}")
+                        if cache_enabled and ("pytest" not in sys.modules or os.environ.get("ADA_TEST_CACHE") == "true"):
+                            try:
+                                await set_cached_response(model, prompt, system_instructions, res)
+                            except Exception as e:
+                                print(f"[ROUTING: CACHE] Cache write error: {e}")
                         return res
                     raise RuntimeError("Route returned None (completion empty or API error)")
                 except Exception as e:

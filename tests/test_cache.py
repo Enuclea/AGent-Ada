@@ -6,8 +6,9 @@ from agent.core.cache import get_cached_response, set_cached_response, _compute_
 from agent.storage.db import get_connection, DB_FILE_PATH
 
 @pytest.fixture(autouse=True)
-def clean_cache_table():
-    """Ensures llm_cache is clean before and after each test."""
+def clean_cache_table(monkeypatch):
+    """Ensures llm_cache is clean and cache is enabled for these tests."""
+    monkeypatch.setenv("ADA_TEST_CACHE", "true")
     conn = get_connection(DB_FILE_PATH)
     try:
         cursor = conn.cursor()
