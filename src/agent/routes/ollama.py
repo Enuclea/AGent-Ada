@@ -3,8 +3,8 @@ import json
 import asyncio
 import aiohttp
 from pathlib import Path
-from typing import List, Optional
-from agent.routes.base import BaseRoute, RouteStatus
+from typing import List, Optional, Union
+from agent.routes.base import BaseRoute, RouteStatus, RouteInput, RouteOutput
 
 def load_ollama_hosts() -> List[str]:
     """Resolves and loads Ollama server hosts from configuration or defaults.
@@ -71,12 +71,25 @@ class OllamaRoute(BaseRoute):
 
     async def execute(
         self,
-        prompt: str,
-        model: str,
+        input_data: Union[RouteInput, str] = None,
+        model: Optional[str] = None,
         system_instructions: Optional[str] = None,
         timeout: Optional[float] = None,
         conversation_id: Optional[str] = None,
-    ) -> Optional[str]:
+        **kwargs
+    ) -> RouteOutput:
+        import time
+        start_time = time.time()
+        if isinstance(input_data, RouteInput):
+            prompt = input_data.prompt
+            model = input_data.model
+            system_instructions = input_data.system_instructions
+            timeout = input_data.timeout
+            conversation_id = input_data.conversation_id
+        else:
+            prompt = input_data if isinstance(input_data, str) else kwargs.get("prompt", "")
+            model = model or "*"
+
         actual_model = model.replace("ollama/", "")
         
         # Build prompt
@@ -110,16 +123,20 @@ class OllamaRoute(BaseRoute):
             "stream": False
         }
 
+        last_err = "No workers configured"
         for url in urls:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, json=payload, timeout=timeout or 60.0) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            return data["response"]
+                            res_str = data["response"]
+                            return RouteOutput(response=res_str, latency=time.time() - start_time)
                         else:
-                            print(f"[ROUTE: ollama] Worker {url} returned status {resp.status}")
+                            last_err = f"Worker {url} returned status {resp.status}"
+                            print(f"[ROUTE: ollama] {last_err}")
             except Exception as e:
+                last_err = str(e)
                 print(f"[ROUTE: ollama] Worker {url} failed: {e}")
         
-        return None
+        return RouteOutput(latency=time.time() - start_time, error=last_err)

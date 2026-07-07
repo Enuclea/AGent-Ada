@@ -2,8 +2,8 @@ import os
 import json
 import aiohttp
 from pathlib import Path
-from typing import List, Optional
-from agent.routes.base import BaseRoute, RouteStatus
+from typing import List, Optional, Union
+from agent.routes.base import BaseRoute, RouteStatus, RouteInput, RouteOutput
 
 def load_api_keys() -> None:
     config_path = Path("config/api_keys.json")
@@ -57,12 +57,25 @@ class BYOKRoute(BaseRoute):
 
     async def execute(
         self,
-        prompt: str,
-        model: str,
+        input_data: Union[RouteInput, str] = None,
+        model: Optional[str] = None,
         system_instructions: Optional[str] = None,
         timeout: Optional[float] = None,
         conversation_id: Optional[str] = None,
-    ) -> Optional[str]:
+        **kwargs
+    ) -> RouteOutput:
+        import time
+        start_time = time.time()
+        if isinstance(input_data, RouteInput):
+            prompt = input_data.prompt
+            model = input_data.model
+            system_instructions = input_data.system_instructions
+            timeout = input_data.timeout
+            conversation_id = input_data.conversation_id
+        else:
+            prompt = input_data if isinstance(input_data, str) else kwargs.get("prompt", "")
+            model = model or "*"
+
         load_api_keys()
         model_lower = model.lower()
         full_prompt = prompt
@@ -86,11 +99,16 @@ class BYOKRoute(BaseRoute):
                     async with session.post(url, headers=headers, json=payload, timeout=timeout or 30.0) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            return data["candidates"][0]["content"]["parts"][0]["text"]
+                            res_str = data["candidates"][0]["content"]["parts"][0]["text"]
+                            return RouteOutput(response=res_str, latency=time.time() - start_time)
                         else:
-                            print(f"[ROUTE: byok] Gemini API returned status {resp.status}")
+                            err_msg = f"Gemini API returned status {resp.status}"
+                            print(f"[ROUTE: byok] {err_msg}")
+                            return RouteOutput(latency=time.time() - start_time, error=err_msg)
             except Exception as e:
+                err_msg = str(e)
                 print(f"[ROUTE: byok] Gemini API call failed: {e}")
+                return RouteOutput(latency=time.time() - start_time, error=err_msg)
 
         # 2. Anthropic / Claude
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -112,11 +130,16 @@ class BYOKRoute(BaseRoute):
                     async with session.post(url, headers=headers, json=payload, timeout=timeout or 30.0) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            return data["content"][0]["text"]
+                            res_str = data["content"][0]["text"]
+                            return RouteOutput(response=res_str, latency=time.time() - start_time)
                         else:
-                            print(f"[ROUTE: byok] Anthropic API returned status {resp.status}")
+                            err_msg = f"Anthropic API returned status {resp.status}"
+                            print(f"[ROUTE: byok] {err_msg}")
+                            return RouteOutput(latency=time.time() - start_time, error=err_msg)
             except Exception as e:
+                err_msg = str(e)
                 print(f"[ROUTE: byok] Anthropic API call failed: {e}")
+                return RouteOutput(latency=time.time() - start_time, error=err_msg)
 
         # 3. OpenAI / GPT
         openai_key = os.environ.get("OPENAI_API_KEY")
@@ -136,10 +159,15 @@ class BYOKRoute(BaseRoute):
                     async with session.post(url, headers=headers, json=payload, timeout=timeout or 30.0) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            return data["choices"][0]["message"]["content"]
+                            res_str = data["choices"][0]["message"]["content"]
+                            return RouteOutput(response=res_str, latency=time.time() - start_time)
                         else:
-                            print(f"[ROUTE: byok] OpenAI API returned status {resp.status}")
+                            err_msg = f"OpenAI API returned status {resp.status}"
+                            print(f"[ROUTE: byok] {err_msg}")
+                            return RouteOutput(latency=time.time() - start_time, error=err_msg)
             except Exception as e:
+                err_msg = str(e)
                 print(f"[ROUTE: byok] OpenAI API call failed: {e}")
+                return RouteOutput(latency=time.time() - start_time, error=err_msg)
 
-        return None
+        return RouteOutput(latency=time.time() - start_time, error="No keys or model unsupported")

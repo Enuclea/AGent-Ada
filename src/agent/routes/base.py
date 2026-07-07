@@ -4,7 +4,7 @@ import os
 import shutil
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any, Union
 
 def get_harness_path() -> Optional[str]:
     """Resolves the path to the system-wide agy binary."""
@@ -77,6 +77,22 @@ class RouteStatus(str, Enum):
     SECONDARY = "secondary"
     URGENT_ONLY = "urgent_only"
 
+from pydantic import BaseModel, Field
+
+class RouteInput(BaseModel):
+    """Input payload for execution routes."""
+    prompt: str = Field(..., description="The main text prompt input to execute.")
+    model: str = Field(..., description="The target LLM model selection name.")
+    system_instructions: Optional[str] = Field(None, description="Optional context system instructions.")
+    timeout: Optional[float] = Field(None, description="Optional float execution timeout.")
+    conversation_id: Optional[str] = Field(None, description="Optional unique thread conversation ID.")
+
+class RouteOutput(BaseModel):
+    """Output envelope returned by execution routes."""
+    response: Optional[Any] = Field(None, description="The response content or execution process object.")
+    latency: float = Field(0.0, description="Execution duration in seconds.")
+    error: Optional[str] = Field(None, description="Error message if the execution failed.")
+
 class BaseRoute(ABC):
     """Abstract base class for all execution routes in the AGent-Ada system."""
 
@@ -107,16 +123,14 @@ class BaseRoute(ABC):
     @abstractmethod
     async def execute(
         self,
-        prompt: str,
-        model: str,
+        input_data: Union[RouteInput, str] = None,
+        model: Optional[str] = None,
         system_instructions: Optional[str] = None,
         timeout: Optional[float] = None,
         conversation_id: Optional[str] = None,
-    ) -> Optional[str]:
-        """Executes the prompt on this route.
-
-        Returns the text response string if successful, or None if it fails.
-        """
+        **kwargs
+    ) -> RouteOutput:
+        """Executes the prompt on this route using predictable Pydantic inputs/outputs."""
         pass
 
     def supports_model(self, model: str) -> bool:

@@ -1,7 +1,8 @@
 import os
 import asyncio
+import time
 from typing import List, Optional, Union
-from agent.routes.base import BaseRoute, RouteStatus, get_harness_path
+from agent.routes.base import BaseRoute, RouteStatus, get_harness_path, RouteInput, RouteOutput
 
 class AgyRoute(BaseRoute):
     @property
@@ -23,12 +24,24 @@ class AgyRoute(BaseRoute):
 
     async def execute(
         self,
-        prompt: str,
-        model: str,
+        input_data: Union[RouteInput, str] = None,
+        model: Optional[str] = None,
         system_instructions: Optional[str] = None,
         timeout: Optional[float] = None,
         conversation_id: Optional[str] = None,
-    ) -> Optional[Union[str, asyncio.subprocess.Process]]:
+        **kwargs
+    ) -> RouteOutput:
+        start_time = time.time()
+        if isinstance(input_data, RouteInput):
+            prompt = input_data.prompt
+            model = input_data.model
+            system_instructions = input_data.system_instructions
+            timeout = input_data.timeout
+            conversation_id = input_data.conversation_id
+        else:
+            prompt = input_data if isinstance(input_data, str) else kwargs.get("prompt", "")
+            model = model or "*"
+
         import re
         if model.startswith("-"):
             raise ValueError("model cannot start with a hyphen")
@@ -83,10 +96,11 @@ class AgyRoute(BaseRoute):
                     stderr=asyncio.subprocess.PIPE,
                     env=sub_env
                 )
-                return proc
+                return RouteOutput(response=proc, latency=time.time() - start_time)
             except Exception as e:
-                print(f"[ROUTE: agy] Failed to spawn streaming subprocess: {e}")
-                return None
+                err_msg = f"Failed to spawn streaming subprocess: {e}"
+                print(f"[ROUTE: agy] {err_msg}")
+                return RouteOutput(latency=time.time() - start_time, error=err_msg)
 
         # Non-streaming execution with cost/congestion-aware candidate failovers
         last_err = None
@@ -112,7 +126,8 @@ class AgyRoute(BaseRoute):
                     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout or 120.0)
                     
                     if proc.returncode == 0:
-                        return stdout.decode("utf-8", errors="replace").strip()
+                        res_str = stdout.decode("utf-8", errors="replace").strip()
+                        return RouteOutput(response=res_str, latency=time.time() - start_time)
                     else:
                         last_err = stderr.decode("utf-8", errors="replace").strip() or "Empty response"
                         last_err_lower = last_err.lower()
@@ -163,4 +178,4 @@ class AgyRoute(BaseRoute):
                     break
 
         print(f"[ROUTE: agy] Execution failed after trying all candidates. Last error: {last_err}")
-        return None
+        return RouteOutput(latency=time.time() - start_time, error=last_err)

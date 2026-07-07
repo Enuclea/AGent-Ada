@@ -12,7 +12,7 @@ import asyncio
 from pathlib import Path
 from typing import List, Optional, Type, Dict, Any, Tuple
 
-from agent.routes.base import BaseRoute, RouteStatus, TaskPriority
+from agent.routes.base import BaseRoute, RouteStatus, TaskPriority, RouteInput, RouteOutput
 
 _checking_routes = set()
 
@@ -360,14 +360,18 @@ class RoutingEngine:
                 start_time = time.time()
                 try:
                     print(f"[ROUTING] Attempting execution via route '{selected_route.name}' (Tier {priority_tier}) for model '{model}'")
-                    res = await selected_route.execute(
+                    input_data = RouteInput(
                         prompt=prompt,
                         model=model,
                         system_instructions=system_instructions,
                         timeout=timeout,
                         conversation_id=conversation_id
                     )
-                    latency = time.time() - start_time
+                    output_data = await selected_route.execute(input_data)
+                    res = output_data.response
+                    latency = output_data.latency or (time.time() - start_time)
+                    err_msg = output_data.error or "Route returned None (completion empty or API error)"
+
                     if res is not None:
                         try:
                             from agent.observability.telemetry import log_route_telemetry
@@ -380,7 +384,7 @@ class RoutingEngine:
                             except Exception as e:
                                 print(f"[ROUTING: CACHE] Cache write error: {e}")
                         return res
-                    raise RuntimeError("Route returned None (completion empty or API error)")
+                    raise RuntimeError(err_msg)
                 except Exception as e:
                     latency = time.time() - start_time
                     try:

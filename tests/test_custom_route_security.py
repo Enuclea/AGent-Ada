@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from agent.core.routing import RoutingEngine
-from agent.routes.base import BaseRoute
+from agent.routes.base import BaseRoute, RouteInput, RouteOutput
 
 class MockSafeRoute(BaseRoute):
     @property
@@ -25,8 +25,8 @@ class MockSafeRoute(BaseRoute):
     def supported_models(self):
         return []
 
-    async def execute(self, prompt, **kwargs):
-        return "Safe execution"
+    async def execute(self, input_data: RouteInput) -> RouteOutput:
+        return RouteOutput(response="Safe execution")
 
 def test_custom_route_security_scanning():
     # Create temp directory for mock custom routes
