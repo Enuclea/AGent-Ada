@@ -869,6 +869,8 @@ async def chat_endpoint(req: ChatRequest):
                 current_plan = memory.get_session_plan(lookup_id)
                 if current_plan and "steps" in current_plan:
                     steps_to_run = [s for s in current_plan["steps"] if s["status"] != "completed"]
+                    if any(s["status"] in ("running", "delegated") for s in steps_to_run):
+                        steps_to_run = []
                 else:
                     steps_to_run = []
 
@@ -2446,6 +2448,8 @@ async def run_scheduler():
                 
                 resumed_sessions = set()
                 for step_id, plan_id, step_desc, session_id, step_order in delegated_steps:
+                    if session_id in resumed_sessions:
+                        continue
                     cursor.execute("""
                         SELECT subagent_id, message, timestamp 
                         FROM subagent_messages 
@@ -2457,9 +2461,9 @@ async def run_scheduler():
                     if subagent_row:
                         subagent_id, message, timestamp = subagent_row
                         if "subagent completed:" in message.lower():
-                            cursor.execute("UPDATE plan_steps SET status = 'completed' WHERE id = ?", (step_id,))
+                            cursor.execute("UPDATE plan_steps SET status = 'completed' WHERE plan_id = ? AND status = 'delegated'", (plan_id,))
                             conn.commit()
-                            print(f"[SCHEDULER] Subagent {subagent_id} completed. Step {step_id} marked completed.")
+                            print(f"[SCHEDULER] Subagent {subagent_id} completed. All delegated steps for plan {plan_id} marked completed.")
                             
                             if session_id not in resumed_sessions:
                                 resumed_sessions.add(session_id)
