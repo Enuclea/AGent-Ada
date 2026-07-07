@@ -1669,7 +1669,6 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                 
                 # Send all chunks as new messages sequentially
                 for chunk in message_chunks:
-                    import re
                     files_to_send = []
                     found_paths = set()
 
