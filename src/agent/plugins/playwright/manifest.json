@@ -1,0 +1,14 @@
+{
+  "id": "playwright",
+  "name": "Playwright Automation",
+  "version": "1.0.0",
+  "description": "Exposes web browsing, text extraction, and screenshot capabilities using Playwright.",
+  "author": "AntiGravity Core",
+  "dependencies": ["playwright"],
+  "tools": [
+    {
+      "name": "playwright_browse_url",
+      "description": "Browse a URL, extract clean text, and take a screenshot."
+    }
+  ]
+}

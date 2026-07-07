@@ -504,6 +504,18 @@ function formatMarkdown(text) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
 
+    // Handle images: ![Alt](url)
+    escaped = escaped.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
+        const cleanUrl = url.replace(/&amp;/g, '&');
+        return `<img src="${cleanUrl}" alt="${alt}" style="max-width: 100%; border-radius: 8px; margin-top: 0.5rem; border: 1px solid var(--card-border); display: block;">`;
+    });
+
+    // Handle links: [Text](url)
+    escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) => {
+        const cleanUrl = url.replace(/&amp;/g, '&');
+        return `<a href="${cleanUrl}" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">${label}</a>`;
+    });
+
     // Handle code blocks
     escaped = escaped.replace(/```([\s\S]*?)```/g, (match, p1) => {
         return `<pre><code>${p1.trim()}</code></pre>`;

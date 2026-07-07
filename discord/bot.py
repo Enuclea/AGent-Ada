@@ -1583,7 +1583,20 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                 
                 # Send all chunks as new messages sequentially
                 for chunk in message_chunks:
-                    await channel.send(chunk)
+                    import re
+                    screenshot_matches = re.findall(r"/api/playwright/screenshot/(screenshot_[a-f0-9]+\.png)", chunk)
+                    files_to_send = []
+                    for name in screenshot_matches:
+                        file_path = Path("/data/screenshots") / name
+                        if not file_path.exists():
+                            file_path = Path("/tmp/screenshots") / name
+                        if file_path.exists() and file_path.is_file():
+                            files_to_send.append(discord.File(fp=str(file_path), filename=name))
+                            
+                    if files_to_send:
+                        await channel.send(chunk, files=files_to_send)
+                    else:
+                        await channel.send(chunk)
                     
     except Exception as e:
         typing_task.cancel()

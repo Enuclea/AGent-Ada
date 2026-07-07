@@ -25,7 +25,8 @@ COPY discord/ ./discord/
 
 # Install the dependencies
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -e .
+    pip install --no-cache-dir -e . && \
+    playwright install --with-deps chromium
 
 # Set ownership of all copied files to nobody
 RUN chown -R nobody:nogroup /app

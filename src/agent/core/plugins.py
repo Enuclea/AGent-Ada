@@ -59,10 +59,21 @@ class PluginManager:
             for item in plugins_dir.iterdir():
                 if item.is_dir() and (item / "__init__.py").exists():
                     if item.name not in self.plugins:
+                        metadata = {}
+                        manifest_path = item / "manifest.json"
+                        if manifest_path.exists():
+                            try:
+                                import json
+                                with open(manifest_path, "r", encoding="utf-8") as f:
+                                    metadata = json.load(f)
+                            except Exception as e:
+                                print(f"[PLUGINS] Failed to parse manifest.json for {item.name}: {e}")
+                        
                         self.plugins[item.name] = Plugin(
                             name=item.name,
                             path=item,
-                            state=PluginState.DISCOVERED
+                            state=PluginState.DISCOVERED,
+                            metadata=metadata
                         )
         return self.plugins
 

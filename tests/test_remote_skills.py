@@ -48,7 +48,8 @@ def test_find_remote_repository_skills(temp_skills_dir):
                 "description": "A mock remote Hermes skill.",
                 "identifier": "official/test-remote-hermes",
                 "repo": "NousResearch/hermes-agent",
-                "path": "optional-skills/test-remote-hermes"
+                "path": "optional-skills/test-remote-hermes",
+                "source": "official"
             }
         ]
     }
