@@ -29,6 +29,7 @@ daemon.log
 discord/.env
 config/*
 !config/*.sample
+!config/*.example
 config/ollama_hosts.json
 
 # IDE / Editor configuration
