@@ -71,6 +71,9 @@ class ToolRegistry:
             tools.get_relevant_tests,
             tools.checkpoint_task,
             tools.get_task_checkpoint,
+            tools.post_to_discord,
+            tools.read_discord_channel,
+            tools.list_discord_channels,
         ]
         for t in builtins:
             if t not in registered:

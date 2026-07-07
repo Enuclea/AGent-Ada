@@ -2041,3 +2041,83 @@ def get_task_checkpoint(task_name: str) -> str:
         "updated_at": checkpoint["updated_at"],
         "message": f"Resumable checkpoint found at step {checkpoint['step_completed']}/{checkpoint['total_steps'] or '?'} (phase: {checkpoint['phase']}). Resume from step {checkpoint['step_completed'] + 1}."
     })
+
+
+async def post_to_discord(channel: str, message: str, file_path: Optional[str] = None) -> str:
+    """Posts a text message and an optional file attachment to a Discord channel.
+    
+    Args:
+        channel: The channel name (e.g. 'general') or channel ID string.
+        message: The text content of the message.
+        file_path: Optional absolute file path of a file to upload/attach.
+        
+    Returns:
+        JSON string indicating success or failure.
+    """
+    import aiohttp
+    
+    url = "http://127.0.0.1:8090/api/discord/post"
+    payload = {
+        "channel": channel,
+        "message": message,
+        "file_path": file_path
+    }
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
+            async with session.post(url, json=payload) as resp:
+                if resp.status == 200:
+                    res_json = await resp.json()
+                    return json.dumps(res_json)
+                else:
+                    err_txt = await resp.text()
+                    return json.dumps({"status": "failed", "error": f"HTTP {resp.status}: {err_txt}"})
+    except Exception as e:
+        return json.dumps({"status": "failed", "error": str(e)})
+
+
+async def read_discord_channel(channel: str, limit: int = 10) -> str:
+    """Reads the recent message history of a Discord channel for context.
+    
+    Args:
+        channel: The channel name (e.g. 'general') or channel ID string.
+        limit: Number of recent messages to retrieve (max 50, default 10).
+        
+    Returns:
+        JSON string listing the messages or containing an error.
+    """
+    import aiohttp
+    
+    url = f"http://127.0.0.1:8090/api/discord/messages?channel={channel}&limit={limit}"
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    res_json = await resp.json()
+                    return json.dumps(res_json)
+                else:
+                    err_txt = await resp.text()
+                    return json.dumps({"status": "failed", "error": f"HTTP {resp.status}: {err_txt}"})
+    except Exception as e:
+        return json.dumps({"status": "failed", "error": str(e)})
+
+
+async def list_discord_channels() -> str:
+    """Lists all available text channels on the Discord guilds the bot is connected to.
+    
+    Returns:
+        JSON string listing the channels or containing an error.
+    """
+    import aiohttp
+    
+    url = "http://127.0.0.1:8090/api/discord/channels"
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    res_json = await resp.json()
+                    return json.dumps(res_json)
+                else:
+                    err_txt = await resp.text()
+                    return json.dumps({"status": "failed", "error": f"HTTP {resp.status}: {err_txt}"})
+    except Exception as e:
+        return json.dumps({"status": "failed", "error": str(e)})

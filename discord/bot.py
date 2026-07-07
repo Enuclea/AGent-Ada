@@ -671,6 +671,85 @@ async def recover_tasks():
             print(f"[QUEUE RECOVERY ERROR] Failed to recover task {task_id}: {e}")
             bot_queue.update_task_status(task_id, 'failed')
 
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+bot_api_app = FastAPI(title="Ada Discord Bot API")
+
+class PostMessageRequest(BaseModel):
+    channel: str
+    message: str
+    file_path: Optional[str] = None
+
+@bot_api_app.post("/api/discord/post")
+async def api_post_message(req: PostMessageRequest):
+    channel = None
+    if req.channel.isdigit():
+        channel = bot.get_channel(int(req.channel))
+    else:
+        for guild in bot.guilds:
+            for ch in guild.text_channels:
+                if ch.name == req.channel:
+                    channel = ch
+                    break
+            if channel:
+                break
+                
+    if not channel:
+        raise HTTPException(status_code=404, detail=f"Channel '{req.channel}' not found")
+        
+    try:
+        if req.file_path and os.path.exists(req.file_path):
+            file = discord.File(req.file_path)
+            sent = await channel.send(req.message, file=file)
+        else:
+            sent = await channel.send(req.message)
+        return {"status": "success", "message_id": sent.id, "channel": channel.name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@bot_api_app.get("/api/discord/channels")
+async def api_list_channels():
+    channels_list = []
+    for guild in bot.guilds:
+        for ch in guild.text_channels:
+            channels_list.append({
+                "id": str(ch.id),
+                "name": ch.name,
+                "guild": guild.name
+            })
+    return {"channels": channels_list}
+
+@bot_api_app.get("/api/discord/messages")
+async def api_get_messages(channel: str, limit: int = 10):
+    chan = None
+    if channel.isdigit():
+        chan = bot.get_channel(int(channel))
+    else:
+        for guild in bot.guilds:
+            for ch in guild.text_channels:
+                if ch.name == channel:
+                    chan = ch
+                    break
+            if chan:
+                break
+                
+    if not chan:
+        raise HTTPException(status_code=404, detail=f"Channel '{channel}' not found")
+        
+    try:
+        messages = []
+        async for msg in chan.history(limit=limit):
+            messages.append({
+                "id": str(msg.id),
+                "author": msg.author.name,
+                "content": msg.content,
+                "timestamp": msg.created_at.isoformat()
+            })
+        return {"messages": messages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @bot.event
 async def on_ready():
     app_info = await bot.application_info()
@@ -685,6 +764,13 @@ async def on_ready():
     save_joined_members()
     asyncio.create_task(queue_worker())
     asyncio.create_task(recover_tasks())
+    
+    # Start the local FastAPI server
+    import uvicorn
+    config = uvicorn.Config(bot_api_app, host="127.0.0.1", port=8090, log_level="info")
+    server = uvicorn.Server(config)
+    asyncio.create_task(server.serve())
+    print("[API] Discord Bot API server started on http://127.0.0.1:8090")
     
     # Start daily prompt loop
     if not post_daily_prompt.is_running():
@@ -1584,35 +1670,47 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                 # Send all chunks as new messages sequentially
                 for chunk in message_chunks:
                     import re
-                    screenshot_matches = re.findall(r"/api/playwright/screenshot/(screenshot_[a-f0-9]+\.png)", chunk)
                     files_to_send = []
+                    found_paths = set()
+
+                    def try_add_path(raw_path: str):
+                        path_str = raw_path.strip()
+                        if path_str.startswith("file:///"):
+                            path_str = path_str[8:]
+                        elif path_str.startswith("file://"):
+                            path_str = path_str[7:]
+                        
+                        path_str = path_str.strip("\"'`()[]{}")
+                        path_obj = Path(path_str)
+                        if path_obj.exists() and path_obj.is_file():
+                            abs_path = str(path_obj.resolve())
+                            if abs_path not in found_paths:
+                                found_paths.add(abs_path)
+                                files_to_send.append(discord.File(fp=open(abs_path, "rb"), filename=path_obj.name))
+
+                    # 1. Match playwright screenshots: /api/playwright/screenshot/(screenshot_[a-f0-9]+\.png)
+                    screenshot_matches = re.findall(r"/api/playwright/screenshot/(screenshot_[a-f0-9]+\.png)", chunk)
                     for name in screenshot_matches:
                         file_path = Path("/data/screenshots") / name
                         if not file_path.exists():
                             file_path = Path("/tmp/screenshots") / name
                         if file_path.exists() and file_path.is_file():
-                            files_to_send.append(discord.File(fp=str(file_path), filename=name))
-                            
-                    # Support file:/// links or absolute paths from IDE/subagents
-                    paths_to_check = []
-                    paths_to_check.extend(re.findall(r"file://(/[^\s)]+)", chunk))
-                    paths_to_check.extend(re.findall(r"\((/app/[^\s)]+|/data/[^\s)]+|/tmp/[^\s)]+)\)", chunk))
-                    paths_to_check.extend(re.findall(r"(?:^|[\s\"'])(/app/[^\s\"'\)]+|/data/[^\s\"'\)]+|/tmp/[^\s\"'\)]+)", chunk))
-                    
-                    seen_paths = set()
-                    unique_paths = []
-                    for p in paths_to_check:
-                        clean_p = p.strip()
-                        if clean_p not in seen_paths:
-                            seen_paths.add(clean_p)
-                            unique_paths.append(clean_p)
-                            
-                    for path_str in unique_paths:
-                        file_path = Path(path_str)
-                        if file_path.exists() and file_path.is_file():
-                            if file_path.name not in [f.filename for f in files_to_send]:
-                                files_to_send.append(discord.File(fp=str(file_path), filename=file_path.name))
-                            
+                            try_add_path(str(file_path))
+
+                    # 2. Match markdown image links: ![alt](path) where path starts with /app/, /home/dan/, or file:///
+                    for match in re.findall(r'!\[.*?\]\(((?:file:///|/app/|/home/dan/)[^)]+)\)', chunk):
+                        try_add_path(match)
+
+                    # 3. Match standard file/image links: [label](path)
+                    for match in re.findall(r'\[.*?\]\(((?:file:///|/app/|/home/dan/)[^)]+)\)', chunk):
+                        try_add_path(match)
+
+                    # 4. Match raw absolute paths starting with /app/, /home/dan/, or file:///
+                    # and ending in common file extensions (.png, .jpg, .jpeg, .gif, .pdf, .txt)
+                    raw_path_pattern = r'(?:file:///|/app/|/home/dan/)[^\s)]+?\.(?:png|jpg|jpeg|gif|pdf|txt)\b'
+                    for match in re.findall(raw_path_pattern, chunk, re.IGNORECASE):
+                        try_add_path(match)
+
                     if files_to_send:
                         await channel.send(chunk, files=files_to_send)
                     else:
