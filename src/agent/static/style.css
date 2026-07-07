@@ -1331,9 +1331,9 @@ select:focus {
 
 /* Modal Container */
 .modal-container {
-    width: 92%;
-    max-width: 1200px;
-    height: 82vh;
+    width: 96%;
+    max-width: 1600px;
+    height: 88vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;

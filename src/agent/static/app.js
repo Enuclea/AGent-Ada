@@ -1690,7 +1690,11 @@ async function viewRepoSkill(skill) {
                             <span>Repository: <strong>${skill.type === 'hermes' ? 'Hermes Skills' : 'OpenClaw Extensions'}</strong></span>
                         </div>
                     </div>
-                    <div class="detail-actions">
+                    <div class="detail-actions" style="display: flex; align-items: center; gap: 1.25rem;">
+                        <label class="paranoid-toggle-label" style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted); font-size: 0.85rem; cursor: pointer; user-select: none;">
+                            <input type="checkbox" id="chk-paranoid-mode" style="cursor: pointer; accent-color: var(--accent-orchid);">
+                            <span>Paranoid Mode (Roundtable)</span>
+                        </label>
                         <button class="btn-primary" id="btn-install-skill">
                             <i class="fa-solid fa-download"></i> Install Skill
                         </button>
@@ -1723,7 +1727,10 @@ async function viewRepoSkill(skill) {
             
             // Add click action to Install button
             const installBtn = document.getElementById('btn-install-skill');
-            installBtn.addEventListener('click', () => installRepoSkill(skill.name, installBtn));
+            installBtn.addEventListener('click', () => {
+                const isParanoid = document.getElementById('chk-paranoid-mode')?.checked || false;
+                installRepoSkill(skill.name, installBtn, isParanoid);
+            });
         } else {
             throw new Error(`Failed to load skill code (${res.status})`);
         }
@@ -1740,11 +1747,11 @@ async function viewRepoSkill(skill) {
 }
 
 // Trigger Skill Installation
-async function installRepoSkill(skillName, button) {
+async function installRepoSkill(skillName, button, isParanoid = false) {
     button.disabled = true;
     button.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Installing...`;
     try {
-        const res = await fetch(`/api/repo-skills/${encodeURIComponent(skillName)}/install`, {
+        const res = await fetch(`/api/repo-skills/${encodeURIComponent(skillName)}/install?paranoid=${isParanoid}`, {
             method: 'POST'
         });
         if (res.ok) {

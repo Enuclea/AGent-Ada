@@ -491,22 +491,24 @@ def _find_repository_skills() -> dict:
             with urllib.request.urlopen(req, timeout=5) as response:
                 hermes_data = json.loads(response.read().decode())
                 for skill in hermes_data.get("skills", []):
-                    name = skill.get("name")
-                    if name:
-                        desc = skill.get("description") or "Hermes skill."
-                        identifier = skill.get("identifier")
-                        repo = skill.get("repo")
-                        path_val = skill.get("path")
-                        remote_results[name] = {
-                            "name": name,
-                            "type": "hermes",
-                            "description": desc,
-                            "identifier": identifier,
-                            "remote": True,
-                            "source": "hermes-index",
-                            "repo": repo,
-                            "path": path_val
-                        }
+                    # ONLY include official or builtin skills to prevent front-end lag and load instantly
+                    if skill.get("source") == "official" or skill.get("trust_level") == "builtin":
+                        name = skill.get("name")
+                        if name:
+                            desc = skill.get("description") or "Hermes skill."
+                            identifier = skill.get("identifier")
+                            repo = skill.get("repo")
+                            path_val = skill.get("path")
+                            remote_results[name] = {
+                                "name": name,
+                                "type": "hermes",
+                                "description": desc,
+                                "identifier": identifier,
+                                "remote": True,
+                                "source": "hermes-index",
+                                "repo": repo,
+                                "path": path_val
+                            }
         except Exception:
             pass
             
@@ -703,13 +705,14 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     except Exception:
         return False
 
-async def install_repository_skill(skill_name: str) -> str:
+async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = None) -> str:
     """Downloads/copies a skill from the external repositories to the local active skills directory.
     
     This enables the skill and registers its tools for use by the agent.
     
     Args:
         skill_name: The name of the skill/tool to install.
+        paranoid: Optional override for paranoid mode.
     """
     repo_skills = _find_repository_skills()
     if skill_name not in repo_skills:
@@ -851,7 +854,10 @@ Include your assessment and end your response with either:
             except Exception as e:
                 return f"Error: Security review failed due to subagent error: {e}"
                 
-            is_paranoid = os.environ.get("ADA_PARANOID_MODE") == "1"
+            if paranoid is None:
+                is_paranoid = os.environ.get("ADA_PARANOID_MODE") == "1"
+            else:
+                is_paranoid = paranoid
             if is_paranoid:
                 # 2. Roundtable: run Claude code review via agy
                 claude_prompt = f"""You are Claude, a Senior Security Engineer.
