@@ -143,7 +143,9 @@ def create_atera_ticket(
     description: str, 
     customer_id: int, 
     priority: str = "Low", 
-    contact_id: Optional[int] = None
+    contact_id: Optional[int] = None,
+    status: str = "Open",
+    group_id: Optional[int] = None
 ) -> str:
     """Logs a new support ticket in Atera.
     
@@ -153,35 +155,54 @@ def create_atera_ticket(
         customer_id: The CustomerID the ticket belongs to.
         priority: Priority level ('Low', 'Medium', 'High', 'Critical').
         contact_id: Optional contact (EndUserID) to associate with the ticket.
+        status: Status level (e.g. 'Open', 'Pending', 'Closed', 'Resolved').
+        group_id: Optional technician group ID (e.g. 7 for Engineering).
         
     Returns:
         str: A summary message including the new TicketID.
     """
+    import os
     api_key, base_url = load_atera_credentials()
     if not api_key:
         return "Error: Atera API credentials not configured in environment."
 
     async def _run():
-        payload = {
-            "TicketTitle": title,
-            "TicketDescription": description,
-            "CustomerID": customer_id,
-            "TicketPriority": priority,
-            "TicketStatus": "Open"
-        }
-        if contact_id:
-            payload["EndUserID"] = contact_id
+        # Fallback to engineering group ID if not specified but needed
+        resolved_group_id = group_id
+        if not resolved_group_id:
+            eng_env = os.environ.get("ATERA_ENGINEERING_GROUP_ID")
+            if eng_env and eng_env.strip():
+                try:
+                    resolved_group_id = int(eng_env)
+                except Exception:
+                    pass
+            if not resolved_group_id:
+                resolved_group_id = 7 # Default Engineering
 
         async with AteraClient(api_key, base_url) as client:
             try:
+                # 1. Create ticket
                 res = await client.create_ticket(title, description, customer_id, priority)
                 if res:
-                    # If contact_id is specified, assign it explicitly via PUT/update
+                    # 2. Add description as a public comment (so it shows up as first comment)
+                    await client.add_ticket_comment(res, description, is_internal=False)
+                    
+                    # 3. Update the fields (contact, status, group)
+                    update_fields = {}
                     if contact_id:
-                        await client._request("PUT", f"tickets/{res}", json_payload={"EndUserID": contact_id})
-                    return f"Successfully created ticket '{title}' under CustomerID: {customer_id} (TicketID: {res})."
+                        update_fields["EndUserID"] = contact_id
+                    if status:
+                        update_fields["TicketStatus"] = status
+                    if resolved_group_id:
+                        update_fields["TechnicianGroupID"] = resolved_group_id
+                        
+                    if update_fields:
+                        await client.update_ticket_fields(res, update_fields)
+                        
+                    return f"Successfully created ticket '{title}' under CustomerID: {customer_id} (TicketID: {res}) with status: {status} and assigned to group: {resolved_group_id}."
                 return f"Failed to retrieve TicketID after creation."
             except Exception as e:
                 return f"Error creating ticket: {e}"
 
     return asyncio.run(_run())
+
