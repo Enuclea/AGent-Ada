@@ -196,4 +196,9 @@ class MagicaCustomRoute(BaseRoute):
                     # For other types of errors, proceed to the next model candidate
                     break
 
-        return RouteOutput(latency=time.time() - start_time, error=last_err)
+        is_rate_limit = False
+        if last_err:
+            last_err_lower = last_err.lower()
+            if any(k in last_err_lower for k in ["quota", "rate limit", "429", "limit exceeded"]):
+                is_rate_limit = True
+        return RouteOutput(latency=time.time() - start_time, error=last_err, rate_limit_breached=is_rate_limit)

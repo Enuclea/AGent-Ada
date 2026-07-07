@@ -104,11 +104,13 @@ class BYOKRoute(BaseRoute):
                         else:
                             err_msg = f"Gemini API returned status {resp.status}"
                             print(f"[ROUTE: byok] {err_msg}")
-                            return RouteOutput(latency=time.time() - start_time, error=err_msg)
+                            is_rate_limit = (resp.status == 429) or any(k in err_msg.lower() for k in ["quota", "rate limit", "limit exceeded"])
+                            return RouteOutput(latency=time.time() - start_time, error=err_msg, rate_limit_breached=is_rate_limit)
             except Exception as e:
                 err_msg = str(e)
                 print(f"[ROUTE: byok] Gemini API call failed: {e}")
-                return RouteOutput(latency=time.time() - start_time, error=err_msg)
+                is_rate_limit = any(k in err_msg.lower() for k in ["quota", "rate limit", "429", "limit exceeded"])
+                return RouteOutput(latency=time.time() - start_time, error=err_msg, rate_limit_breached=is_rate_limit)
 
         # 2. Anthropic / Claude
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -135,11 +137,13 @@ class BYOKRoute(BaseRoute):
                         else:
                             err_msg = f"Anthropic API returned status {resp.status}"
                             print(f"[ROUTE: byok] {err_msg}")
-                            return RouteOutput(latency=time.time() - start_time, error=err_msg)
+                            is_rate_limit = (resp.status == 429) or any(k in err_msg.lower() for k in ["quota", "rate limit", "limit exceeded"])
+                            return RouteOutput(latency=time.time() - start_time, error=err_msg, rate_limit_breached=is_rate_limit)
             except Exception as e:
                 err_msg = str(e)
                 print(f"[ROUTE: byok] Anthropic API call failed: {e}")
-                return RouteOutput(latency=time.time() - start_time, error=err_msg)
+                is_rate_limit = any(k in err_msg.lower() for k in ["quota", "rate limit", "429", "limit exceeded"])
+                return RouteOutput(latency=time.time() - start_time, error=err_msg, rate_limit_breached=is_rate_limit)
 
         # 3. OpenAI / GPT
         openai_key = os.environ.get("OPENAI_API_KEY")
@@ -164,10 +168,12 @@ class BYOKRoute(BaseRoute):
                         else:
                             err_msg = f"OpenAI API returned status {resp.status}"
                             print(f"[ROUTE: byok] {err_msg}")
-                            return RouteOutput(latency=time.time() - start_time, error=err_msg)
+                            is_rate_limit = (resp.status == 429) or any(k in err_msg.lower() for k in ["quota", "rate limit", "limit exceeded"])
+                            return RouteOutput(latency=time.time() - start_time, error=err_msg, rate_limit_breached=is_rate_limit)
             except Exception as e:
                 err_msg = str(e)
                 print(f"[ROUTE: byok] OpenAI API call failed: {e}")
-                return RouteOutput(latency=time.time() - start_time, error=err_msg)
+                is_rate_limit = any(k in err_msg.lower() for k in ["quota", "rate limit", "429", "limit exceeded"])
+                return RouteOutput(latency=time.time() - start_time, error=err_msg, rate_limit_breached=is_rate_limit)
 
         return RouteOutput(latency=time.time() - start_time, error="No keys or model unsupported")

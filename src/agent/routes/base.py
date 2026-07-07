@@ -92,6 +92,7 @@ class RouteOutput(BaseModel):
     response: Optional[Any] = Field(None, description="The response content or execution process object.")
     latency: float = Field(0.0, description="Execution duration in seconds.")
     error: Optional[str] = Field(None, description="Error message if the execution failed.")
+    rate_limit_breached: bool = Field(False, description="Flag indicating if execution failed due to a rate limit / quota breach.")
 
     def __str__(self) -> str:
         return str(self.response) if self.response is not None else ""
@@ -100,7 +101,7 @@ class RouteOutput(BaseModel):
         if isinstance(other, str):
             return self.response == other
         if isinstance(other, RouteOutput):
-            return self.response == other.response and self.latency == other.latency and self.error == other.error
+            return self.response == other.response and self.latency == other.latency and self.error == other.error and self.rate_limit_breached == other.rate_limit_breached
         return False
 
 class BaseRoute(ABC):

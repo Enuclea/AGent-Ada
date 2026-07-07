@@ -10,7 +10,7 @@ import importlib
 import inspect
 import asyncio
 from pathlib import Path
-from typing import List, Optional, Type, Dict, Any, Tuple
+from typing import List, Optional, Type, Dict, Any, Tuple, Callable, Awaitable
 
 from agent.routes.base import BaseRoute, RouteStatus, TaskPriority, RouteInput, RouteOutput
 
@@ -71,6 +71,29 @@ class RoutingEngine:
         self.custom_routes_dir: str = custom_routes_dir or str(Path(__file__).parent.parent / "routes" / "custom")
         self._load_builtin_routes()
         self._load_custom_routes()
+        self._rate_limited_routes: Dict[str, float] = {}
+        self.rate_limit_handlers: Dict[str, Callable[[RouteInput], Awaitable[RouteOutput]]] = {}
+
+    def is_route_rate_limited(self, route_name: str) -> bool:
+        """Checks if the route is currently on cooldown due to a rate limit breach."""
+        import time
+        cooldown_until = self._rate_limited_routes.get(route_name.lower())
+        if cooldown_until is None:
+            return False
+        if time.time() >= cooldown_until:
+            self._rate_limited_routes.pop(route_name.lower(), None)
+            return False
+        return True
+
+    def mark_route_rate_limited(self, route_name: str, cooldown_seconds: float = 300.0) -> None:
+        """Puts a route on cooldown due to a rate limit breach."""
+        import time
+        self._rate_limited_routes[route_name.lower()] = time.time() + cooldown_seconds
+        print(f"[ROUTING] Route '{route_name}' has been marked as rate-limited. Cooldown for {cooldown_seconds}s started.")
+
+    def register_rate_limit_handler(self, route_name: str, handler: Callable[[RouteInput], Awaitable[RouteOutput]]) -> None:
+        """Registers a custom fallback handler to be triggered when a route encounters a rate limit breach."""
+        self.rate_limit_handlers[route_name.lower()] = handler
 
     def _load_builtin_routes(self) -> None:
         """Discovers and registers built-in core execution routes."""
@@ -277,7 +300,20 @@ class RoutingEngine:
             return (is_primary, priority)
 
         eligible_routes.sort(key=sort_key)
-        return [r for r, _ in eligible_routes]
+        
+        # Filter out rate-limited routes
+        active_routes = []
+        rate_limited_routes = []
+        for r, status in eligible_routes:
+            if self.is_route_rate_limited(r.name):
+                rate_limited_routes.append(r)
+            else:
+                active_routes.append(r)
+
+        # If all eligible routes are on cooldown, fall back to trying all of them
+        if not active_routes and rate_limited_routes:
+            return rate_limited_routes
+        return active_routes
 
     async def execute(
         self,
@@ -384,9 +420,40 @@ class RoutingEngine:
                             except Exception as e:
                                 print(f"[ROUTING: CACHE] Cache write error: {e}")
                         return res
+
+                    # If response is None, check for rate limit breach in output_data
+                    if getattr(output_data, "rate_limit_breached", False):
+                        self.mark_route_rate_limited(selected_route.name)
+                        # Check for custom handler
+                        handler = self.rate_limit_handlers.get(selected_route.name.lower())
+                        if handler:
+                            print(f"[ROUTING] Triggering custom alternative handler for rate limit breach on route '{selected_route.name}'...")
+                            try:
+                                fallback_output = await handler(input_data)
+                                if fallback_output and fallback_output.response is not None:
+                                    print(f"[ROUTING] Alternative handler succeeded with response.")
+                                    return fallback_output.response
+                            except Exception as he:
+                                print(f"[ROUTING] Alternative handler for '{selected_route.name}' failed: {he}")
+
                     raise RuntimeError(err_msg)
                 except Exception as e:
                     latency = time.time() - start_time
+                    e_str = str(e).lower()
+                    if any(k in e_str for k in ["quota", "rate limit", "429", "limit exceeded"]):
+                        self.mark_route_rate_limited(selected_route.name)
+                        # Check for custom handler in exception flow
+                        handler = self.rate_limit_handlers.get(selected_route.name.lower())
+                        if handler:
+                            print(f"[ROUTING] Triggering custom alternative handler for exception rate limit breach on route '{selected_route.name}'...")
+                            try:
+                                fallback_output = await handler(input_data)
+                                if fallback_output and fallback_output.response is not None:
+                                    print(f"[ROUTING] Alternative handler succeeded with response.")
+                                    return fallback_output.response
+                            except Exception as he:
+                                print(f"[ROUTING] Alternative handler for '{selected_route.name}' failed: {he}")
+
                     try:
                         from agent.observability.telemetry import log_route_telemetry
                         log_route_telemetry(conversation_id or "system", selected_route.name, model, "failed", str(e), latency=latency)
