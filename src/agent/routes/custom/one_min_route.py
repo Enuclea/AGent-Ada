@@ -256,17 +256,15 @@ class OneMinCustomRoute(BaseRoute):
                                     input_tokens = metadata.get("inputToken", 0)
                                     output_tokens = metadata.get("outputToken", 0)
                                     cost = metadata.get("credit", 0) / 100000.0  # approximate cost
-                                res_str = data["choices"][0]["message"]["content"]
-                                
-                                # Log token/credit usage to telemetry asynchronously
-                                input_tokens = data.get("usage", {}).get("prompt_tokens", 0)
-                                output_tokens = data.get("usage", {}).get("completion_tokens", 0)
-                                credits_used = input_tokens + output_tokens  # 1min.ai uses 1 credit per token
-                                
-                                # Log usage in background
-                                asyncio.create_task(log_credits_usage(credits_used, conversation_id))
-                                
-                                return RouteOutput(response=res_str, latency=time.time() - start_time)
+                                    
+                                    log_model_name = f"1min/{candidate}"
+                                    active_session = conversation_id or f"1min-{uuid.uuid4()}"
+                                    try:
+                                        log_token_usage(active_session, log_model_name, input_tokens, output_tokens, cost)
+                                    except Exception:
+                                        pass
+                                    
+                                    return RouteOutput(response=content, latency=time.time() - start_time)
                             
                             status_code = resp.status
                             try:
