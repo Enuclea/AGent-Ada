@@ -16,6 +16,7 @@ ENV/
 enuclea/enuclea.db
 discord/discord_queue.db
 history.db
+data/members.json
 
 # Logs
 *.log
