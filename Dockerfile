@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
     curl \
+    bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 # Create data directory and set permissions

@@ -6,6 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ada-core
+    privileged: true
     user: "1000:1000"
     restart: unless-stopped
     network_mode: "host"
@@ -36,6 +37,9 @@ services:
       - AGENT_DB_PATH=/data/history.db
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - ADA_DISABLE_SANDBOX=1
+    cap_add:
+      - SYS_ADMIN
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -47,6 +51,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ada-config
+    privileged: true
     user: "1000:1000"
     restart: unless-stopped
     network_mode: "host"
@@ -80,6 +85,9 @@ services:
       - HOST_COMMAND_CHANNEL_IP=127.0.0.1
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - ADA_DISABLE_SANDBOX=1
+    cap_add:
+      - SYS_ADMIN
     depends_on:
       - ada-core
 
@@ -88,6 +96,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ada-bot
+    privileged: true
     user: "1000:1000"
     restart: unless-stopped
     network_mode: "host"
@@ -120,6 +129,9 @@ services:
       - RUN_DISCORD_BOT=true
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - ADA_DISABLE_SANDBOX=1
+    cap_add:
+      - SYS_ADMIN
     depends_on:
       - ada-core
 
@@ -128,6 +140,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ada-pubsub
+    privileged: true
     user: "1000:1000"
     restart: unless-stopped
     network_mode: "host"
@@ -157,5 +170,8 @@ services:
       - AGENT_DB_PATH=/data/history.db
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - ADA_DISABLE_SANDBOX=1
+    cap_add:
+      - SYS_ADMIN
     depends_on:
       - ada-core

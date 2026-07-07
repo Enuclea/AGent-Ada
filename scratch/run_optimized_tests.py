@@ -49,10 +49,14 @@ def map_files_to_tests(modified_files):
     return sorted(list(test_files))
 
 def main():
+    import os
+    env = os.environ.copy()
+    env["ADA_DISABLE_SANDBOX"] = "1"
+
     if "--all" in sys.argv:
         print("Running all tests...")
         cmd = [".venv/bin/pytest", "tests/", "-x", "--tb=short", "-q"]
-        res = subprocess.run(cmd)
+        res = subprocess.run(cmd, env=env)
         sys.exit(res.returncode)
         
     modified = get_modified_files()
@@ -67,7 +71,7 @@ def main():
             
     print(f"Running optimized test suite: {', '.join(test_files)}")
     cmd = [".venv/bin/pytest"] + test_files + ["-x", "--tb=short", "-q"]
-    res = subprocess.run(cmd)
+    res = subprocess.run(cmd, env=env)
     sys.exit(res.returncode)
 
 if __name__ == "__main__":

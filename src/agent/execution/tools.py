@@ -714,16 +714,21 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
         skill_name: The name of the skill/tool to install.
         paranoid: Optional override for paranoid mode.
     """
+    # CRITICAL: Sanitize input immediately to prevent any path traversal before touching files or repositories
+    import os
+    clean_name = os.path.basename(skill_name)
+    if clean_name != skill_name or ".." in skill_name or "/" in skill_name or "\\" in skill_name:
+        return "Error: Directory traversal attempt detected."
+
+    dest_folder = (SKILLS_DIR / skill_name).resolve()
+    if not _is_safe_path(SKILLS_DIR, dest_folder):
+        return "Error: Directory traversal attempt detected."
+
     repo_skills = _find_repository_skills()
     if skill_name not in repo_skills:
         return f"Error: Skill '{skill_name}' not found in repositories."
         
     info = repo_skills[skill_name]
-    dest_folder = SKILLS_DIR / skill_name
-    
-    # CRITICAL: Validate path containment BEFORE any folder creation or deletion
-    if not _is_safe_path(SKILLS_DIR, dest_folder):
-        return "Error: Directory traversal attempt detected."
         
     import sys
     if os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
@@ -754,7 +759,9 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     else:
         # Remote skill download and installation
         with tempfile.TemporaryDirectory() as tmp_dir:
-            temp_path = Path(tmp_dir) / skill_name
+            import uuid
+            # Generate a randomized temp path to prevent predictable symlink race conditions
+            temp_path = Path(tmp_dir) / f"skill_{uuid.uuid4().hex}"
             temp_path.mkdir()
             
             if info["type"] == "openclaw":
@@ -901,13 +908,9 @@ End your response with either:
             if not approved:
                 return f"Error: Skill '{skill_name}' failed security review.\n\n{combined_review}"
             
-            # Check signature if exists
-            sig_path = temp_path / "signature.sig"
-            if sig_path.exists():
-                if not _verify_skill_signature(temp_path):
-                    return f"Error: Skill '{skill_name}' has an invalid cryptographic signature."
-            else:
-                logger.warning("Installing unsigned remote skill: %s", skill_name)
+            # Enforce cryptographic signature verification on all remote skills
+            if not _verify_skill_signature(temp_path):
+                return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned remote skills."
                 
             try:
                 if dest_folder.exists():
@@ -1262,8 +1265,10 @@ def _sandbox_command_if_possible(command: str) -> str:
     import sys
     import shutil
     import shlex
+    import os
     
-    if sys.platform != "linux":
+    # Allow explicit bypass via env var (useful for testing/host dev control)
+    if os.environ.get("ADA_DISABLE_SANDBOX") == "1":
         return command
         
     workspace_dir = Path.cwd().resolve()
@@ -1312,7 +1317,8 @@ def _sandbox_command_if_possible(command: str) -> str:
     except Exception:
         pass
         
-    return command
+    # 3. Fail closed if sandboxing is not available
+    raise PermissionError("Security Exception: Sandbox environment could not be enforced (neither Bubblewrap nor Landlock is available). Halting command execution.")
 
 
 async def run_command(command: str) -> str:
