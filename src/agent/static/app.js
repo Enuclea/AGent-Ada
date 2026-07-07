@@ -509,6 +509,8 @@ function formatMarkdown(text) {
         let cleanUrl = url.replace(/&amp;/g, '&');
         if (cleanUrl.startsWith('file:///')) {
             cleanUrl = '/api/gemini/file?path=' + encodeURIComponent(cleanUrl.substring(7));
+        } else if (cleanUrl.startsWith('/app/') || cleanUrl.startsWith('/data/') || cleanUrl.startsWith('/tmp/')) {
+            cleanUrl = '/api/gemini/file?path=' + encodeURIComponent(cleanUrl);
         }
         return `<img src="${cleanUrl}" alt="${alt}" style="max-width: 100%; border-radius: 8px; margin-top: 0.5rem; border: 1px solid var(--card-border); display: block;">`;
     });
@@ -518,6 +520,8 @@ function formatMarkdown(text) {
         let cleanUrl = url.replace(/&amp;/g, '&');
         if (cleanUrl.startsWith('file:///')) {
             cleanUrl = '/api/gemini/file?path=' + encodeURIComponent(cleanUrl.substring(7));
+        } else if (cleanUrl.startsWith('/app/') || cleanUrl.startsWith('/data/') || cleanUrl.startsWith('/tmp/')) {
+            cleanUrl = '/api/gemini/file?path=' + encodeURIComponent(cleanUrl);
         }
         return `<a href="${cleanUrl}" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">${label}</a>`;
     });

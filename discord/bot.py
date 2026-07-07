@@ -1593,12 +1593,25 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                         if file_path.exists() and file_path.is_file():
                             files_to_send.append(discord.File(fp=str(file_path), filename=name))
                             
-                    # Support file:/// links from IDE/subagents
-                    file_matches = re.findall(r"file://(/[^\s)]+)", chunk)
-                    for path_str in file_matches:
+                    # Support file:/// links or absolute paths from IDE/subagents
+                    paths_to_check = []
+                    paths_to_check.extend(re.findall(r"file://(/[^\s)]+)", chunk))
+                    paths_to_check.extend(re.findall(r"\((/app/[^\s)]+|/data/[^\s)]+|/tmp/[^\s)]+)\)", chunk))
+                    paths_to_check.extend(re.findall(r"(?:^|[\s\"'])(/app/[^\s\"'\)]+|/data/[^\s\"'\)]+|/tmp/[^\s\"'\)]+)", chunk))
+                    
+                    seen_paths = set()
+                    unique_paths = []
+                    for p in paths_to_check:
+                        clean_p = p.strip()
+                        if clean_p not in seen_paths:
+                            seen_paths.add(clean_p)
+                            unique_paths.append(clean_p)
+                            
+                    for path_str in unique_paths:
                         file_path = Path(path_str)
                         if file_path.exists() and file_path.is_file():
-                            files_to_send.append(discord.File(fp=str(file_path), filename=file_path.name))
+                            if file_path.name not in [f.filename for f in files_to_send]:
+                                files_to_send.append(discord.File(fp=str(file_path), filename=file_path.name))
                             
                     if files_to_send:
                         await channel.send(chunk, files=files_to_send)
