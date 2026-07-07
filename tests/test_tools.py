@@ -392,7 +392,7 @@ def test_install_repository_skill_hitl(temp_skills_dir, mock_external_dirs):
     """Test Human-in-the-loop (HITL) prompt and confirmation mechanism."""
     async def run_test():
         with mock.patch("agent.execution.tools._verify_skill_signature", return_value=True), \
-             mock.patch("agent.execution.tools.skills_tools.spawn_subagent", return_value="DECISION: APPROVED"):
+             mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value="DECISION: APPROVED"):
             hermes_path = mock_external_dirs["hermes_skills"]
             skill_folder = hermes_path / "test-hitl"
             skill_folder.mkdir(parents=True, exist_ok=True)
