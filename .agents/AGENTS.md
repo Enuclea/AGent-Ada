@@ -53,6 +53,13 @@ These guidelines are active for all sessions in this workspace.
 * Both the private workspace `AGent` (`/home/dan/AGent`) and the public workspace `AGent-Ada` (`/home/dan/AGent-Ada`) are volume-mounted directly inside the Docker containers at identical host paths.
 * **Protocol:** Containerized agents (including Ada, Lacie, and any spawned subagents) have direct read and write access to these workspace directories. You must use standard file tools (`view_file`, `replace_file_content`, etc.) directly on these paths rather than writing custom python files or executing command gateways.
 
+---
+
+## 7. Proactive Bug Identification & Permanent Remediation
+* When you notice bugs, configuration errors, or environment-specific inconsistencies (such as broken symlinks, container/host path conflicts, or deprecated tools), you must immediately report them to the user and fix them.
+* Always prioritize permanent, non-temporary architectural fixes (e.g., cross-compatible shell wrapper scripts, path mapping resolutions, or clean config updates) that maintain host-to-container parity and prevent future regression.
+
+
 
 
 
