@@ -158,7 +158,8 @@ def test_install_remote_repository_skill(temp_skills_dir):
         
     async def run_test():
         with mock.patch("urllib.request.urlopen", side_effect=mock_urlopen), \
-             mock.patch("agent.execution.tools.spawn_subagent", return_value="DECISION: APPROVED"):
+             mock.patch("agent.execution.tools.spawn_subagent", return_value="DECISION: APPROVED"), \
+             mock.patch("agent.execution.tools._verify_skill_signature", return_value=True):
             # Clear cache to force fetching
             cache_file = Path.home() / ".agent" / "cache" / "remote_repository_skills.json"
             if cache_file.exists():

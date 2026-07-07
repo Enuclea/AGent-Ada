@@ -1,7 +1,19 @@
+import os
+os.environ["ADA_DISABLE_SANDBOX"] = "1"
 import sys
 from pathlib import Path
-
-# Add project root to the end of sys.path to avoid shadowing third-party libraries (like 'discord')
 project_root = str(Path(__file__).resolve().parent.parent)
-if project_root not in sys.path:
-    sys.path.append(project_root)
+abs_root = os.path.abspath(project_root)
+
+new_path = []
+for p in sys.path:
+    if p:
+        if os.path.abspath(p) == abs_root:
+            continue
+    else:
+        if os.path.abspath(os.getcwd()) == abs_root:
+            continue
+    new_path.append(p)
+
+sys.path = new_path
+sys.path.append(project_root)
