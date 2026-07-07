@@ -19,7 +19,8 @@ from agent.storage.db import get_connection
 from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import policy, hooks
 from google.antigravity.types import CapabilitiesConfig, ToolCall, ModelTarget, ModelType
-from agent.keyless import KeylessGeminiAPIEndpoint, setup_keyless_environment, KeylessAgyAgent
+from agent.keyless import KeylessGeminiAPIEndpoint, KeylessAgyAgent
+from agent.routes.base import setup_keyless_environment
 
 class PriorityLock:
     """Acquires a lock sequentially based on request priority (lowest integer value = highest priority)."""

@@ -14,12 +14,11 @@ import glob
 import json
 import re
 import time
-from enum import IntEnum
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union, Tuple, AsyncIterator
 from google.antigravity.models import GeminiAPIEndpoint
 
-from agent.routes.base import TaskPriority, get_harness_path, setup_keyless_environment
+from agent.routes.base import TaskPriority, get_harness_path
 from agent.core.routing import routing_engine
 
 

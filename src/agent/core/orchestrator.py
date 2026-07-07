@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import List, Dict, Callable, Any, Optional
 from agent import memory, tools
 from agent.core.registry import tool_registry
-from agent.keyless import KeylessGeminiAPIEndpoint, setup_keyless_environment, KeylessAgyAgent
+from agent.keyless import KeylessGeminiAPIEndpoint, KeylessAgyAgent
+from agent.routes.base import setup_keyless_environment
 from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import policy, hooks
 from google.antigravity.types import CapabilitiesConfig, ToolCall, ModelTarget, ModelType

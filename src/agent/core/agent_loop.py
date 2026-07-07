@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import policy, hooks
 from google.antigravity.types import CapabilitiesConfig, BuiltinTools, ToolCall, ModelTarget, ModelType
-from agent.keyless import KeylessGeminiAPIEndpoint, setup_keyless_environment
+from agent.keyless import KeylessGeminiAPIEndpoint
+from agent.routes.base import setup_keyless_environment
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
