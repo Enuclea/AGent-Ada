@@ -357,6 +357,20 @@ def init_db() -> None:
             metadata TEXT
         )
         """)
+        # LLM Route Caching
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS llm_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cache_key TEXT UNIQUE,
+            model TEXT,
+            prompt TEXT,
+            system_instructions TEXT,
+            response TEXT,
+            created_at INTEGER,
+            ttl_seconds INTEGER,
+            embedding TEXT
+        )
+        """)
         conn.commit()
     except Exception:
         pass

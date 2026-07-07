@@ -307,6 +307,15 @@ class RoutingEngine:
         Raises:
             RuntimeError: If no routes support the model or if all eligible routes fail.
         """
+        # Check cache before executing routes
+        try:
+            from agent.core.cache import get_cached_response, set_cached_response
+            cached_res = await get_cached_response(model, prompt, system_instructions)
+            if cached_res is not None:
+                return cached_res
+        except Exception as e:
+            print(f"[ROUTING: CACHE] Cache retrieval error: {e}")
+
         routes = self.resolve_routes(model, task_priority)
         if not routes:
             raise RuntimeError(f"No active routes support the model '{model}' for task priority {task_priority.name}")
@@ -362,6 +371,10 @@ class RoutingEngine:
                             log_route_telemetry(conversation_id or "system", selected_route.name, model, "success", latency=latency)
                         except Exception:
                             pass
+                        try:
+                            await set_cached_response(model, prompt, system_instructions, res)
+                        except Exception as e:
+                            print(f"[ROUTING: CACHE] Cache write error: {e}")
                         return res
                     raise RuntimeError("Route returned None (completion empty or API error)")
                 except Exception as e:
