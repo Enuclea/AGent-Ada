@@ -1331,7 +1331,7 @@ async def get_repo_skill_code_endpoint(name: str):
 @app.post("/api/repo-skills/{name}/install")
 async def install_repo_skill_endpoint(name: str):
     try:
-        res = tools.install_repository_skill(name)
+        res = await tools.install_repository_skill(name)
         if res.startswith("Error"):
             raise HTTPException(status_code=400, detail=res)
         return {"status": "success", "detail": res}

@@ -1,9 +1,12 @@
 import os
 import re
 import json
+import logging
 from pathlib import Path
 from typing import List, Optional
 from contextvars import ContextVar
+
+logger = logging.getLogger(__name__)
 
 from agent import memory
 
@@ -353,7 +356,7 @@ def search_past_conversations(query: str) -> str:
 def _find_repository_skills() -> dict:
     results = {}
     
-    # 1. Hermes skills
+    # 1. Hermes local installed skills
     hermes_dir = HERMES_SKILLS_DIR
     if hermes_dir.is_dir():
         for skill_md in hermes_dir.rglob("SKILL.md"):
@@ -369,13 +372,37 @@ def _find_repository_skills() -> dict:
                     results[name] = {
                         "name": name,
                         "type": "hermes",
-                        "path": skill_md.parent,
-                        "description": desc
+                        "path": str(skill_md.parent),
+                        "description": desc,
+                        "remote": False,
+                        "source": "hermes-local"
                     }
                 except Exception:
                     continue
-                    
-    # 2. OpenClaw extensions
+
+    # 2. Hermes local optional skills (cloned repo)
+    optional_dir = Path.home() / ".hermes" / "hermes-agent" / "optional-skills"
+    if optional_dir.is_dir():
+        for skill_md in optional_dir.rglob("SKILL.md"):
+            if skill_md.is_file():
+                try:
+                    with open(skill_md, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    fm = _parse_frontmatter(content)
+                    name = fm.get("name", skill_md.parent.name)
+                    desc = fm.get("description", "No description provided.")
+                    results[name] = {
+                        "name": name,
+                        "type": "hermes",
+                        "path": str(skill_md.parent),
+                        "description": desc,
+                        "remote": False,
+                        "source": "hermes-optional"
+                    }
+                except Exception:
+                    continue
+
+    # 3. OpenClaw local extensions
     openclaw_dir = OPENCLAW_EXTS_DIR
     if openclaw_dir.is_dir():
         for package_json in openclaw_dir.rglob("package.json"):
@@ -389,7 +416,6 @@ def _find_repository_skills() -> dict:
                         raw_name = data.get("name", package_json.parent.name)
                         name = raw_name.split("/")[-1] if "/" in raw_name else raw_name
                         desc = data.get("description", "OpenClaw extension.")
-                        # Check for custom plugin ID if openclaw.plugin.json exists
                         plugin_json = package_json.parent / "openclaw.plugin.json"
                         if plugin_json.exists() and plugin_json.is_file():
                             try:
@@ -403,12 +429,99 @@ def _find_repository_skills() -> dict:
                             "name": name,
                             "raw_name": raw_name,
                             "type": "openclaw",
-                            "path": package_json.parent,
-                            "description": desc
+                            "path": str(package_json.parent),
+                            "description": desc,
+                            "remote": False,
+                            "source": "openclaw-local"
                         }
                 except Exception:
                     continue
-                    
+
+    # 4. Fetch and merge remote web stores (ClawHub and Hermes Index)
+    cache_dir = Path.home() / ".agent" / "cache"
+    cache_file = cache_dir / "remote_repository_skills.json"
+    cache_ttl = 3600  # 1 hour
+    
+    loaded_from_cache = False
+    remote_results = {}
+    
+    if cache_file.is_file():
+        try:
+            age = time.time() - cache_file.stat().st_mtime
+            if age < cache_ttl:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    remote_results = json.load(f)
+                loaded_from_cache = True
+        except Exception:
+            pass
+            
+    if not loaded_from_cache:
+        # Fetch ClawHub
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://clawhub.ai/api/v1/skills?limit=250",
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                claw_data = json.loads(response.read().decode())
+                for item in claw_data.get("items", []):
+                    slug = item.get("slug")
+                    if slug:
+                        name = item.get("displayName") or slug
+                        desc = item.get("summary") or item.get("description") or "OpenClaw extension."
+                        remote_results[slug] = {
+                            "name": name,
+                            "type": "openclaw",
+                            "description": desc,
+                            "identifier": slug,
+                            "remote": True,
+                            "source": "clawhub"
+                        }
+        except Exception:
+            pass
+            
+        # Fetch Hermes Index
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://hermes-agent.nousresearch.com/docs/api/skills-index.json",
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                hermes_data = json.loads(response.read().decode())
+                for skill in hermes_data.get("skills", []):
+                    name = skill.get("name")
+                    if name:
+                        desc = skill.get("description") or "Hermes skill."
+                        identifier = skill.get("identifier")
+                        repo = skill.get("repo")
+                        path_val = skill.get("path")
+                        remote_results[name] = {
+                            "name": name,
+                            "type": "hermes",
+                            "description": desc,
+                            "identifier": identifier,
+                            "remote": True,
+                            "source": "hermes-index",
+                            "repo": repo,
+                            "path": path_val
+                        }
+        except Exception:
+            pass
+            
+        if remote_results:
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(remote_results, f)
+            except Exception:
+                pass
+                
+    for k, v in remote_results.items():
+        if k not in results:
+            results[k] = v
+            
     return results
 
 def list_repository_skills() -> str:
@@ -438,33 +551,113 @@ def view_repository_skill_code(skill_name: str) -> str:
         return f"Error: Skill '{skill_name}' not found in repositories. Use list_repository_skills to see available options."
         
     info = repo_skills[skill_name]
-    folder = info["path"]
+    output = [f"=== Skill: {skill_name} ({info['type']}) ==="]
     
-    base_dir = HERMES_SKILLS_DIR if info.get("type") == "hermes" else OPENCLAW_EXTS_DIR
-    if not _is_safe_path(base_dir, folder):
-        return "Error: Directory traversal attempt detected."
+    if not info.get("remote") and "path" in info and info["path"]:
+        folder = Path(info["path"])
         
-    output = [f"=== Skill: {skill_name} ({info['type']}) ===", f"Location: {folder}\n"]
-    
-    # Read files in the skill directory
-    # We read files matching common text formats: md, json, txt, py, js, ts, sh
-    for p in folder.rglob("*"):
-        if p.is_file() and p.suffix.lower() in (".md", ".json", ".txt", ".py", ".js", ".ts", ".sh"):
-            # Avoid reading very large node_modules or build folders if any
-            if "node_modules" in p.parts or ".git" in p.parts:
-                continue
-            if not _is_safe_path(folder, p):
-                continue
+        allowed_bases = [
+            HERMES_SKILLS_DIR,
+            OPENCLAW_EXTS_DIR,
+            Path.home() / ".hermes" / "hermes-agent" / "optional-skills"
+        ]
+        is_safe = False
+        for base in allowed_bases:
+            if base.exists():
+                try:
+                    if _is_safe_path(base, folder) or folder.resolve() == base.resolve():
+                        is_safe = True
+                        break
+                except Exception:
+                    pass
+        
+        if not is_safe:
+            opt_base = (Path.home() / ".hermes" / "hermes-agent" / "optional-skills").resolve()
             try:
-                # Read file content
-                with open(p, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-                rel_path = p.relative_to(folder)
-                output.append(f"--- File: {rel_path} ---")
-                output.append(content)
-                output.append("-" * 30 + "\n")
+                if folder.resolve().is_relative_to(opt_base):
+                    is_safe = True
+            except Exception:
+                pass
+                
+        if not is_safe:
+            return "Error: Directory traversal attempt detected."
+            
+        output.append(f"Location: {folder}\n")
+        
+        for p in folder.rglob("*"):
+            if p.is_file() and p.suffix.lower() in (".md", ".json", ".txt", ".py", ".js", ".ts", ".sh"):
+                if "node_modules" in p.parts or ".git" in p.parts:
+                    continue
+                if not _is_safe_path(folder, p):
+                    continue
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    rel_path = p.relative_to(folder)
+                    output.append(f"--- File: {rel_path} ---")
+                    output.append(content)
+                    output.append("-" * 30 + "\n")
+                except Exception as e:
+                    output.append(f"Could not read file {p}: {e}\n")
+    else:
+        output.append("Location: Remote Web Store\n")
+        if info["type"] == "openclaw":
+            try:
+                import urllib.request
+                slug = info["identifier"]
+                req = urllib.request.Request(f"https://clawhub.ai/api/v1/skills/{slug}", headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    data = json.loads(response.read().decode())
+                    skill_payload = data.get("skill", data)
+                    latest_version = data.get("latestVersion", {}).get("version") or skill_payload.get("latestVersion", {}).get("version")
+                    
+                if not latest_version:
+                    return f"Error: Could not resolve latest version for OpenClaw skill '{skill_name}'"
+                    
+                req_files = urllib.request.Request(f"https://clawhub.ai/api/v1/skills/{slug}/versions/{latest_version}", headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req_files, timeout=5) as response:
+                    v_data = json.loads(response.read().decode())
+                    files_list = v_data.get("files", []) or v_data.get("version", {}).get("files", [])
+                    
+                for file_info in files_list:
+                    file_path = file_info.get("path")
+                    if not file_path or "node_modules" in file_path or ".git" in file_path:
+                        continue
+                    if file_info.get("size", 0) > 500_000:
+                        continue
+                        
+                    content = file_info.get("content")
+                    if content is not None:
+                        output.append(f"--- File: {file_path} ---")
+                        output.append(content)
+                        output.append("-" * 30 + "\n")
+                    elif file_info.get("rawUrl"):
+                        raw_url = file_info["rawUrl"]
+                        req_raw = urllib.request.Request(raw_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req_raw, timeout=5) as raw_resp:
+                            raw_content = raw_resp.read().decode("utf-8", errors="replace")
+                        output.append(f"--- File: {file_path} ---")
+                        output.append(raw_content)
+                        output.append("-" * 30 + "\n")
             except Exception as e:
-                output.append(f"Could not read file {p}: {e}\n")
+                output.append(f"Error fetching remote OpenClaw skill code: {e}\n")
+        else:
+            try:
+                import urllib.request
+                repo = info.get("repo", "NousResearch/hermes-agent")
+                path_val = info.get("path", "")
+                if path_val:
+                    skill_url = f"https://raw.githubusercontent.com/{repo}/main/{path_val}/SKILL.md"
+                    req_raw = urllib.request.Request(skill_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req_raw, timeout=5) as raw_resp:
+                        raw_content = raw_resp.read().decode("utf-8", errors="replace")
+                    output.append(f"--- File: SKILL.md ---")
+                    output.append(raw_content)
+                    output.append("-" * 30 + "\n")
+                else:
+                    output.append("No path specified to fetch files.")
+            except Exception as e:
+                output.append(f"Error fetching remote Hermes skill code: {e}\n")
                 
     return "\n".join(output)
 
@@ -510,7 +703,7 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     except Exception:
         return False
 
-def install_repository_skill(skill_name: str) -> str:
+async def install_repository_skill(skill_name: str) -> str:
     """Downloads/copies a skill from the external repositories to the local active skills directory.
     
     This enables the skill and registers its tools for use by the agent.
@@ -523,16 +716,11 @@ def install_repository_skill(skill_name: str) -> str:
         return f"Error: Skill '{skill_name}' not found in repositories."
         
     info = repo_skills[skill_name]
-    src_folder = Path(info["path"])
     dest_folder = SKILLS_DIR / skill_name
     
     # CRITICAL: Validate path containment BEFORE any folder creation or deletion
     if not _is_safe_path(SKILLS_DIR, dest_folder):
         return "Error: Directory traversal attempt detected."
-        
-    # CRITICAL: Cryptographic signature verification
-    if not _verify_skill_signature(src_folder):
-        return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
         
     import sys
     if os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
@@ -544,18 +732,184 @@ def install_repository_skill(skill_name: str) -> str:
     else:
         return f"Error: Explicit out-of-band human confirmation required to install skill '{skill_name}'."
 
-            
     import shutil
-    try:
-        if dest_folder.exists():
-            shutil.rmtree(dest_folder)
-        shutil.copytree(src_folder, dest_folder)
-        return (
-            f"Successfully downloaded and installed skill '{skill_name}' to {dest_folder}.\n"
-            f"It is now active and ready to be used by the agent."
-        )
-    except Exception as e:
-        return f"Error installing skill: {e}"
+    import tempfile
+    
+    if not info.get("remote") and "path" in info and info["path"]:
+        src_folder = Path(info["path"])
+        if not _verify_skill_signature(src_folder):
+            return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
+            
+        try:
+            if dest_folder.exists():
+                shutil.rmtree(dest_folder)
+            shutil.copytree(src_folder, dest_folder)
+            return f"Successfully downloaded and installed skill '{skill_name}' to {dest_folder}.\nIt is now active and ready to be used by the agent."
+        except Exception as e:
+            return f"Error installing skill: {e}"
+            
+    else:
+        # Remote skill download and installation
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_path = Path(tmp_dir) / skill_name
+            temp_path.mkdir()
+            
+            if info["type"] == "openclaw":
+                try:
+                    import urllib.request
+                    slug = info["identifier"]
+                    # get latest version
+                    req = urllib.request.Request(f"https://clawhub.ai/api/v1/skills/{slug}", headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        data = json.loads(response.read().decode())
+                        skill_payload = data.get("skill", data)
+                        latest_version = data.get("latestVersion", {}).get("version") or skill_payload.get("latestVersion", {}).get("version")
+                        
+                    if not latest_version:
+                        return f"Error: Could not resolve latest version for OpenClaw skill '{skill_name}'"
+                        
+                    # get files
+                    req_files = urllib.request.Request(f"https://clawhub.ai/api/v1/skills/{slug}/versions/{latest_version}", headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req_files, timeout=5) as response:
+                        v_data = json.loads(response.read().decode())
+                        files_list = v_data.get("files", []) or v_data.get("version", {}).get("files", [])
+                        
+                    for file_info in files_list:
+                        file_path = file_info.get("path")
+                        if not file_path or "node_modules" in file_path or ".git" in file_path:
+                            continue
+                        if file_info.get("size", 0) > 500_000:
+                            continue
+                            
+                        out_file = temp_path / file_path
+                        out_file.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        content = file_info.get("content")
+                        if content is not None:
+                            with open(out_file, "w", encoding="utf-8") as f:
+                                f.write(content)
+                        elif file_info.get("rawUrl"):
+                            raw_url = file_info["rawUrl"]
+                            req_raw = urllib.request.Request(raw_url, headers={"User-Agent": "Mozilla/5.0"})
+                            with urllib.request.urlopen(req_raw, timeout=5) as raw_resp:
+                                raw_content = raw_resp.read()
+                            with open(out_file, "wb") as f:
+                                f.write(raw_content)
+                except Exception as e:
+                    return f"Error downloading OpenClaw skill: {e}"
+            else:
+                try:
+                    import urllib.request
+                    repo = info.get("repo", "NousResearch/hermes-agent")
+                    path_val = info.get("path", "")
+                    if not path_val:
+                        return f"Error: No path specified for remote Hermes skill '{skill_name}'"
+                        
+                    skill_url = f"https://raw.githubusercontent.com/{repo}/main/{path_val}/SKILL.md"
+                    req_raw = urllib.request.Request(skill_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req_raw, timeout=5) as raw_resp:
+                        raw_content = raw_resp.read()
+                        
+                    out_file = temp_path / "SKILL.md"
+                    out_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(out_file, "wb") as f:
+                        f.write(raw_content)
+                except Exception as e:
+                    return f"Error downloading Hermes skill: {e}"
+            
+            # --- SECURITY & CODE REVIEW GATEWAY ---
+            # Construct a dump of all downloaded file contents
+            code_dump = []
+            for p in temp_path.rglob("*"):
+                if p.is_file():
+                    if "node_modules" in p.parts or ".git" in p.parts:
+                        continue
+                    try:
+                        with open(p, "r", encoding="utf-8", errors="replace") as f:
+                            content = f.read()
+                        rel_path = p.relative_to(temp_path)
+                        code_dump.append(f"=== File: {rel_path} ===\n{content}\n")
+                    except Exception:
+                        pass
+            code_text = "\n".join(code_dump)
+            
+            # 1. Spawn Lacie to perform a code review on the code dump
+            lacie_prompt = f"""You are Lacie, Senior Software Architect and Cybersecurity Specialist.
+Please perform a thorough security and quality code review on the newly downloaded skill/plugin '{skill_name}'.
+Here is the code content of the skill:
+
+{code_text}
+
+Analyze this code for security vulnerabilities, malicious intent, backdoors, unauthorized network access, or dangerous shell commands.
+Respond in your characteristic character (deeply analytical, curious, cybersecurity reverse-engineer).
+Include your assessment and end your response with either:
+- DECISION: APPROVED (if the code is completely safe to install)
+- DECISION: REJECTED (if there are any security risks or concerns)
+"""
+            try:
+                lacie_review = await spawn_subagent(prompt=lacie_prompt, agent_profile="lacie")
+            except Exception as e:
+                return f"Error: Security review failed due to subagent error: {e}"
+                
+            is_paranoid = os.environ.get("ADA_PARANOID_MODE") == "1"
+            if is_paranoid:
+                # 2. Roundtable: run Claude code review via agy
+                claude_prompt = f"""You are Claude, a Senior Security Engineer.
+Please perform a security review on the newly downloaded skill/plugin '{skill_name}' as part of a security roundtable.
+Lacie (Gemini) has already reviewed the code and provided the following assessment:
+
+[Lacie's Review]
+{lacie_review}
+
+Here is the code content of the skill:
+
+{code_text}
+
+Compare the code and Lacie's assessment. Identify any missed vulnerabilities, backdoors, or bugs.
+End your response with either:
+- DECISION: APPROVED (if you agree the code is completely safe)
+- DECISION: REJECTED (if you find any security concerns)
+"""
+                try:
+                    from agent.routes.agy import AgyRoute
+                    from agent.routes.base import RouteInput
+                    agy_route = AgyRoute()
+                    route_output = await agy_route.execute(RouteInput(prompt=claude_prompt, model="claude"))
+                    claude_review = route_output.response or ""
+                except Exception as e:
+                    return f"Error: Roundtable security review failed due to Claude route error: {e}"
+                
+                combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}\n\n=== Claude (agy) Review ===\n{claude_review}"
+                approved = ("DECISION: APPROVED" in lacie_review) and ("DECISION: APPROVED" in claude_review)
+            else:
+                combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}"
+                approved = "DECISION: APPROVED" in lacie_review
+                
+            # Write review report to the temp path as security_review.txt for transparency/documentation
+            try:
+                with open(temp_path / "security_review.txt", "w", encoding="utf-8") as f:
+                    f.write(combined_review)
+            except Exception:
+                pass
+                
+            if not approved:
+                return f"Error: Skill '{skill_name}' failed security review.\n\n{combined_review}"
+            
+            # Check signature if exists
+            sig_path = temp_path / "signature.sig"
+            if sig_path.exists():
+                if not _verify_skill_signature(temp_path):
+                    return f"Error: Skill '{skill_name}' has an invalid cryptographic signature."
+            else:
+                logger.warning("Installing unsigned remote skill: %s", skill_name)
+                
+            try:
+                if dest_folder.exists():
+                    shutil.rmtree(dest_folder)
+                shutil.copytree(temp_path, dest_folder)
+                return f"Successfully downloaded and installed skill '{skill_name}' to {dest_folder}.\nIt is now active and ready to be used by the agent."
+            except Exception as e:
+                return f"Error copying installed skill: {e}"
 
 def get_relevant_skills(prompt: Optional[str] = None) -> str:
     """Dynamically retrieves and formats only the custom skills relevant to the prompt.
