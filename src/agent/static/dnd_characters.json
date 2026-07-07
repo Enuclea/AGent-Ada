@@ -1,52 +1,52 @@
 {
   "characters": [
     {
+      "name": "Sylas",
+      "stats": {
+        "Strength": 13,
+        "Dexterity": 12,
+        "Constitution": 10,
+        "Intelligence": 12,
+        "Wisdom": 14,
+        "Charisma": 13
+      },
+      "suggested_class": "Cleric"
+    },
+    {
       "name": "Aurelia",
       "stats": {
-        "Strength": 16,
-        "Dexterity": 14,
-        "Constitution": 12,
-        "Intelligence": 17,
-        "Wisdom": 11,
-        "Charisma": 11
-      },
-      "suggested_class": "Wizard"
-    },
-    {
-      "name": "Lyra",
-      "stats": {
-        "Strength": 12,
-        "Dexterity": 16,
+        "Strength": 11,
+        "Dexterity": 12,
         "Constitution": 6,
         "Intelligence": 14,
-        "Wisdom": 11,
-        "Charisma": 13
+        "Wisdom": 17,
+        "Charisma": 14
       },
-      "suggested_class": "Rogue"
+      "suggested_class": "Cleric"
     },
     {
-      "name": "Maeve",
+      "name": "Morgath",
       "stats": {
-        "Strength": 11,
-        "Dexterity": 14,
-        "Constitution": 12,
-        "Intelligence": 16,
-        "Wisdom": 9,
-        "Charisma": 13
-      },
-      "suggested_class": "Wizard"
-    },
-    {
-      "name": "Thorne",
-      "stats": {
-        "Strength": 14,
-        "Dexterity": 11,
+        "Strength": 10,
+        "Dexterity": 15,
         "Constitution": 12,
         "Intelligence": 15,
-        "Wisdom": 6,
-        "Charisma": 11
+        "Wisdom": 16,
+        "Charisma": 17
       },
-      "suggested_class": "Wizard"
+      "suggested_class": "Bard"
+    },
+    {
+      "name": "Jaxon",
+      "stats": {
+        "Strength": 8,
+        "Dexterity": 11,
+        "Constitution": 13,
+        "Intelligence": 11,
+        "Wisdom": 10,
+        "Charisma": 17
+      },
+      "suggested_class": "Bard"
     }
   ]
 }

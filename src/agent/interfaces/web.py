@@ -385,6 +385,22 @@ if CORE_API_URL:
             target_url = f"{target_url}?{query}"
             
         try:
+            if path in ("/api/chat", "/api/chat/"):
+                async def stream_generator():
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, read=600.0)) as client:
+                        async with client.stream(method, target_url, headers=headers, content=body) as r:
+                            async for chunk in r.aiter_bytes():
+                                yield chunk
+                return StreamingResponse(
+                    stream_generator(),
+                    media_type="text/event-stream",
+                    headers={
+                        "X-Accel-Buffering": "no",
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive"
+                    }
+                )
+            
             async with httpx.AsyncClient() as client:
                 res = await client.request(
                     method=method,
