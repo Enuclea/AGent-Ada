@@ -93,6 +93,16 @@ class RouteOutput(BaseModel):
     latency: float = Field(0.0, description="Execution duration in seconds.")
     error: Optional[str] = Field(None, description="Error message if the execution failed.")
 
+    def __str__(self) -> str:
+        return str(self.response) if self.response is not None else ""
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self.response == other
+        if isinstance(other, RouteOutput):
+            return self.response == other.response and self.latency == other.latency and self.error == other.error
+        return False
+
 class BaseRoute(ABC):
     """Abstract base class for all execution routes in the AGent-Ada system."""
 
