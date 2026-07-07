@@ -103,6 +103,8 @@ def test_get_harness_path_security():
             
         # Case 1: shutil.which returns a safe path (e.g. /usr/bin/agy)
         with patch("shutil.which", return_value="/usr/bin/agy"), \
+             patch("os.path.exists", return_value=False), \
+             patch("os.path.isfile", return_value=False), \
              patch("pathlib.Path.exists", return_value=True):
             res = get_harness_path()
             assert res == "/usr/bin/agy"
@@ -111,12 +113,16 @@ def test_get_harness_path_security():
         cwd = os.getcwd()
         unsafe_workspace_path = os.path.join(cwd, "agy")
         with patch("shutil.which", return_value=unsafe_workspace_path), \
+             patch("os.path.exists", return_value=False), \
+             patch("os.path.isfile", return_value=False), \
              patch("pathlib.Path.exists", return_value=False):
             res = get_harness_path()
             assert res is None
             
         # Case 3: shutil.which returns an unsafe path in an untrusted directory (e.g. /tmp/agy)
         with patch("shutil.which", return_value="/tmp/agy"), \
+             patch("os.path.exists", return_value=False), \
+             patch("os.path.isfile", return_value=False), \
              patch("pathlib.Path.exists", return_value=False):
             res = get_harness_path()
             assert res is None
@@ -124,6 +130,8 @@ def test_get_harness_path_security():
         # Case 4: shutil.which returns a safe path under ~/.local/bin/agy
         local_bin_path = os.path.expanduser("~/.local/bin/agy")
         with patch("shutil.which", return_value=None), \
+             patch("os.path.exists", return_value=False), \
+             patch("os.path.isfile", return_value=False), \
              patch("pathlib.Path.exists", return_value=True), \
              patch("pathlib.Path.is_file", return_value=True):
             res = get_harness_path()
