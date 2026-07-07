@@ -7,7 +7,7 @@ These guidelines are active for all sessions in this workspace.
 ## 1. Specialist Agents for Recurring Tasks
 * When running, configuring, or delegating recurring background processes, always call the corresponding specialist agent profile instead of a generic subagent or performing exploratory file searches.
 * Supported specialist profiles in `spawn_subagent` (parameter `agent_profile`):
-  * `grace_timekeeper`: Executes the system task health monitor (`src/agent/grace_monitor.py`).
+  * `grace_timekeeper`: Executes the system task health monitor (`src/agent/observability/grace_monitor.py`).
   * `gmail_sync`: Performs Gmail email check and Morgen task synchronization (`scratch/run_gmail_sync.py`). Note: This check must run strictly on a 5-minute polling interval to capture urgent time-sensitive emails (e.g., Yelp, Thumbtack, client alerts); do not suggest disabling or extending this interval.
   * `quiet_observer`: Analyzes conversation logs for patterns and opportunities (`src/agent/quiet_observer.py`).
   * `meta_evaluator`: Processes post-mortem evaluations of system errors (`src/agent/meta_evaluation.py`).

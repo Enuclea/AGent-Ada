@@ -8,12 +8,6 @@ PUBLIC=/home/dan/AGent-Ada/src/agent
 # Files that should be identical between repos in their modular locations
 SHARED_FILES=(
     "__init__.py"
-    "memory.py"
-    "merge.py"
-    "tools.py"
-    "keyless.py"
-    "notifications.py"
-    "remote_worker.py"
     "core/__init__.py"
     "core/agent_loop.py"
     "core/agent_types.py"
