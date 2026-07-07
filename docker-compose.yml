@@ -35,6 +35,7 @@ services:
       - HOME=/app
       - AGENT_DB_PATH=/data/history.db
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -78,6 +79,7 @@ services:
       - CORE_API_URL=http://127.0.0.1:8000
       - HOST_COMMAND_CHANNEL_IP=127.0.0.1
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     depends_on:
       - ada-core
 
@@ -117,6 +119,7 @@ services:
       - AGENT_API_BASE=http://127.0.0.1:8000
       - RUN_DISCORD_BOT=true
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     depends_on:
       - ada-core
 
@@ -153,5 +156,6 @@ services:
       - HOME=/app
       - AGENT_DB_PATH=/data/history.db
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     depends_on:
       - ada-core

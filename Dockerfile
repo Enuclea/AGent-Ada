@@ -23,10 +23,15 @@ COPY src/ ./src/
 COPY enuclea/ ./enuclea/
 COPY discord/ ./discord/
 
+# Set Playwright browsers path to a shared location
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 # Install the dependencies
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -e . && \
-    playwright install --with-deps chromium
+    mkdir -p /ms-playwright && \
+    playwright install --with-deps chromium && \
+    chmod -R 777 /ms-playwright
 
 # Set ownership of all copied files to nobody
 RUN chown -R nobody:nogroup /app
