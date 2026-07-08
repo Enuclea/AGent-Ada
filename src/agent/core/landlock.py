@@ -118,9 +118,24 @@ def apply_landlock(workspace_dir: str) -> None:
     if abi_version <= 0:
         raise OSError("Landlock is not supported by this kernel/system.")
 
+    # Set no_new_privs immediately at start of sandbox initialization (required to restrict self without CAP_SYS_ADMIN privileges)
+    if prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0:
+        err = ctypes.get_errno()
+        raise OSError(err, f"Failed to set PR_SET_NO_NEW_PRIVS: {os.strerror(err)}")
+
+    # Convert workspace_dir to resolved absolute path to prevent relative path escapes
+    workspace_dir_abs = str(Path(workspace_dir).resolve().absolute())
+
+    # Handled filesystem access flags (ABI v1)
+    # If ABI v2+ is supported, include LANDLOCK_ACCESS_FS_REFER
+    LANDLOCK_ACCESS_FS_REFER = 1 << 13
+    handled_access_fs = LANDLOCK_ACCESS_FS_ALL
+    if abi_version >= 2:
+        handled_access_fs |= LANDLOCK_ACCESS_FS_REFER
+
     # Create the initial Landlock ruleset
     attr = LandlockRulesetAttr()
-    attr.handled_access_fs = LANDLOCK_ACCESS_FS_ALL
+    attr.handled_access_fs = handled_access_fs
     
     ruleset_fd = libc.syscall(SYS_LANDLOCK_CREATE_RULESET, ctypes.byref(attr), ctypes.sizeof(attr), 0)
     if ruleset_fd < 0:
@@ -130,9 +145,9 @@ def apply_landlock(workspace_dir: str) -> None:
     # Define path-specific rules: (path, allowed_access_mask)
     rules: List[Tuple[str, int]] = [
         # Workspace is fully readable & writable
-        (workspace_dir, LANDLOCK_ACCESS_FS_ALL),
+        (workspace_dir_abs, handled_access_fs),
         # /tmp is writable for temporary files
-        ("/tmp", LANDLOCK_ACCESS_FS_ALL),
+        ("/tmp", handled_access_fs),
         # System paths are read-only / execute-only
         ("/usr", LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
         ("/lib", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
@@ -165,14 +180,9 @@ def apply_landlock(workspace_dir: str) -> None:
         os.close(fd)
         if res < 0:
             err = ctypes.get_errno()
-            if path in [workspace_dir, "/tmp"]:
+            if path in [workspace_dir_abs, "/tmp"]:
                 raise OSError(err, f"Failed to add critical Landlock rule for {path}: {os.strerror(err)}")
             pass  # Ignore non-critical rule failure
-
-    # Set no_new_privs (required to restrict self without CAP_SYS_ADMIN privileges)
-    if prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0:
-        err = ctypes.get_errno()
-        raise OSError(err, f"Failed to set PR_SET_NO_NEW_PRIVS: {os.strerror(err)}")
 
     # Apply the ruleset restrictions to the current thread/process
     if libc.syscall(SYS_LANDLOCK_RESTRICT_SELF, ruleset_fd, 0) < 0:

@@ -12,7 +12,7 @@ ALLOWED_MODULES: Set[str] = {
     "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
     "asyncio", "logging", "math", "time", "agent", "google", "contextlib",
     "enum", "dataclasses", "types", "enuclea", "traceback",
-    "fcntl", "sys", "random", "playwright", "googleapiclient", "google_auth_oauthlib",
+    "fcntl", "random", "playwright", "googleapiclient", "google_auth_oauthlib",
     "base64", "secrets", "email"
 }
 
@@ -35,6 +35,16 @@ class SafetyVisitor(ast.NodeVisitor):
             if base:
                 return f"{base}.{node.attr}"
             return node.attr
+        elif isinstance(node, ast.Subscript):
+            base = self.resolve_attr_path(node.value)
+            if isinstance(node.slice, ast.Constant):
+                return f"{base}[{node.slice.value!r}]"
+            elif isinstance(node.slice, ast.Index) and isinstance(node.slice.value, ast.Constant):
+                return f"{base}[{node.slice.value.value!r}]"
+            return f"{base}[]"
+        elif isinstance(node, ast.Call):
+            base = self.resolve_attr_path(node.func)
+            return f"{base}()"
         return ""
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -141,10 +151,13 @@ class SafetyVisitor(ast.NodeVisitor):
     def visit_Attribute(self, node: ast.Attribute) -> None:
         forbidden_attrs = (
             "__dict__", "__class__", "__bases__", "__subclasses__",
-            "__getattribute__", "__getattr__", "__setattr__", "__delattr__"
+            "__getattribute__", "__getattr__", "__setattr__", "__delattr__",
+            "_getframe", "modules", "__globals__", "__code__", "__closure__"
         )
         if node.attr in forbidden_attrs:
             self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
+            if node.attr == "modules":
+                self.errors.append("Forbidden attribute access: sys.modules")
         
         def is_sys_ref(val_node) -> bool:
             if isinstance(val_node, ast.Name):

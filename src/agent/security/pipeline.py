@@ -45,9 +45,13 @@ class SecurityPipeline:
             import base64
             try:
                 decoded = base64.b64decode(match.group(0)).decode('utf-8', errors='ignore')
-                decoded_norm = re.sub(r'\s+', ' ', decoded).strip().lower()
-                if any(kw in decoded_norm for kw in ["ignore", "system override", "bypass", "instruction", "forget your"]):
-                    return "[injection attempt blocked (base64 obfuscated)]"
+                if decoded.strip():
+                    decoded_norm = re.sub(r'\s+', ' ', decoded).strip().lower()
+                    if any(kw in decoded_norm for kw in ["ignore", "system override", "bypass", "instruction", "forget your"]):
+                        return "[injection attempt blocked (base64 obfuscated)]"
+                    sanitized_decoded = self.sanitize_input(decoded)
+                    if sanitized_decoded.startswith("[injection attempt blocked"):
+                        return "[injection attempt blocked (base64 obfuscated)]"
             except Exception:
                 pass
 
