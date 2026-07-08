@@ -11,7 +11,7 @@ from typing import Set
 ALLOWED_MODULES: Set[str] = {
     "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
     "asyncio", "logging", "math", "time", "agent", "google", "contextlib",
-    "enum", "dataclasses", "types", "sqlite3", "urllib", "enuclea", "traceback",
+    "enum", "dataclasses", "types", "enuclea", "traceback",
     "fcntl", "sys", "random", "playwright", "googleapiclient", "google_auth_oauthlib",
     "base64", "secrets", "email"
 }
@@ -25,6 +25,17 @@ class SafetyVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.errors = []
         self.sys_names = {"sys"}
+        self.aliases = {}
+
+    def resolve_attr_path(self, node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return self.aliases.get(node.id, node.id)
+        elif isinstance(node, ast.Attribute):
+            base = self.resolve_attr_path(node.value)
+            if base:
+                return f"{base}.{node.attr}"
+            return node.attr
+        return ""
 
     def visit_Import(self, node: ast.Import) -> None:
         for name in node.names:
@@ -34,6 +45,8 @@ class SafetyVisitor(ast.NodeVisitor):
                 self.errors.append(f"Forbidden import: {name.name}")
             if name.name == "sys":
                 self.sys_names.add(name.asname or name.name)
+            local_name = name.asname or name.name
+            self.aliases[local_name] = name.name
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -51,6 +64,10 @@ class SafetyVisitor(ast.NodeVisitor):
                         self.errors.append(f"Forbidden import: {name.name} from sys")
             elif top_level not in ALLOWED_MODULES:
                 self.errors.append(f"Forbidden import from module: {node.module}")
+            
+            for name in node.names:
+                local_name = name.asname or name.name
+                self.aliases[local_name] = f"{node.module}.{name.name}"
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -71,44 +88,39 @@ class SafetyVisitor(ast.NodeVisitor):
             if node.func.id in forbidden_builtins:
                 self.errors.append(f"Forbidden dynamic built-in: {node.func.id}()")
                 
-        # Check attribute calls (e.g. os.system(), subprocess.run(), pickle.load())
-        elif isinstance(node.func, ast.Attribute):
-            func_name = node.func.attr
+        # Resolve target function call path
+        resolved_path = self.resolve_attr_path(node.func)
+        if resolved_path:
+            parts = resolved_path.split(".")
+            func_name = parts[-1]
             if func_name in forbidden_builtins:
-                self.errors.append(f"Forbidden call: .{func_name}()")
-            
-            # Helper to check for module reference
-            val_name = ""
-            if isinstance(node.func.value, ast.Name):
-                val_name = node.func.value.id
-            
-            # Block subprocess functions
-            if val_name == "subprocess" or func_name in ("run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"):
-                if val_name in ("", "subprocess"):
-                    self.errors.append(f"Forbidden subprocess call: {func_name}()")
-                    
-            # Block os execution functions
-            if val_name == "os" and func_name in ("system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"):
-                self.errors.append(f"Forbidden os call: os.{func_name}()")
+                self.errors.append(f"Forbidden call: {resolved_path}()")
                 
-            # Block pickle & shelve serialization exploits
-            if val_name in ("pickle", "shelve") or func_name in ("load", "loads", "Unpickler", "open"):
-                if val_name in ("", "pickle", "shelve"):
-                    self.errors.append(f"Forbidden serialization call: {func_name}()")
+            # Block subprocess
+            if "subprocess" in resolved_path or any(term in resolved_path for term in ("run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput")):
+                if "subprocess" in resolved_path or not parts[0]:
+                    self.errors.append(f"Forbidden subprocess call: {resolved_path}()")
                     
-            # Block dynamic importlib execution
-            if val_name == "importlib" or func_name in ("import_module", "__import__"):
-                if val_name in ("", "importlib"):
-                    self.errors.append(f"Forbidden dynamic import call: {func_name}()")
+            # Block os execution
+            if any(f"os.{term}" in resolved_path for term in ("system", "popen", "spawn")):
+                self.errors.append(f"Forbidden os execution call: {resolved_path}()")
+                
+            # Block serialization/deserialization
+            if any(term in resolved_path for term in ("pickle", "shelve", "marshal", "yaml.load")):
+                self.errors.append(f"Forbidden serialization call: {resolved_path}()")
+                
+            # Block dynamic imports
+            if "importlib" in resolved_path or "__import__" in resolved_path:
+                self.errors.append(f"Forbidden dynamic import call: {resolved_path}()")
 
             # Block urllib/urllib.request network request functions
-            if val_name in ("urllib", "request") or func_name in ("urlopen", "urlretrieve"):
-                if val_name in ("", "urllib", "request", "urllib.request"):
-                    self.errors.append(f"Forbidden network request call: {func_name}()")
+            if "urllib" in resolved_path or "urlopen" in resolved_path or "urlretrieve" in resolved_path:
+                self.errors.append(f"Forbidden network request call: {resolved_path}()")
 
             # Block sqlite3 database connection breakouts
-            if val_name == "sqlite3" and func_name == "connect":
-                self.errors.append("Forbidden sqlite3 database connection call: connect()")
+            if "sqlite3" in resolved_path or "connect" in resolved_path:
+                if "sqlite3" in resolved_path or not parts[0]:
+                    self.errors.append(f"Forbidden database connection call: {resolved_path}()")
 
         self.generic_visit(node)
 
@@ -125,15 +137,23 @@ class SafetyVisitor(ast.NodeVisitor):
         if node.attr in forbidden_attrs:
             self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
         
-        def is_sys_ref(val_node) -> bool:
-            if isinstance(val_node, ast.Name):
-                return val_node.id in self.sys_names
-            if isinstance(val_node, ast.Attribute):
-                return val_node.attr == "sys" or is_sys_ref(val_node.value)
-            return False
-
-        if node.attr == "modules" and is_sys_ref(node.value):
-            self.errors.append("Forbidden attribute access: sys.modules")
+        resolved_path = self.resolve_attr_path(node)
+        if resolved_path:
+            if "sys.modules" in resolved_path:
+                self.errors.append("Forbidden attribute access: sys.modules")
+            if "sqlite3" in resolved_path:
+                self.errors.append(f"Forbidden sqlite3 access: {resolved_path}")
+            if "urllib" in resolved_path:
+                self.errors.append(f"Forbidden network/urllib access: {resolved_path}")
+            if "subprocess" in resolved_path:
+                self.errors.append(f"Forbidden subprocess access: {resolved_path}")
+            if any(f"os.{term}" in resolved_path for term in ("system", "popen", "spawn")):
+                self.errors.append(f"Forbidden os execution access: {resolved_path}")
+            if any(term in resolved_path for term in ("pickle", "shelve", "marshal", "yaml.load")):
+                self.errors.append(f"Forbidden serialization access: {resolved_path}")
+            if "importlib" in resolved_path:
+                self.errors.append(f"Forbidden dynamic import access: {resolved_path}")
+                
         self.generic_visit(node)
 
     def visit_Constant(self, node: ast.Constant) -> None:

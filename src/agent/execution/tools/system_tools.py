@@ -39,16 +39,16 @@ async def run_command(command: str) -> str:
         
     # Apply sandboxing wrapping
     try:
-        sandboxed_cmd = _sandbox_command_if_possible(command)
+        sandboxed_args = _sandbox_command_if_possible(command)
     except PermissionError as pe:
         return str(pe)
 
-    print(f"\n💻 Running command: {sandboxed_cmd}")
+    print(f"\n💻 Running command: {' '.join(sandboxed_args)}")
     import sys
     sys.stdout.flush()
 
-    proc = await asyncio.create_subprocess_shell(
-        sandboxed_cmd,
+    proc = await asyncio.create_subprocess_exec(
+        *sandboxed_args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env

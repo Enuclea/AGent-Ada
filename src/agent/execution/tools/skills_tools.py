@@ -555,10 +555,8 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     from agent.execution.tools.system_tools import spawn_subagent
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        import uuid
-        # Generate a randomized temp path to prevent predictable symlink race conditions
-        temp_path = Path(tmp_dir) / f"skill_{uuid.uuid4().hex}"
-        temp_path.mkdir()
+        # Use atomic mkdtemp to prevent any TOCTOU symlink race conditions
+        temp_path = Path(tempfile.mkdtemp(prefix="skill_", dir=tmp_dir))
 
         if not info.get("remote") and "path" in info and info["path"]:
             # Local skill

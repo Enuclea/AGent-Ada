@@ -315,6 +315,20 @@ def test_ast_safety_gaps_blocked():
             verify_plugin_ast_safety(plugin_path)
         assert "Forbidden SQL ATTACH command" in str(excinfo.value)
 
+        # 4. Import urllib blocked
+        with open(init_file, "w") as f:
+            f.write("import urllib\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden import: urllib" in str(excinfo.value)
+
+        # 5. sys.modules accessed via alias s.modules blocked
+        with open(init_file, "w") as f:
+            f.write("import sys as s\ndef test():\n    print(s.modules)\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden attribute access: sys.modules" in str(excinfo.value)
+
 def test_view_repository_skill_code_traversal():
     from agent.execution.tools.skills_tools import view_repository_skill_code
     res = view_repository_skill_code("../../../etc/passwd")

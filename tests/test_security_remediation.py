@@ -21,7 +21,7 @@ def test_sandbox_explicit_bypass():
     # With bypass env var set, it should return the command unmodified
     with mock.patch.dict(os.environ, {"ADA_DISABLE_SANDBOX": "1"}):
         cmd = tools._sandbox_command_if_possible("whoami")
-        assert cmd == "whoami"
+        assert cmd == ["bash", "-c", "whoami"]
 
 @pytest.mark.asyncio
 async def test_install_skill_path_traversal_sanitization():

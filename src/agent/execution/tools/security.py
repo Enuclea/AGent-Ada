@@ -70,7 +70,9 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     except Exception:
         return False
 
-def _sandbox_command_if_possible(command: str) -> str:
+from typing import List
+
+def _sandbox_command_if_possible(command: str) -> List[str]:
     """Wraps a shell command in bubblewrap or Landlock sandbox if available on Linux.
     
     Isolates file write access to the workspace and /tmp directories, and restricts
@@ -78,7 +80,7 @@ def _sandbox_command_if_possible(command: str) -> str:
     """
     # Allow explicit bypass via env var (useful for testing/host dev control)
     if os.environ.get("ADA_DISABLE_SANDBOX") == "1":
-        return command
+        return ["bash", "-c", command]
         
     workspace_dir = Path.cwd().resolve()
     
@@ -102,8 +104,7 @@ def _sandbox_command_if_possible(command: str) -> str:
             "--unshare-all",
             "--die-with-parent"
         ]
-        bwrap_cmd_str = " ".join(shlex.quote(arg) for arg in bwrap_args)
-        return f"{bwrap_cmd_str} -- bash -c {shlex.quote(command)}"
+        return bwrap_args + ["--", "bash", "-c", command]
         
     # 2. Try Landlock
     try:
@@ -122,7 +123,7 @@ def _sandbox_command_if_possible(command: str) -> str:
                     str(workspace_dir),
                     "bash", "-c", command
                 ]
-                return " ".join(shlex.quote(arg) for arg in landlock_runner)
+                return landlock_runner
     except Exception:
         pass
         
