@@ -71,10 +71,19 @@ class SafetyVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        if isinstance(node.value, ast.Name) and node.value.id in self.sys_names:
+        if isinstance(node.value, ast.Name):
+            val_resolved = self.aliases.get(node.value.id, node.value.id)
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    self.sys_names.add(target.id)
+                    self.aliases[target.id] = val_resolved
+                    if node.value.id in self.sys_names:
+                        self.sys_names.add(target.id)
+        elif isinstance(node.value, ast.Attribute):
+            val_resolved = self.resolve_attr_path(node.value)
+            if val_resolved:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.aliases[target.id] = val_resolved
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -120,7 +129,7 @@ class SafetyVisitor(ast.NodeVisitor):
             # Block sqlite3 database connection breakouts
             if "sqlite3" in resolved_path or "connect" in resolved_path:
                 if "sqlite3" in resolved_path or not parts[0]:
-                    self.errors.append(f"Forbidden database connection call: {resolved_path}()")
+                    self.errors.append(f"Forbidden sqlite3 database connection call: {resolved_path}()")
 
         self.generic_visit(node)
 
@@ -137,6 +146,16 @@ class SafetyVisitor(ast.NodeVisitor):
         if node.attr in forbidden_attrs:
             self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
         
+        def is_sys_ref(val_node) -> bool:
+            if isinstance(val_node, ast.Name):
+                return val_node.id in self.sys_names
+            if isinstance(val_node, ast.Attribute):
+                return val_node.attr == "sys" or is_sys_ref(val_node.value)
+            return False
+
+        if node.attr == "modules" and is_sys_ref(node.value):
+            self.errors.append("Forbidden attribute access: sys.modules")
+
         resolved_path = self.resolve_attr_path(node)
         if resolved_path:
             if "sys.modules" in resolved_path:

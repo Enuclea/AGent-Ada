@@ -456,7 +456,7 @@ def test_run_command_environment_scrubbing():
         mock_proc = mock.AsyncMock()
         mock_proc.communicate.return_value = (b"output", b"")
         
-        with mock.patch("asyncio.create_subprocess_shell", new_callable=mock.AsyncMock) as mock_shell, \
+        with mock.patch("asyncio.create_subprocess_exec", new_callable=mock.AsyncMock) as mock_shell, \
              mock.patch.dict("os.environ", env_vars):
              
             mock_shell.return_value = mock_proc
