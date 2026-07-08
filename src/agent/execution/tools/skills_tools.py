@@ -812,7 +812,8 @@ You MUST end your response with a JSON block in the following format:
                 pass
                 
             if not is_sandboxed:
-                if confirm or (os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1" and "pytest" in sys.modules):
+                is_real_pytest = any("pytest" in arg for arg in sys.argv) and "pytest" in sys.modules
+                if confirm or (is_real_pytest and os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1"):
                     hil_approved = True
             
             # Require interactive TTY input if not approved

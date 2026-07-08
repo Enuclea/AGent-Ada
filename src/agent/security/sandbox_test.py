@@ -9,6 +9,35 @@ from typing import Dict, Any, List, Optional
 
 from agent.execution.tools.security import _calculate_skill_hash
 
+_BWRAP_PROBE_SUCCESS = None
+
+async def _probe_bwrap_capability(bwrap_path: str) -> bool:
+    global _BWRAP_PROBE_SUCCESS
+    if _BWRAP_PROBE_SUCCESS is not None:
+        return _BWRAP_PROBE_SUCCESS
+    try:
+        args = [bwrap_path]
+        for path in ("/usr", "/lib", "/lib64", "/bin", "/sbin"):
+            if os.path.exists(path):
+                args += ["--ro-bind", path, path]
+        args += [
+            "--unshare-all",
+            "--",
+            sys.executable,
+            "-c",
+            "print('ok')"
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        _BWRAP_PROBE_SUCCESS = (proc.returncode == 0)
+    except Exception:
+        _BWRAP_PROBE_SUCCESS = False
+    return _BWRAP_PROBE_SUCCESS
+
 async def run_in_sandbox(
     plugin_path: Path,
     entrypoint: str,
@@ -32,6 +61,10 @@ async def run_in_sandbox(
     bwrap_path = shutil.which("bwrap")
     if not bwrap_path:
         results["error"] = "bwrap (Bubblewrap) executable not found. Sandbox testing requires Linux with bwrap installed."
+        return results
+
+    if not await _probe_bwrap_capability(bwrap_path):
+        results["error"] = "bwrap (Bubblewrap) namespace isolation capability check failed. Linux kernel lacks user/network namespace support."
         return results
 
     # 2. Create ephemeral private workspace
@@ -68,10 +101,15 @@ async def run_in_sandbox(
         if sys.prefix != sys.base_prefix:
             bwrap_args += ["--ro-bind", sys.prefix, sys.prefix]
             
+        # Generate a transient cryptographically secure token
+        import secrets
+        sandbox_token = secrets.token_hex(16)
+        
         bwrap_cmd = bwrap_args + [
             "--",
             sys.executable,
             "sandbox_worker.py",
+            "--token", sandbox_token,
             str(plugin_dest),
             entrypoint,
             args_json
@@ -95,8 +133,15 @@ async def run_in_sandbox(
                     line_str = line.decode("utf-8").strip()
                     if not line_str:
                         continue
+                    
+                    prefix = f"[IPC:{sandbox_token}] "
+                    if not line_str.startswith(prefix):
+                        results["logs"].append(f"[Stdout raw] {line_str}")
+                        continue
+                        
+                    json_str = line_str[len(prefix):]
                     try:
-                        event = json.loads(line_str)
+                        event = json.loads(json_str)
                         action = event.get("action")
                         
                         if action == "log":
@@ -126,7 +171,7 @@ async def run_in_sandbox(
                             except Exception as re:
                                 ipc_response = {"error": str(re)}
                                 
-                            proc.stdin.write((json.dumps(ipc_response) + "\n").encode("utf-8"))
+                            proc.stdin.write((f"[IPC:{sandbox_token}] " + json.dumps(ipc_response) + "\n").encode("utf-8"))
                             await proc.stdin.drain()
                             
                         elif action == "tool_call":
@@ -142,7 +187,7 @@ async def run_in_sandbox(
                             
                             # Return simulated success response
                             ipc_response = {"response": f"Simulated success execution of {tool_name}"}
-                            proc.stdin.write((json.dumps(ipc_response) + "\n").encode("utf-8"))
+                            proc.stdin.write((f"[IPC:{sandbox_token}] " + json.dumps(ipc_response) + "\n").encode("utf-8"))
                             await proc.stdin.drain()
                             
                     except json.JSONDecodeError:

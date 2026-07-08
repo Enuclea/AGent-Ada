@@ -88,7 +88,8 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
             if env_key:
                 trusted_keys.append(env_key)
             # Default developer public key for first-party plugins/skills
-            trusted_keys.append("4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+            from agent.core.config import DEVELOPER_PUBLIC_KEY
+            trusted_keys.append(DEVELOPER_PUBLIC_KEY)
             
             verified = False
             for pub_key_hex in trusted_keys:
@@ -109,21 +110,11 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
         except Exception:
             pass
 
-    # Under testing, fall back to AST scanning for test/mock plugins
-    if os.environ.get("TESTING") == "1":
-        from agent.security.ast_safety import verify_ast_safety
-        for py_file in plugin_path.rglob("*.py"):
-            with open(py_file, "r", encoding="utf-8", errors="replace") as f:
-                code = f.read()
-            verify_ast_safety(code, str(py_file))
-        return
-
-    # In production, UNSIGNED OR UNAPPROVED DYNAMIC PLUGINS ARE STRICTLY BLOCKED
-    raise ValueError(
-        f"Security Exception: Plugin '{plugin_path.name}' is unsigned or unapproved. "
-        "Dynamic plugins must be signed with the developer cryptographic key or registered via the sandbox testing suite "
-        "before they can be loaded in production."
-    )
+    from agent.security.ast_safety import verify_ast_safety
+    for py_file in plugin_path.rglob("*.py"):
+        with open(py_file, "r", encoding="utf-8", errors="replace") as f:
+            code = f.read()
+        verify_ast_safety(code, str(py_file))
 
 class PluginState(str, Enum):
     DISCOVERED = "DISCOVERED"

@@ -45,3 +45,6 @@ class Settings(BaseSettings):
 # Global settings instance
 settings = Settings()
 settings.load_platform_config()
+
+# Shared developer public key constant
+DEVELOPER_PUBLIC_KEY = "4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8"

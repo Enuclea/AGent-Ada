@@ -5,17 +5,26 @@ import types
 import asyncio
 from pathlib import Path
 
+# Transient IPC Token and Helper
+IPC_TOKEN = None
+
+def send_ipc(action, **kwargs):
+    payload = {"action": action, **kwargs}
+    if IPC_TOKEN:
+        sys.stdout.write(f"[IPC:{IPC_TOKEN}] " + json.dumps(payload) + "\n")
+    else:
+        sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
 # 1. Blocks unauthorized network/subprocess access
 def fail_unauthorized(module_name, func_name):
     def block_call(*args, **kwargs):
-        log_event = {
-            "action": "security_alert",
-            "message": f"Blocked attempt to call {module_name}.{func_name}",
-            "args": [str(a) for a in args],
-            "kwargs": {k: str(v) for k, v in kwargs.items()}
-        }
-        sys.stdout.write(json.dumps(log_event) + "\n")
-        sys.stdout.flush()
+        send_ipc(
+            "security_alert",
+            message=f"Blocked attempt to call {module_name}.{func_name}",
+            args=[str(a) for a in args],
+            kwargs={k: str(v) for k, v in kwargs.items()}
+        )
         raise PermissionError(f"Security Policy: Access to {module_name}.{func_name} is blocked in sandbox.")
     return block_call
 
@@ -49,20 +58,23 @@ class MockRoutingEngine:
         conversation_id = None,
         task_priority = None,
     ) -> str:
-        request = {
-            "action": "chat",
-            "prompt": prompt,
-            "model": model,
-            "system_instructions": system_instructions
-        }
-        sys.stdout.write(json.dumps(request) + "\n")
-        sys.stdout.flush()
+        send_ipc(
+            "chat",
+            prompt=prompt,
+            model=model,
+            system_instructions=system_instructions
+        )
         
         line = sys.stdin.readline()
         if not line:
             raise RuntimeError("Sandbox connection closed by host.")
         
-        response = json.loads(line)
+        # Verify bidirectional token authentication
+        prefix = f"[IPC:{IPC_TOKEN}] "
+        if not line.startswith(prefix):
+            raise RuntimeError("Sandbox security violation: IPC message untrusted.")
+        
+        response = json.loads(line[len(prefix):])
         if response.get("error"):
             raise RuntimeError(f"Host returned error: {response['error']}")
         return response.get("response", "")
@@ -76,19 +88,23 @@ sys.modules["agent.core.routing"] = routing_module
 class MockTools:
     def __getattr__(self, name):
         def mock_tool(*args, **kwargs):
-            request = {
-                "action": "tool_call",
-                "tool": name,
-                "args": [str(a) for a in args],
-                "kwargs": {k: str(v) for k, v in kwargs.items()}
-            }
-            sys.stdout.write(json.dumps(request) + "\n")
-            sys.stdout.flush()
+            send_ipc(
+                "tool_call",
+                tool=name,
+                args=[str(a) for a in args],
+                kwargs={k: str(v) for k, v in kwargs.items()}
+            )
             
             line = sys.stdin.readline()
             if not line:
                 raise RuntimeError("Sandbox connection closed by host.")
-            response = json.loads(line)
+            
+            # Verify bidirectional token authentication
+            prefix = f"[IPC:{IPC_TOKEN}] "
+            if not line.startswith(prefix):
+                raise RuntimeError("Sandbox security violation: IPC message untrusted.")
+                
+            response = json.loads(line[len(prefix):])
             if response.get("error"):
                 raise RuntimeError(f"Host tool execution failed: {response['error']}")
             return response.get("response", None)
@@ -109,8 +125,7 @@ async def run_plugin(plugin_path_str: str, entrypoint_name: str, args_json: str)
     
     try:
         # Log loading event
-        sys.stdout.write(json.dumps({"action": "log", "message": f"Loading plugin: {plugin_path.name}"}) + "\n")
-        sys.stdout.flush()
+        send_ipc("log", message=f"Loading plugin: {plugin_path.name}")
         
         # Load the module
         import importlib
@@ -123,8 +138,7 @@ async def run_plugin(plugin_path_str: str, entrypoint_name: str, args_json: str)
             
         kwargs = json.loads(args_json) if args_json else {}
         
-        sys.stdout.write(json.dumps({"action": "log", "message": f"Executing entrypoint: {entrypoint_name}"}) + "\n")
-        sys.stdout.flush()
+        send_ipc("log", message=f"Executing entrypoint: {entrypoint_name}")
         
         # Check if function is async
         if asyncio.iscoroutinefunction(func):
@@ -132,16 +146,36 @@ async def run_plugin(plugin_path_str: str, entrypoint_name: str, args_json: str)
         else:
             result = func(**kwargs)
             
-        sys.stdout.write(json.dumps({"action": "success", "response": result}) + "\n")
+        send_ipc("success", response=result)
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        sys.stdout.write(json.dumps({"action": "error", "message": str(e), "trace": error_details}) + "\n")
-    sys.stdout.flush()
+        send_ipc("error", message=str(e), trace=error_details)
 
 if __name__ == "__main__":
+    token = None
+    if "--token" in sys.argv:
+        try:
+            idx = sys.argv.index("--token")
+            token = sys.argv[idx + 1]
+            sys.argv.pop(idx)
+            sys.argv.pop(idx)
+        except (ValueError, IndexError):
+            pass
+        
+    IPC_TOKEN = token
+
+    # Scrub environment of sensitive tokens/keys
+    safe_env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+        "HOME": "/app"
+    }
+    os.environ.clear()
+    os.environ.update(safe_env)
+
     if len(sys.argv) < 3:
-        print("Usage: python sandbox_worker.py <plugin_path> <entrypoint> [args_json]", file=sys.stderr)
+        print("Usage: python sandbox_worker.py [--token <token>] <plugin_path> <entrypoint> [args_json]", file=sys.stderr)
         sys.exit(1)
         
     plugin_path = sys.argv[1]

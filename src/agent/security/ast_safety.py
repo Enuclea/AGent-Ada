@@ -211,7 +211,7 @@ class SafetyVisitor(ast.NodeVisitor):
             "_getframe", "modules", "__globals__", "__code__", "__closure__",
             "ctypes", "cffi", "mmap"
         )
-        if node.attr in forbidden_attrs:
+        if node.attr in forbidden_attrs or (node.attr.startswith("__") and node.attr not in {"__init__", "__name__", "__doc__", "__module__", "__call__"}):
             self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
             if node.attr == "modules":
                 self.errors.append("Forbidden attribute access: sys.modules")

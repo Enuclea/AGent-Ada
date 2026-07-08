@@ -53,7 +53,8 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
     if env_key:
         trusted_keys.append(env_key)
-    trusted_keys.append("4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+    from agent.core.config import DEVELOPER_PUBLIC_KEY
+    trusted_keys.append(DEVELOPER_PUBLIC_KEY)
     
     last_err = None
     for pub_key_hex in trusted_keys:
@@ -88,7 +89,8 @@ def _verify_in_memory_signature(files_dict: dict) -> bool:
     env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
     if env_key:
         trusted_keys.append(env_key)
-    trusted_keys.append("4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+    from agent.core.config import DEVELOPER_PUBLIC_KEY
+    trusted_keys.append(DEVELOPER_PUBLIC_KEY)
     
     last_err = None
     for pub_key_hex in trusted_keys:
