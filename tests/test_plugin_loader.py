@@ -112,6 +112,11 @@ def setup_plugin(app, register_tools, register_scheduled_task):
             assert "Mock setup failure" in plugin.error_message
 
 def test_sample_plugin_registration():
+    # Skip if sample_plugin is not present in the external plugins folder
+    plugins_dir = Path(__file__).resolve().parent.parent / "plugins"
+    if not (plugins_dir / "sample_plugin").exists():
+        pytest.skip("sample_plugin not present in external plugins folder")
+
     app = FastAPI()
     plugin_manager.reset()
     

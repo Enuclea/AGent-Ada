@@ -5,6 +5,16 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch, MagicMock
 
+try:
+    import enuclea
+except ImportError:
+    enuclea = None
+
+pytestmark = pytest.mark.skipif(
+    enuclea is None,
+    reason="Private enuclea package not available"
+)
+
 # Force a clean temporary database for web client testing to protect the user's live database
 tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 tmp_db_path = tmp_db.name

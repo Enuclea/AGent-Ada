@@ -1,10 +1,25 @@
 import sys
 import unittest
+import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent.parent / "discord"))
+
+try:
+    from enuclea_commands import handle_client_support_query
+except ImportError:
+    try:
+        from custom_modules.enuclea_commands import handle_client_support_query
+    except ImportError:
+        handle_client_support_query = None
+
+# Skip all tests in this file if enuclea_commands is not available
+pytestmark = pytest.mark.skipif(
+    handle_client_support_query is None,
+    reason="Private module enuclea_commands not available"
+)
 
 class TestClientSupportQuery(unittest.IsolatedAsyncioTestCase):
     @patch("bot_config.load_config")
@@ -22,12 +37,6 @@ class TestClientSupportQuery(unittest.IsolatedAsyncioTestCase):
         mock_query.return_value = [
             {"TicketID": 12345, "TicketTitle": "Printer down", "TicketStatus": "Open", "TicketPriority": "Low", "CreatedDate": "2026-06-28"}
         ]
-        
-        # Import handle_client_support_query from the custom module
-        try:
-            from enuclea_commands import handle_client_support_query
-        except ImportError:
-            from custom_modules.enuclea_commands import handle_client_support_query
         
         # 2. Setup mock Discord message
         mock_message = MagicMock()
@@ -63,11 +72,6 @@ class TestClientSupportQuery(unittest.IsolatedAsyncioTestCase):
             "description": "Core labs"
         }
         mock_create.return_value = 99999
-        
-        try:
-            from enuclea_commands import handle_client_support_query
-        except ImportError:
-            from custom_modules.enuclea_commands import handle_client_support_query
         
         # 2. Setup mock Discord message
         mock_message = MagicMock()
