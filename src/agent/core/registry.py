@@ -105,22 +105,9 @@ class ToolRegistry:
         if workspace_skills.exists() and workspace_skills.is_dir():
             skills_paths.append(workspace_skills)
 
-        # Load dynamic platform configuration
-        db_path = os.environ.get("AGENT_DB_PATH")
-        if db_path:
-            config_path = Path(db_path).parent / "platform_config.json"
-        else:
-            config_path = Path(os.getcwd()) / "data" / "platform_config.json"
-            
-        enabled_skills = {}
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    import json
-                    cfg_data = json.load(f)
-                    enabled_skills = cfg_data.get("skills", {})
-            except Exception:
-                pass
+        # Load dynamic platform configuration from unified settings
+        from agent.core.config import settings
+        disabled_skills = settings.disabled_skills
 
         discovered = []
         seen_paths = set()
@@ -145,7 +132,7 @@ class ToolRegistry:
                                 name = fm.get("name", folder.name)
                                 
                                 # Check if this skill is explicitly disabled
-                                if enabled_skills.get(name, True) is False:
+                                if name in disabled_skills:
                                     print(f"[REGISTRY] Skill '{name}' is disabled in configuration. Skipping.")
                                     continue
 

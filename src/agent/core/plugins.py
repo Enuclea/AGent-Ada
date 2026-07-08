@@ -7,19 +7,16 @@ from typing import Optional, Dict, Any, List, Callable
 from types import ModuleType
 
 def verify_plugin_ast_safety(plugin_path: Path) -> None:
-    """Statically scans all Python files in the plugin package for unsafe calls."""
+    """Statically scans all Python files in the plugin package for unsafe calls,
+    unless the plugin has a valid cryptographic signature from the developer.
+    """
     try:
-        workspace_plugins = (Path(__file__).resolve().parent.parent.parent.parent / "plugins").resolve()
-        resolved_path = plugin_path.resolve()
-        trusted_first_party_paths = {
-            (workspace_plugins / "enuclea_plugin").resolve(),
-            (workspace_plugins / "morgen_plugin").resolve()
-        }
-        for trusted_path in trusted_first_party_paths:
-            if resolved_path == trusted_path or resolved_path.is_relative_to(trusted_path):
-                return
+        from agent.execution.tools.security import _verify_skill_signature
+        if _verify_skill_signature(plugin_path):
+            return
     except Exception:
         pass
+
     from agent.security.ast_safety import verify_ast_safety
     for py_file in plugin_path.rglob("*.py"):
         with open(py_file, "r", encoding="utf-8", errors="replace") as f:
@@ -105,30 +102,16 @@ class PluginManager:
         # Discover first
         self.discover_plugins()
 
-        # Load dynamic platform configuration
-        import os
-        import json
-        db_path = os.environ.get("AGENT_DB_PATH")
-        if db_path:
-            config_path = Path(db_path).parent / "platform_config.json"
-        else:
-            config_path = Path(os.getcwd()) / "data" / "platform_config.json"
-            
-        enabled_plugins = {}
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    cfg_data = json.load(f)
-                    enabled_plugins = cfg_data.get("plugins", {})
-            except Exception:
-                pass
+        # Load dynamic platform configuration from unified settings
+        from agent.core.config import settings
+        disabled_plugins = settings.disabled_plugins
 
         for name, plugin in self.plugins.items():
             if plugin.state == PluginState.ACTIVE:
                 continue
 
             # Check if this plugin is explicitly disabled
-            if enabled_plugins.get(name, True) is False:
+            if name in disabled_plugins:
                 print(f"[PLUGINS] Plugin '{name}' is disabled in configuration. Skipping.")
                 continue
 

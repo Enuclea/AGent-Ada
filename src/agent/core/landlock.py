@@ -212,7 +212,11 @@ if __name__ == "__main__":
     try:
         apply_landlock(workspace)
     except Exception as e:
-        print(f"[Landlock] Warning: Sandbox not applied: {e}", file=sys.stderr)
+        if os.environ.get("ALLOW_UNSANDBOXED_EXECUTION") == "true":
+            print(f"[Landlock] Warning: Sandbox not applied: {e}. ALLOW_UNSANDBOXED_EXECUTION is true, continuing unsandboxed.", file=sys.stderr)
+        else:
+            print(f"[Landlock] Error: Sandbox could not be enforced: {e}. Halting execution because ALLOW_UNSANDBOXED_EXECUTION is not true.", file=sys.stderr)
+            sys.exit(126)
 
     # Execute the requested command, replacing the current process image
     try:

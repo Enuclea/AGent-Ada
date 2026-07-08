@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 from typing import Optional, List
 
 # Common prompt injection indicators to sanitize or strip
@@ -46,7 +47,6 @@ class SecurityPipeline:
         has_replacements = False
         
         for match in re.finditer(b64_pat, case_preserved):
-            import base64
             start, end = match.span()
             chunks.append(case_preserved[last_idx:start])
             last_idx = end
@@ -125,7 +125,6 @@ class SecurityPipeline:
                 redacted = re.sub(pattern_str, f"[REDACTED_{key}]", redacted)
                 
                 # Also check base64 encoded representation of the secret
-                import base64
                 val_b64 = base64.b64encode(val.encode()).decode().strip("=")
                 if len(val_b64) > 6:
                     b64_regex_parts = [re.escape(c) for c in val_b64]

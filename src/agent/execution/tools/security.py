@@ -8,24 +8,8 @@ def _is_safe_path(base_dir, path) -> bool:
     """Helper that resolves absolute paths and verifies that target path resides strictly within base_dir,
     recursively checking that no symlinks in the path resolve outside base_dir.
     """
-    try:
-        base_path = Path(base_dir).resolve()
-        target_path = Path(path).resolve()
-        # Verify target is strictly within base_path
-        if base_path not in target_path.parents:
-            return False
-            
-        # Walk up from target_path to base_path, verifying that any symlinks resolve inside base_path
-        curr = target_path
-        while curr != base_path and curr != curr.parent:
-            if curr.is_symlink():
-                resolved_link = curr.resolve()
-                if not (base_path == resolved_link or base_path in resolved_link.parents):
-                    return False
-            curr = curr.parent
-        return True
-    except Exception:
-        return False
+    from agent.security.path_utils import is_safe_path
+    return is_safe_path(Path(base_dir), Path(path))
 
 def _calculate_skill_hash(src_folder: Path) -> bytes:
     import hashlib

@@ -8,34 +8,18 @@ from agent.tools import generate_interface_stub
 
 def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
     """Security verification helper for subagent workspaces."""
-    logger = logging.getLogger("agent.security")
     try:
         # Enforce strict path normalization first
         rel_str = rel_str.replace('\\', '/')
         normalized_rel = os.path.normpath(rel_str)
         if normalized_rel.startswith("../") or normalized_rel == "..":
-            logger.warning(f"Path safety check failed: relative path traversal attempt '{rel_str}'")
             return False
             
-        base_resolved = base_path.resolve()
-        resolved = (base_resolved / normalized_rel).resolve()
-        if not (base_resolved == resolved or base_resolved in resolved.parents):
-            logger.warning(f"Path safety check failed: '{resolved}' is not under '{base_resolved}'")
-            return False
-            
-        # Walk up from resolved to base_resolved, verifying that any symlinks resolve inside base_resolved
-        curr = resolved
-        while curr != base_resolved and curr != curr.parent:
-            if curr.is_symlink():
-                resolved_link = curr.resolve()
-                if not (base_resolved == resolved_link or base_resolved in resolved_link.parents):
-                    logger.warning(f"Path safety check failed: symlink '{curr}' resolves to '{resolved_link}' outside '{base_resolved}'")
-                    return False
-            curr = curr.parent
-        return True
-    except Exception as e:
-        logger.warning(f"Path safety check encountered error processing '{rel_str}': {e}", exc_info=True)
-        return False  # Fail-closed
+        target = base_path / normalized_rel
+        from agent.security.path_utils import is_safe_path
+        return is_safe_path(base_path, target, strict=False)
+    except Exception:
+        return False
 
 # Active subagents registry
 # Maps subagent_id -> {"task": asyncio.Task, "parent_session_id": str, "agent": KeylessAgyAgent, "response": KeylessAgyResponse}
