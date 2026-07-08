@@ -68,6 +68,7 @@ class PubSubListener:
         """Initialize the listener with default state."""
         self.running: bool = False
         self.last_watch_renewal: Optional[datetime] = None
+        self.last_watch_attempt: Optional[datetime] = None
         self.pubsub_service: Optional[Any] = None
         self.gmail_service: Optional[Any] = None
 
@@ -98,6 +99,7 @@ class PubSubListener:
         """Register or renew the push notification watch on the Gmail API."""
         try:
             logger.info("Renewing Gmail API watch registration...")
+            self.last_watch_attempt = datetime.now(timezone.utc)
             body: Dict[str, str] = {
                 "topicName": TOPIC_NAME
             }
@@ -124,8 +126,17 @@ class PubSubListener:
 
         while self.running:
             try:
-                # 1. Periodically renew watch (once every 24 hours)
-                if self.last_watch_renewal is None or (datetime.now(timezone.utc) - self.last_watch_renewal) > timedelta(hours=24):
+                # 1. Periodically renew watch (once every 24 hours, retry failed attempts once per hour)
+                need_renewal = False
+                now_utc = datetime.now(timezone.utc)
+                if self.last_watch_renewal is None:
+                    if self.last_watch_attempt is None or (now_utc - self.last_watch_attempt) > timedelta(hours=1):
+                        need_renewal = True
+                elif (now_utc - self.last_watch_renewal) > timedelta(hours=24):
+                    if self.last_watch_attempt is None or (now_utc - self.last_watch_attempt) > timedelta(hours=1):
+                        need_renewal = True
+
+                if need_renewal:
                     self.renew_watch()
 
                 # 2. Pull messages from the subscription (long-poll in background thread)
