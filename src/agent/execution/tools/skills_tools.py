@@ -610,9 +610,12 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
                 if "node_modules" in p.parts or ".git" in p.parts:
                     continue
                 try:
+                    rel_path = str(p.relative_to(temp_path))
+                    # Reject any paths with traversal components immediately
+                    if ".." in rel_path or "\\" in rel_path or rel_path.startswith("/"):
+                        continue
                     with open(p, "rb") as f:
                         content_bytes = f.read()
-                    rel_path = str(p.relative_to(temp_path))
                     in_memory_files[rel_path] = content_bytes
                 except Exception:
                     pass
@@ -772,8 +775,8 @@ You MUST end your response with a JSON block in the following format:
             combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}"
             approved = primary_safe and primary_proceed
             
-        # 4. Enforce security review / AST warnings check with HIL
-        interesting_reason = []
+        # 4. Enforce security review / AST warnings check with HIL (mandated for all installations)
+        interesting_reason = ["Mandatory human-in-the-loop verification required for all repository skills"]
         if ast_errors:
             interesting_reason.append(f"AST warnings found: {', '.join(ast_errors)}")
         if not approved:

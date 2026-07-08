@@ -43,12 +43,27 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
             sig_bytes = sig_path.read_bytes()
             plugin_hash = _calculate_skill_hash(Path(plugin_path))
             
-            pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY") or "4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8"
-            pub_bytes = bytes.fromhex(pub_key_hex)
-            pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_bytes)
-            pub_key.verify(sig_bytes, plugin_hash)
-            # Cryptographic verification succeeded, safe to load
-            return
+            trusted_keys = []
+            env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
+            if env_key:
+                trusted_keys.append(env_key)
+            # Default developer public key for first-party plugins/skills
+            trusted_keys.append("4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+            
+            verified = False
+            for pub_key_hex in trusted_keys:
+                try:
+                    pub_bytes = bytes.fromhex(pub_key_hex)
+                    pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_bytes)
+                    pub_key.verify(sig_bytes, plugin_hash)
+                    verified = True
+                    break
+                except Exception:
+                    continue
+                    
+            if verified:
+                # Cryptographic verification succeeded, safe to load
+                return
         except Exception:
             pass
 
