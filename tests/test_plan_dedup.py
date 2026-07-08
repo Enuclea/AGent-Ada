@@ -16,12 +16,6 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-try:
-    from enuclea import db
-    has_enuclea = True
-except ImportError:
-    has_enuclea = False
-
 
 class TestPlanDeduplication:
     """Tests for the plan re-creation guard (Fix 3A)."""
@@ -133,73 +127,3 @@ class TestPlanDeduplication:
 
         conn.close()
 
-
-@pytest.mark.skipif(not has_enuclea, reason="enuclea private module not available")
-class TestAteraClaimAtomicity:
-    """Tests for the atomic claim_atera_item pattern (Fix Vector 2)."""
-
-    def setup_method(self):
-        self.db_fd, self.db_path = tempfile.mkstemp(suffix=".db")
-        # Initialize with the enuclea schema
-        from enuclea import db
-        db.init_db(self.db_path)
-
-    def teardown_method(self):
-        os.close(self.db_fd)
-        os.unlink(self.db_path)
-
-    def test_claim_succeeds_first_time(self):
-        """First claim on an untracked item should succeed."""
-        from enuclea import db
-        result = db.claim_atera_item("ticket_999", "ticket", 999, db_path=self.db_path)
-        assert result is True, "First claim should return True"
-
-    def test_claim_fails_second_time(self):
-        """Second claim on the same item should fail (already claimed)."""
-        from enuclea import db
-        first = db.claim_atera_item("ticket_999", "ticket", 999, db_path=self.db_path)
-        second = db.claim_atera_item("ticket_999", "ticket", 999, db_path=self.db_path)
-        assert first is True
-        assert second is False, "Second claim must return False (already claimed)"
-
-    def test_claim_blocks_is_tracked(self):
-        """After claiming, is_atera_item_tracked should return True."""
-        from enuclea import db
-        db.claim_atera_item("ticket_999", "ticket", 999, db_path=self.db_path)
-        tracked = db.is_atera_item_tracked("ticket_999", db_path=self.db_path)
-        assert tracked is True, "Claimed item should be tracked"
-
-    def test_claim_then_update(self):
-        """Claim followed by update should produce a proper tracked record."""
-        from enuclea import db
-        db.claim_atera_item("ticket_999", "ticket", 999, db_path=self.db_path)
-        db.update_tracked_atera_item("ticket_999", "morgen-task-abc", db_path=self.db_path)
-
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM tracked_atera_items WHERE id = ?", ("ticket_999",)).fetchone()
-        conn.close()
-
-        assert row is not None
-        assert row["morgen_task_id"] == "morgen-task-abc"
-        assert row["status"] == "open"
-
-    def test_claim_sets_processing_status(self):
-        """Claimed item should have status='processing' and morgen_task_id='__pending__'."""
-        from enuclea import db
-        db.claim_atera_item("ticket_999", "ticket", 999, db_path=self.db_path)
-
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM tracked_atera_items WHERE id = ?", ("ticket_999",)).fetchone()
-        conn.close()
-
-        assert row["status"] == "processing"
-        assert row["morgen_task_id"] == "__pending__"
-
-    def test_add_tracked_still_works(self):
-        """Legacy add_tracked_atera_item should still work for backward compatibility."""
-        from enuclea import db
-        db.add_tracked_atera_item("ticket_888", "ticket", 888, "morgen-task-xyz", db_path=self.db_path)
-        tracked = db.is_atera_item_tracked("ticket_888", db_path=self.db_path)
-        assert tracked is True

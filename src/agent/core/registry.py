@@ -74,9 +74,6 @@ class ToolRegistry:
             tools.post_to_discord,
             tools.read_discord_channel,
             tools.list_discord_channels,
-            tools.create_atera_customer,
-            tools.create_atera_contact,
-            tools.create_atera_ticket,
         ]
         for t in builtins:
             if t not in registered:
