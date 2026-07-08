@@ -533,6 +533,13 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
 
     # CRITICAL: Normalize input immediately and sanitise it to prevent Unicode normalization bypasses, null bytes, and path traversals
     import urllib.parse
+    import posixpath
+    
+    # Enforce strict posixpath normalization and deny traversal segments
+    clean_skill_name = posixpath.normpath(skill_name).lstrip('/')
+    if '..' in clean_skill_name or '/' in clean_skill_name or clean_skill_name != skill_name:
+        return "Error: Directory traversal attempt detected."
+        
     if any(unicodedata.category(c).startswith('C') for c in skill_name):
         return "Error: Directory traversal attempt detected."
     decoded_name = urllib.parse.unquote(skill_name)
@@ -577,7 +584,8 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     # Use process umask atomically to create temporary directory with 0700 permissions
     old_umask = os.umask(0o077)
     try:
-        temp_path = Path(tempfile.mkdtemp(prefix="skill_"))
+        temp_dir = tempfile.mkdtemp(prefix="skill_install_", suffix=os.urandom(8).hex())
+        temp_path = Path(temp_dir)
     finally:
         os.umask(old_umask)
 

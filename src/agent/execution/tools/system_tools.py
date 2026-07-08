@@ -26,16 +26,25 @@ async def run_command(command: str) -> str:
 
     # CRITICAL: Always scrub environment variables for all executions to prevent token leakage
     env = dict(os.environ)
-    keys_to_scrub = [
+    keys_to_scrub = {
         "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", 
         "DISCORD_BOT_TOKEN", "MAGICA_API", "JULES_API", "1MIN_AI_API"
-    ]
+    }
     extra_keys = os.environ.get("ADDITIONAL_SENSITIVE_KEYS")
     if extra_keys:
-        keys_to_scrub.extend([k.strip() for k in extra_keys.split(",") if k.strip()])
+        keys_to_scrub.update([k.strip() for k in extra_keys.split(",") if k.strip()])
         
-    for key in keys_to_scrub:
-        env.pop(key, None)
+    for key in list(env.keys()):
+        key_upper = key.upper()
+        if key in keys_to_scrub:
+            env.pop(key, None)
+            continue
+        if (
+            key_upper.startswith(("AWS_", "KUBERNETES_", "GCP_", "GOOGLE_", "AZURE_"))
+            or any(pattern in key_upper for pattern in ("KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH_"))
+        ):
+            if key_upper not in ("PYTHONPATH", "PATH", "SAFE_VAR"):
+                env.pop(key, None)
         
     # Apply sandboxing wrapping
     try:
