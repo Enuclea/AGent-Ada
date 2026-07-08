@@ -153,12 +153,25 @@ def apply_landlock(workspace_dir: str) -> None:
         err = ctypes.get_errno()
         raise OSError(err, f"Failed to create Landlock ruleset: {os.strerror(err)}")
 
+    # Create a unique, process-isolated sandbox temporary directory with strict 0700 permissions
+    import uuid
+    sandbox_tmp = f"/tmp/agent_sandbox_{uuid.uuid4()}"
+    try:
+        os.makedirs(sandbox_tmp, mode=0o700, exist_ok=True)
+        os.environ["TMPDIR"] = sandbox_tmp
+        os.environ["TEMP"] = sandbox_tmp
+        os.environ["TMP"] = sandbox_tmp
+    except Exception:
+        sandbox_tmp = "/tmp"
+
     # Define path-specific rules: (path, allowed_access_mask)
     rules: List[Tuple[str, int]] = [
         # Workspace is fully readable & writable
         (workspace_dir_abs, handled_access_fs),
-        # /tmp is writable for temporary files, but cannot execute binaries (sandboxing hardening)
-        ("/tmp", handled_access_fs & ~LANDLOCK_ACCESS_FS_EXECUTE),
+        # Unique sandbox temp directory is writable, but cannot execute binaries
+        (sandbox_tmp, handled_access_fs & ~LANDLOCK_ACCESS_FS_EXECUTE),
+        # Global /tmp is strictly read-only (no execution, no writes)
+        ("/tmp", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
         # System paths are read-only / execute-only
         ("/usr", LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
         ("/lib", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),

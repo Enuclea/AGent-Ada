@@ -3,6 +3,10 @@ import re
 import base64
 from typing import Optional, List
 
+class InjectionDetectedError(ValueError):
+    """Custom exception raised when a prompt injection attempt is detected."""
+    pass
+
 # Common prompt injection indicators to sanitize or strip
 INJECTION_PATTERNS = [
     r"(?i)ignore\s+(?:all\s+)?previous\s+instructions",
@@ -63,15 +67,14 @@ class SecurityPipeline:
                 if decoded.strip():
                     decoded_norm = re.sub(r'\s+', ' ', decoded).strip().lower()
                     if any(kw in decoded_norm for kw in ["ignore", "system override", "bypass", "instruction", "forget your"]):
-                        return "[injection attempt blocked (base64 obfuscated)]"
+                        raise InjectionDetectedError("Prompt injection attempt detected and blocked (base64 obfuscated).")
                     sanitized_decoded = self.sanitize_input(decoded)
-                    if sanitized_decoded.startswith("[injection attempt blocked"):
-                        return "[injection attempt blocked (base64 obfuscated)]"
-                    
                     chunks.append(sanitized_decoded)
                     has_replacements = True
                 else:
                     chunks.append(match.group(0))
+            except InjectionDetectedError:
+                raise
             except Exception:
                 chunks.append(match.group(0))
                 
@@ -106,7 +109,7 @@ class SecurityPipeline:
         for pattern in all_patterns:
             pat = pattern if pattern.startswith("(?i)") else r"(?i)" + pattern
             if re.search(pat, cleaned):
-                return "[injection attempt blocked]"
+                raise InjectionDetectedError("Prompt injection attempt detected and blocked.")
         
         return cleaned
 

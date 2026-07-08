@@ -535,6 +535,9 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     import urllib.parse
     import posixpath
     
+    if '\\' in skill_name or '\0' in skill_name or '..' in skill_name or '/' in skill_name:
+        return "Error: Directory traversal attempt detected."
+        
     # Enforce strict posixpath normalization and deny traversal segments
     clean_skill_name = posixpath.normpath(skill_name).lstrip('/')
     if '..' in clean_skill_name or '/' in clean_skill_name or clean_skill_name != skill_name:

@@ -42,22 +42,22 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     if not sig_path.exists():
         return False
         
-    try:
-        with open(sig_path, "rb") as f:
-            signature = f.read()
-            
-        skill_hash = _calculate_skill_hash(src_folder)
+    with open(sig_path, "rb") as f:
+        signature = f.read()
         
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-        pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY")
-        if not pub_key_hex:
-            raise ValueError("ADA_SKILL_PUBLIC_KEY environment variable must be set for signature verification.")
+    skill_hash = _calculate_skill_hash(src_folder)
+    
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY")
+    if not pub_key_hex:
+        raise ValueError("ADA_SKILL_PUBLIC_KEY environment variable must be set for signature verification.")
+    try:
         pub_key_bytes = bytes.fromhex(pub_key_hex)
         pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_key_bytes)
         pub_key.verify(signature, skill_hash)
         return True
-    except Exception:
-        return False
+    except Exception as e:
+        raise ValueError(f"Signature verification failed: {e}")
 
 def _calculate_in_memory_hash(files_dict: dict) -> bytes:
     import hashlib
@@ -72,20 +72,20 @@ def _calculate_in_memory_hash(files_dict: dict) -> bytes:
 def _verify_in_memory_signature(files_dict: dict) -> bool:
     if "signature.sig" not in files_dict:
         return False
+    signature = files_dict["signature.sig"]
+    skill_hash = _calculate_in_memory_hash(files_dict)
+    
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY")
+    if not pub_key_hex:
+        raise ValueError("ADA_SKILL_PUBLIC_KEY environment variable must be set for signature verification.")
     try:
-        signature = files_dict["signature.sig"]
-        skill_hash = _calculate_in_memory_hash(files_dict)
-        
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-        pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY")
-        if not pub_key_hex:
-            raise ValueError("ADA_SKILL_PUBLIC_KEY environment variable must be set for signature verification.")
         pub_key_bytes = bytes.fromhex(pub_key_hex)
         pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_key_bytes)
         pub_key.verify(signature, skill_hash)
         return True
-    except Exception:
-        return False
+    except Exception as e:
+        raise ValueError(f"Signature verification failed: {e}")
 
 from typing import List
 
