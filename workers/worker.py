@@ -109,6 +109,8 @@ def _get_ollama_models() -> list:
 async def _register_with_hub():
     """Register this worker with the Ada hub on startup."""
     import httpx
+    import hmac
+    import hashlib
     ollama_models = _get_ollama_models()
     caps = list(CAPABILITIES)
     if ollama_models and "ollama" not in caps:
@@ -124,7 +126,26 @@ async def _register_with_hub():
         "has_grok": _find_binary("grok") is not None,
         "ollama_models": ollama_models,
     }
-    headers = {}
+    
+    # Calculate HMAC signature headers for hub authentication
+    secret = os.environ.get("INTERNAL_API_SECRET", "").encode()
+    if not secret:
+        dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+        secret = hashlib.sha256(dashboard_password.encode()).digest()
+        
+    path = "/api/workers/register"
+    body_bytes = json.dumps(manifest).encode("utf-8")
+    timestamp_str = str(int(time.time()))
+    body_hash = hashlib.sha256(body_bytes).hexdigest()
+    
+    message = f"POST:{path}::{timestamp_str}:{body_hash}".encode()
+    sig = hmac.new(secret, message, hashlib.sha256).hexdigest()
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-Signature": sig,
+        "X-Timestamp": timestamp_str
+    }
     if API_KEY:
         headers["X-Worker-Key"] = API_KEY
 

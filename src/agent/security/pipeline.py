@@ -33,15 +33,15 @@ class SecurityPipeline:
             return ""
         
         # Normalize input to prevent obfuscation bypasses
-        # 1. Strip zero-width spaces and control characters
-        normalized = re.sub(r'[\u200b-\u200d\ufeff]', '', prompt)
+        # 1. Strip zero-width spaces and control characters (preserving case for Base64)
+        case_preserved = re.sub(r'[\u200b-\u200d\ufeff]', '', prompt)
         
-        # 2. Normalize whitespace
-        normalized = re.sub(r'\s+', ' ', normalized).strip().lower()
+        # 2. Normalize whitespace and case for keyword matching
+        normalized = re.sub(r'\s+', ' ', case_preserved).strip().lower()
         
-        # 3. Check for Base64 encoded payloads that might decode to injections
+        # 3. Check for Base64 encoded payloads that might decode to injections (must use case-preserved)
         b64_pat = r'[a-zA-Z0-9+/]{16,}={0,2}'
-        for match in re.finditer(b64_pat, normalized):
+        for match in re.finditer(b64_pat, case_preserved):
             import base64
             try:
                 decoded = base64.b64decode(match.group(0)).decode('utf-8', errors='ignore')
@@ -77,7 +77,8 @@ class SecurityPipeline:
         
         for pattern in all_patterns:
             pat = pattern if pattern.startswith("(?i)") else r"(?i)" + pattern
-            cleaned = re.sub(pat, "[injection attempt blocked]", cleaned)
+            if re.search(pat, cleaned):
+                return "[injection attempt blocked]"
         
         return cleaned
 

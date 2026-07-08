@@ -21,7 +21,10 @@ from agent.core.scheduler import run_scheduler, run_quota_refresh_loop, ensure_d
 # Generate or load the derived HMAC shared secret for service-to-service calls
 shared_secret = os.environ.get("INTERNAL_API_SECRET", "").encode()
 if not shared_secret:
-    shared_secret = hashlib.sha256(os.environ.get("DASHBOARD_PASSWORD", "admin").encode()).digest()
+    dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+    if dashboard_password == "admin":
+        print("[WARNING] Security alert: Secure service-to-service communication is using the default password 'admin' as secret. Please configure INTERNAL_API_SECRET or DASHBOARD_PASSWORD.")
+    shared_secret = hashlib.sha256(dashboard_password.encode()).digest()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -79,10 +82,31 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
             timestamp = int(timestamp_str)
             # 5-minute sliding window check to prevent replay attacks
             if abs(time.time() - timestamp) < 300:
-                message = f"{request.method}:{request.url.path}:{timestamp_str}".encode()
-                expected_sig = hmac.new(shared_secret, message, hashlib.sha256).hexdigest()
-                if hmac.compare_digest(sig, expected_sig):
-                    return credentials
+                try:
+                    body = await request.body()
+                    async def receive():
+                        return {"type": "http.request", "body": body, "more_body": False}
+                    request._receive = receive
+                    
+                    body_hash = hashlib.sha256(body).hexdigest()
+                    query_str = request.url.query or ""
+                    
+                    # 1. Try secure signature format (bind method, path, query, timestamp, body_hash)
+                    secure_message = f"{request.method}:{request.url.path}:{query_str}:{timestamp_str}:{body_hash}".encode()
+                    expected_secure_sig = hmac.new(shared_secret, secure_message, hashlib.sha256).hexdigest()
+                    if hmac.compare_digest(sig, expected_secure_sig):
+                        return credentials
+                    
+                    # 2. Legacy fallback
+                    legacy_message = f"{request.method}:{request.url.path}:{timestamp_str}".encode()
+                    expected_legacy_sig = hmac.new(shared_secret, legacy_message, hashlib.sha256).hexdigest()
+                    if hmac.compare_digest(sig, expected_legacy_sig):
+                        print("[WARNING] API request authenticated using legacy HMAC signature. Please upgrade client to payload-bound signatures.")
+                        return credentials
+                except Exception as auth_inner_err:
+                    import traceback
+                    print(f"[AUTH EXCEPTION] Error during HMAC signature verification:")
+                    traceback.print_exc()
         except ValueError:
             pass
 

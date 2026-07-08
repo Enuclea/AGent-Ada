@@ -15,13 +15,12 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
             "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
             "asyncio", "logging", "math", "time", "agent", "google", "contextlib",
             "enum", "dataclasses", "types", "sqlite3", "urllib", "enuclea", "traceback",
-            "fcntl", "sys", "os", "subprocess", "random", "playwright"
+            "fcntl", "sys", "random", "playwright"
         }
 
         def __init__(self):
             self.errors = []
-            self.os_aliases = {"os"}
-            self.sub_aliases = {"subprocess"}
+            self.sys_names = {"sys"}
             
         def visit_Import(self, node):
             for name in node.names:
@@ -29,52 +28,64 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
                 top_level = parts[0]
                 if top_level not in self.ALLOWED_MODULES:
                     self.errors.append(f"Forbidden import: {name.name}")
-                if name.name == "os":
-                    self.os_aliases.add(name.asname or "os")
-                elif name.name == "subprocess":
-                    self.sub_aliases.add(name.asname or "subprocess")
+                if name.name == "sys":
+                    self.sys_names.add(name.asname or name.name)
             self.generic_visit(node)
             
         def visit_ImportFrom(self, node):
             if node.module:
                 parts = node.module.split(".")
                 top_level = parts[0]
-                if top_level not in self.ALLOWED_MODULES:
+                if top_level == "os":
+                    # Strictly allow only 'environ' and 'getenv' from 'os'
+                    for name in node.names:
+                        if name.name not in {"environ", "getenv"}:
+                            self.errors.append(f"Forbidden import: {name.name} from os")
+                elif top_level == "sys":
+                    for name in node.names:
+                        if name.name in ("modules", "*"):
+                            self.errors.append(f"Forbidden import: {name.name} from sys")
+                elif top_level not in self.ALLOWED_MODULES:
                     self.errors.append(f"Forbidden import from module: {node.module}")
+            self.generic_visit(node)
             
-            forbidden_imports = {
-                "os": {"system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
-                "subprocess": {"run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"}
-            }
-            if node.module in forbidden_imports:
-                for name in node.names:
-                    if name.name in forbidden_imports[node.module]:
-                        self.errors.append(f"Forbidden import: {name.name} from {node.module}")
+        def visit_Assign(self, node):
+            if isinstance(node.value, ast.Name) and node.value.id in self.sys_names:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.sys_names.add(target.id)
             self.generic_visit(node)
             
         def visit_Call(self, node):
-            forbidden_builtins = ("eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr")
+            forbidden_builtins = ("eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr", "vars", "globals", "locals")
             if isinstance(node.func, ast.Name):
                 if node.func.id in forbidden_builtins:
                     self.errors.append(f"Forbidden dynamic built-in: {node.func.id}()")
             elif isinstance(node.func, ast.Attribute):
                 func_name = node.func.attr
-                module_name = ""
-                if isinstance(node.func.value, ast.Name):
-                    module_name = node.func.value.id
-                
-                if module_name in self.os_aliases and func_name in ("system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"):
-                    self.errors.append(f"Forbidden system call: {module_name}.{func_name}()")
-                elif module_name in self.sub_aliases and func_name in ("run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"):
-                    self.errors.append(f"Forbidden subprocess call: {module_name}.{func_name}()")
-                elif func_name in forbidden_builtins:
+                if func_name in forbidden_builtins:
                     self.errors.append(f"Forbidden call: .{func_name}()")
+            self.generic_visit(node)
+
+        def visit_Name(self, node):
+            if node.id == "__builtins__":
+                self.errors.append("Forbidden access to name: __builtins__")
             self.generic_visit(node)
 
         def visit_Attribute(self, node):
             forbidden_attrs = ("__dict__", "__class__", "__bases__", "__subclasses__", "__getattribute__", "__getattr__", "__setattr__", "__delattr__")
             if node.attr in forbidden_attrs:
                 self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
+            
+            def is_sys_ref(val_node):
+                if isinstance(val_node, ast.Name):
+                    return val_node.id in self.sys_names
+                if isinstance(val_node, ast.Attribute):
+                    return val_node.attr == "sys" or is_sys_ref(val_node.value)
+                return False
+
+            if node.attr == "modules" and is_sys_ref(node.value):
+                self.errors.append("Forbidden attribute access: sys.modules")
             self.generic_visit(node)
 
     for py_file in plugin_path.rglob("*.py"):

@@ -145,7 +145,7 @@ def apply_landlock(workspace_dir: str) -> None:
     # Append runtime environments (like Docker containers and configs) if they exist
     for opt_path in ("/data", "/app", str(Path.home())):
         if os.path.exists(opt_path) and opt_path not in [r[0] for r in rules]:
-            rules.append((opt_path, LANDLOCK_ACCESS_FS_ALL))
+            rules.append((opt_path, LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR))
 
     # Register each rule directory by opening its file descriptor and adding it to the ruleset
     for path, mask in rules:

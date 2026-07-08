@@ -142,3 +142,119 @@ async def test_auth_bypass_prevention():
         with pytest.raises(HTTPException) as excinfo:
             await authenticate(mock_request, credentials=None)
         assert excinfo.value.status_code == 401
+
+# 5. Test Hardened AST Safety scan (sys.modules and vars check)
+def test_verify_plugin_ast_safety_sys_modules():
+    from agent.core.plugins import verify_plugin_ast_safety
+    
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        plugin_path = Path(tmp_dir)
+        init_file = plugin_path / "__init__.py"
+        
+        # Test vars() is blocked
+        with open(init_file, "w") as f:
+            f.write("def test():\n    vars(sys)\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden dynamic built-in: vars()" in str(excinfo.value)
+
+        # Test sys.modules is blocked
+        with open(init_file, "w") as f:
+            f.write("import sys\ndef test():\n    sys.modules['os'].system('id')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden attribute access: sys.modules" in str(excinfo.value)
+
+        # Test sys alias bypass is blocked
+        with open(init_file, "w") as f:
+            f.write("import sys\ns = sys\ns.modules['os'].system('id')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden attribute access: sys.modules" in str(excinfo.value)
+
+        # Test from sys import modules bypass is blocked
+        with open(init_file, "w") as f:
+            f.write("from sys import modules\nmodules['os'].system('id')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden import: modules from sys" in str(excinfo.value)
+
+        # Test traceback.sys bypass is blocked
+        with open(init_file, "w") as f:
+            f.write("import traceback\ntraceback.sys.modules['os'].system('id')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden attribute access: sys.modules" in str(excinfo.value)
+
+        # Test sys alias modules access is blocked
+        with open(init_file, "w") as f:
+            f.write("import sys\ns = sys\ns.modules['os'].system('id')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden attribute access: sys.modules" in str(excinfo.value)
+
+        # Test globals() is blocked
+        with open(init_file, "w") as f:
+            f.write("def test():\n    globals()['__builtins__']\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden dynamic built-in: globals()" in str(excinfo.value)
+
+        # Test __builtins__ access is blocked
+        with open(init_file, "w") as f:
+            f.write("def test():\n    __builtins__['exec']('id')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden access to name: __builtins__" in str(excinfo.value)
+
+# 6. Test HMAC Secure Signature & Fallback
+@pytest.mark.asyncio
+async def test_hmac_signature_validation():
+    import hmac
+    import hashlib
+    import time
+    from agent.api.router import authenticate
+    from fastapi import Request
+    
+    with patch.dict(os.environ, {"TESTING": "0", "INTERNAL_API_SECRET": "mysecret"}):
+        from agent.api import router
+        # Re-derive shared_secret for test
+        router.shared_secret = b"mysecret"
+        
+        mock_request = MagicMock(spec=Request)
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/api/skills"
+        mock_request.url.query = "param=val"
+        mock_request.method = "POST"
+        mock_request.client = MagicMock()
+        mock_request.client.host = "1.2.3.4"
+        
+        # Mock body reading
+        async def mock_body():
+            return b'{"key": "value"}'
+        mock_request.body = mock_body
+        
+        timestamp_str = str(int(time.time()))
+        body_hash = hashlib.sha256(b'{"key": "value"}').hexdigest()
+        
+        # 1. Test secure signature validation (method, path, query, timestamp, body_hash)
+        secure_msg = f"POST:/api/skills:param=val:{timestamp_str}:{body_hash}".encode()
+        secure_sig = hmac.new(b"mysecret", secure_msg, hashlib.sha256).hexdigest()
+        
+        mock_request.headers = {
+            "X-Signature": secure_sig,
+            "X-Timestamp": timestamp_str
+        }
+        res = await authenticate(mock_request, credentials=None)
+        assert res is None  # authenticated successfully
+        
+        # 2. Test legacy signature fallback validation
+        legacy_msg = f"POST:/api/skills:{timestamp_str}".encode()
+        legacy_sig = hmac.new(b"mysecret", legacy_msg, hashlib.sha256).hexdigest()
+        
+        mock_request.headers = {
+            "X-Signature": legacy_sig,
+            "X-Timestamp": timestamp_str
+        }
+        res = await authenticate(mock_request, credentials=None)
+        assert res is None  # authenticated successfully
