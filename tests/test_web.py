@@ -350,3 +350,60 @@ def test_cancel_session_endpoint():
     data = response.json()
     assert data["status"] == "success"
     assert "Execution stopped." in data["message"]
+
+def test_plugin_and_custom_routes_registration():
+    """Verify that any dynamically loaded plugin/custom routes are registered on the app
+    and follow basic security/authentication structure (e.g. return 401 or 422/400 instead of 404).
+    """
+    from agent.web import app
+    from fastapi.testclient import TestClient
+    
+    # Extract all registered route paths safely
+    registered_paths = [route.path for route in app.routes if hasattr(route, "path")]
+    
+    # We want to check for any custom integrations or plugin routes
+    # e.g., routes that are NOT the standard built-in harness routes:
+    builtin_prefixes = {
+        "/health", "/index.html", "/static", "/api/status", "/api/tasks", "/api/chat", 
+        "/api/skills", "/api/plugins", "/api/workers", "/api/discord/config", 
+        "/api/discord/members", "/api/sessions", "/api/subagents", "/api/gemini/file",
+        "/api/history", "/api/telemetry/routes", "/api/quotas", "/api/repo-skills",
+        "/api/config/platform", "/api/config/tenants", "/api/modules", "/api/schedule",
+        "/api/dnd"
+    }
+    
+    custom_routes = []
+    for route in app.routes:
+        if not hasattr(route, "path"):
+            continue
+        path = route.path
+        # Skip standard static file mounts, docs, and builtins
+        if path.startswith("/docs") or path.startswith("/openapi.json") or path.startswith("/redoc"):
+            continue
+        # Skip routes with dynamic path variables to avoid literal 404s
+        if "{" in path or "}" in path:
+            continue
+        # Check if the path does not start with any of the builtin prefixes
+        is_builtin = False
+        for prefix in builtin_prefixes:
+            if path == prefix or path.startswith(prefix + "/"):
+                is_builtin = True
+                break
+        if not is_builtin and path not in ("/", ""):
+            custom_routes.append(route)
+            
+    print(f"[TEST] Discovered custom plugin/integration routes: {[r.path for r in custom_routes]}")
+    
+    # If there are any custom routes loaded (e.g. in development or private overlay),
+    # verify they respond correctly (e.g. not 404) to show they are registered and active.
+    if custom_routes:
+        with TestClient(app) as test_client:
+            for route in custom_routes:
+                # Determine HTTP method
+                methods = list(route.methods or ["GET"])
+                method = methods[0]
+                
+                # Make request without credentials/payload to check security/existence
+                # (Expected to fail with 401 Unauthorized or 422 Unprocessable Entity, but NOT 404 Not Found)
+                response = test_client.request(method, route.path)
+                assert response.status_code != 404, f"Custom route {route.path} returned 404, indicating it was not registered properly."
