@@ -8,16 +8,24 @@ import os
 import sqlite3
 import tempfile
 import asyncio
-from enuclea import db
-from enuclea.atera_tool import (
-    load_atera_credentials,
-    AteraClient,
-    analyze_atera_item,
-    create_morgen_task_for_item,
-    sync_atera_to_morgen,
-    sync_completed_atera_tasks,
-    AteraAnalysis
-)
+try:
+    from enuclea import db
+    from enuclea.atera_tool import (
+        load_atera_credentials,
+        AteraClient,
+        analyze_atera_item,
+        create_morgen_task_for_item,
+        sync_atera_to_morgen,
+        sync_completed_atera_tasks,
+        AteraAnalysis
+    )
+    has_enuclea = True
+except ImportError:
+    has_enuclea = False
+
+import pytest
+if not has_enuclea:
+    pytestmark = pytest.mark.skip(reason="enuclea private module not available")
 
 class TestEnucleaAtera(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -557,7 +565,8 @@ class TestEnucleaAtera(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(db.is_atera_item_tracked("ticket_105", db_path=self.db_path))
 
 
-from enuclea.api_broker import APIBroker
+if has_enuclea:
+    from enuclea.api_broker import APIBroker
 
 class TestAPIBroker(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

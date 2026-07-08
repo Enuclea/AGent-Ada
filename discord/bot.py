@@ -22,8 +22,19 @@ import aiohttp
 import bot_config
 import bot_queue
 
-# Constants for hooking into the running local AGent FastAPI daemon loaded from config.json
 AGENT_API_BASE = bot_config.get_agent_api_base()
+
+def get_api_headers(method: str, path: str, query: str = "", json_data: Optional[dict] = None) -> dict:
+    """Generates authentication and content-type headers for an API request."""
+    import json
+    body_bytes = b""
+    if json_data is not None:
+        body_bytes = json.dumps(json_data).encode("utf-8")
+    headers = bot_config.get_auth_headers(method, path, query, body_bytes)
+    if json_data is not None:
+        headers["Content-Type"] = "application/json"
+    return headers
+
 ROLEPLAY_GUILD_IDS = bot_config.get_roleplay_guild_ids()
 BOSS_USER_IDS = bot_config.get_boss_user_ids()
 MODERATION_CHANNEL_ID = bot_config.get_moderation_channel_id()
@@ -376,11 +387,14 @@ def save_joined_members():
     # Synchronization push via Central Brokered REST API
     import urllib.request
     try:
-        payload = json.dumps({"members_data": data}).encode("utf-8")
+        path = "/api/discord/members"
+        json_data = {"members_data": data}
+        payload = json.dumps(json_data).encode("utf-8")
+        headers = get_api_headers("POST", path, json_data=json_data)
         req = urllib.request.Request(
-            f"{AGENT_API_BASE}/api/discord/members",
+            f"{AGENT_API_BASE}{path}",
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST"
         )
         with urllib.request.urlopen(req, timeout=1.0) as resp:
@@ -495,12 +509,16 @@ async def enqueue_task(priority: int, task_type: str, message: discord.Message, 
 async def is_backend_busy(session_id: Optional[str] = None) -> bool:
     """Checks if the backend is currently busy processing a task for a given session."""
     try:
-        url = f"{AGENT_API_BASE}/api/status"
+        path = "/api/status"
+        query = ""
+        url = f"{AGENT_API_BASE}{path}"
         if session_id:
             import urllib.parse
-            url += f"?session_id={urllib.parse.quote(session_id)}"
+            query = f"session_id={urllib.parse.quote(session_id)}"
+            url += f"?{query}"
+        headers = get_api_headers("GET", path, query)
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=1.0) as resp:
+            async with session.get(url, headers=headers, timeout=1.0) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("status") == "busy"
@@ -847,9 +865,11 @@ async def on_member_join(member: discord.Member):
 
 async def check_agent_server_status() -> bool:
     """Verifies that the AGent FastAPI daemon is active and responding."""
+    path = "/api/status"
+    headers = get_api_headers("GET", path)
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(f"{AGENT_API_BASE}/api/status", timeout=2.0) as resp:
+            async with session.get(f"{AGENT_API_BASE}{path}", headers=headers, timeout=2.0) as resp:
                 return resp.status == 200
         except Exception:
             return False
@@ -899,8 +919,10 @@ async def handle_thumbtack_webhook_message(message: discord.Message):
     
     import aiohttp
     try:
+        path = "/api/integrations/thumbtack"
+        headers = get_api_headers("POST", path, json_data=payload)
         async with aiohttp.ClientSession() as session:
-            async with session.post(f"{AGENT_API_BASE}/api/integrations/thumbtack", json=payload) as resp:
+            async with session.post(f"{AGENT_API_BASE}{path}", headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     print(f"[Thumbtack Webhook] Successfully pushed message {message.id} to AGent API.")
                 else:
@@ -1478,8 +1500,10 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
         typing_task = asyncio.create_task(keep_typing())
 
     try:
+        path = "/api/chat"
+        headers = get_api_headers("POST", path, json_data=payload)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600.0)) as session:
-            async with session.post(f"{AGENT_API_BASE}/api/chat", json=payload) as resp:
+            async with session.post(f"{AGENT_API_BASE}{path}", headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     text_err = await resp.text()
                     await placeholder.edit(content=f"❌ **AGent Error (HTTP {resp.status})**: {text_err}")
@@ -1783,8 +1807,10 @@ async def update_narrative_summary(channel: discord.TextChannel):
     }
 
     try:
+        path = "/api/chat"
+        headers = get_api_headers("POST", path, json_data=payload)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90.0)) as session:
-            async with session.post(f"{AGENT_API_BASE}/api/chat", json=payload) as resp:
+            async with session.post(f"{AGENT_API_BASE}{path}", headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     return
                 response_text = ""
@@ -1881,8 +1907,10 @@ async def trigger_ambient_response(channel: discord.TextChannel, typing_task=Non
         typing_task = asyncio.create_task(keep_typing())
 
     try:
+        path = "/api/chat"
+        headers = get_api_headers("POST", path, json_data=payload)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90.0)) as session:
-            async with session.post(f"{AGENT_API_BASE}/api/chat", json=payload) as resp:
+            async with session.post(f"{AGENT_API_BASE}{path}", headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     return
                 response_text = ""
@@ -2151,8 +2179,10 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
         typing_task = asyncio.create_task(keep_typing())
 
     try:
+        path = "/api/chat"
+        headers = get_api_headers("POST", path, json_data=payload)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90.0)) as session:
-            async with session.post(f"{AGENT_API_BASE}/api/chat", json=payload) as resp:
+            async with session.post(f"{AGENT_API_BASE}{path}", headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     if local_typing and typing_task:
                         typing_task.cancel()
@@ -2456,8 +2486,10 @@ async def show_status(ctx):
     # Hit API to list system stats if online
     if server_online:
         try:
+            path = "/api/status"
+            headers = get_api_headers("GET", path)
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
-                async with session.get(f"{AGENT_API_BASE}/api/status") as resp:
+                async with session.get(f"{AGENT_API_BASE}{path}", headers=headers) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         embed.add_field(name="Target Model", value=f"`{data.get('model')}`", inline=True)
@@ -2488,8 +2520,10 @@ async def list_active_tasks(ctx):
         await ctx.send("❌ Engine daemon is offline.")
         return
 
+    path = "/api/tasks"
+    headers = get_api_headers("GET", path)
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
-        async with session.get(f"{AGENT_API_BASE}/api/tasks") as resp:
+        async with session.get(f"{AGENT_API_BASE}{path}", headers=headers) as resp:
             if resp.status != 200:
                 await ctx.send("❌ Failed to query tasks.")
                 return
@@ -2685,8 +2719,10 @@ async def cmd_assess_channel(ctx, target_channel: str = None):
     typing_task = asyncio.create_task(keep_typing())
     
     try:
+        path = "/api/chat"
+        headers = get_api_headers("POST", path, json_data=payload)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90.0)) as session:
-            async with session.post(f"{AGENT_API_BASE}/api/chat", json=payload) as resp:
+            async with session.post(f"{AGENT_API_BASE}{path}", headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     typing_task.cancel()
                     await placeholder.edit(content="❌ **Error**: Task Engine backend failed to answer.")
@@ -3042,8 +3078,10 @@ async def generate_creative_prompt():
     }
     
     try:
+        path = "/api/chat"
+        headers = get_api_headers("POST", path, json_data=payload)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30.0)) as session:
-            async with session.post(f"{AGENT_API_BASE}/api/chat", json=payload) as resp:
+            async with session.post(f"{AGENT_API_BASE}{path}", headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     response_text = ""
                     async for line in resp.content:

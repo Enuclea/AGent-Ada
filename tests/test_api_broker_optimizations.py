@@ -7,8 +7,16 @@ from unittest.mock import MagicMock, AsyncMock, patch
 # Add AGent codebase to path
 sys.path.append("/home/dan/AGent")
 
-from enuclea.api_broker import APIBroker
-from enuclea.gmail_client import fetch_messages
+try:
+    from enuclea.api_broker import APIBroker
+    from enuclea.gmail_client import fetch_messages
+    has_enuclea = True
+except ImportError:
+    has_enuclea = False
+
+import pytest
+if not has_enuclea:
+    pytestmark = pytest.mark.skip(reason="enuclea private module not available")
 
 class TestAPIBrokerOptimizations(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

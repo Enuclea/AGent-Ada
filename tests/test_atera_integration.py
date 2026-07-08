@@ -10,11 +10,18 @@ from pathlib import Path
 # Adjust path so we can import from enuclea
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from enuclea import db
-from enuclea.atera_mapping import init_mapping_table, add_mapping, get_mapping, remove_mapping
-from enuclea.atera_ticketing_service import create_client_ticket, query_client_ticket_statuses
-from enuclea.atera_onboarding import validate_client_credentials, create_new_contact
-from enuclea.atera_tool import AteraClient, load_atera_credentials
+try:
+    from enuclea import db
+    from enuclea.atera_mapping import init_mapping_table, add_mapping, get_mapping, remove_mapping
+    from enuclea.atera_ticketing_service import create_client_ticket, query_client_ticket_statuses
+    from enuclea.atera_onboarding import validate_client_credentials, create_new_contact
+    from enuclea.atera_tool import AteraClient, load_atera_credentials
+    has_enuclea = True
+except ImportError:
+    has_enuclea = False
+
+if not has_enuclea:
+    pytestmark = pytest.mark.skip(reason="enuclea private module not available")
 
 class TestAteraIntegration(unittest.IsolatedAsyncioTestCase):
     

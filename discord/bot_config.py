@@ -55,11 +55,14 @@ def save_config(config: Dict[str, Any]) -> None:
     # Central brokered API push
     api_base = config.get("agent_api_base", "http://127.0.0.1:8051")
     try:
+        path = "/api/discord/config"
         payload = json.dumps({"config_data": config}).encode("utf-8")
+        headers = get_auth_headers("POST", path, body=payload)
+        headers["Content-Type"] = "application/json"
         req = urllib.request.Request(
-            f"{api_base}/api/discord/config",
+            f"{api_base}{path}",
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST"
         )
         with urllib.request.urlopen(req, timeout=1.0) as response:
@@ -162,4 +165,28 @@ def get_linkshell_channel_id() -> int:
 
 def get_around_house_channel_id() -> int:
     return load_config().get("around_house_channel_id", 1017827413104803931)
+
+def get_auth_headers(method: str, path: str, query: str = "", body: bytes = b"") -> Dict[str, str]:
+    """Generates secure HMAC signature headers for API authentication."""
+    import hmac
+    import hashlib
+    import time
+    import os
+
+    secret = os.environ.get("INTERNAL_API_SECRET", "").encode()
+    if not secret:
+        dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+        secret = hashlib.sha256(dashboard_password.encode()).digest()
+        
+    timestamp_str = str(int(time.time()))
+    body_hash = hashlib.sha256(body).hexdigest()
+    
+    # Message binds method, path, query, timestamp, and body hash
+    message = f"{method.upper()}:{path}:{query}:{timestamp_str}:{body_hash}".encode()
+    sig = hmac.new(secret, message, hashlib.sha256).hexdigest()
+    
+    return {
+        "X-Signature": sig,
+        "X-Timestamp": timestamp_str
+    }
 

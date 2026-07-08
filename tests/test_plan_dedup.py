@@ -16,6 +16,12 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+try:
+    from enuclea import db
+    has_enuclea = True
+except ImportError:
+    has_enuclea = False
+
 
 class TestPlanDeduplication:
     """Tests for the plan re-creation guard (Fix 3A)."""
@@ -128,6 +134,7 @@ class TestPlanDeduplication:
         conn.close()
 
 
+@pytest.mark.skipif(not has_enuclea, reason="enuclea private module not available")
 class TestAteraClaimAtomicity:
     """Tests for the atomic claim_atera_item pattern (Fix Vector 2)."""
 

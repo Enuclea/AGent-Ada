@@ -134,7 +134,7 @@ class ScheduleRequest(BaseModel):
 @app.post("/api/discord/members")
 async def post_discord_members(req: DiscordMembersRequest):
     try:
-        members_file = Path(__file__).parent.parent.parent / "discord" / "members.json"
+        members_file = Path("/data/members.json")
         members_file.parent.mkdir(parents=True, exist_ok=True)
         with open(members_file, "w", encoding="utf-8") as f:
             json.dump(req.members_data, f, indent=2, ensure_ascii=False)
@@ -145,12 +145,15 @@ async def post_discord_members(req: DiscordMembersRequest):
         
         return {"status": "success", "message": "Discord members synchronized successfully"}
     except Exception as e:
+        import traceback
+        print("[ERROR] Exception in post_discord_members:")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to synchronize Discord members: {e}")
 
 @app.get("/api/discord/members")
 async def get_discord_members():
     try:
-        members_file = Path(__file__).parent.parent.parent / "discord" / "members.json"
+        members_file = Path("/data/members.json")
         def _read():
             if members_file.exists():
                 with open(members_file, "r", encoding="utf-8") as f:

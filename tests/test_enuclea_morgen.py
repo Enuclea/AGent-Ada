@@ -9,9 +9,17 @@ import sqlite3
 import tempfile
 import asyncio
 from datetime import datetime, timedelta
-from enuclea import db
-from enuclea.morgen_tool import add_morgen_task, run_sync_and_get_changes, sync_morgen_tasks
-from enuclea.morgen_client import MorgenClient, MorgenClientError
+try:
+    from enuclea import db
+    from enuclea.morgen_tool import add_morgen_task, run_sync_and_get_changes, sync_morgen_tasks
+    from enuclea.morgen_client import MorgenClient, MorgenClientError
+    has_enuclea = True
+except ImportError:
+    has_enuclea = False
+
+import pytest
+if not has_enuclea:
+    pytestmark = pytest.mark.skip(reason="enuclea private module not available")
 
 class TestEnucleaMorgen(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

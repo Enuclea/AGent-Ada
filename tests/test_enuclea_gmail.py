@@ -11,8 +11,15 @@ import sqlite3
 import tempfile
 import asyncio
 from datetime import datetime, timezone
-from enuclea import db
-from enuclea.gmail_tool import sync_gmail_emails
+try:
+    from enuclea import db
+    from enuclea.gmail_tool import sync_gmail_emails
+    has_enuclea = True
+except ImportError:
+    has_enuclea = False
+
+if not has_enuclea:
+    pytestmark = pytest.mark.skip(reason="enuclea private module not available")
 
 class TestEnucleaGmail(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
