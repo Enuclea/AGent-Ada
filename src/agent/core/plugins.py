@@ -7,11 +7,38 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Callable
 from types import ModuleType
 
+def _get_approved_plugin_hashes() -> set:
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    config_file = repo_root / "config" / "approved_plugins.json"
+    if not config_file.exists():
+        return set()
+    try:
+        import json
+        with open(config_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return set(data.get("approved_hashes", []))
+    except Exception:
+        return set()
+
+def _approve_plugin_hash(plugin_hash_hex: str) -> None:
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    config_dir = repo_root / "config"
+    config_file = config_dir / "approved_plugins.json"
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        import json
+        hashes = list(_get_approved_plugin_hashes())
+        if plugin_hash_hex not in hashes:
+            hashes.append(plugin_hash_hex)
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump({"approved_hashes": hashes}, f, indent=2)
+    except Exception as e:
+        print(f"[PLUGINS] Failed to write approved_plugins.json: {e}")
+
 def verify_plugin_ast_safety(plugin_path: Path) -> None:
     """Statically scans all Python files in the plugin package for unsafe calls,
-    unless the plugin has a valid cryptographic signature from the developer,
-    or resides within the trusted built-in agent plugins package path,
-    or matches the workspace's authentic first-party plugins allowlist.
+    unless the plugin is locally approved via hash list, or has a valid cryptographic
+    signature from the developer, or resides within the trusted built-in agent plugins package path.
     """
 
     try:
@@ -33,15 +60,28 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
     except Exception:
         pass
 
-    # Check signature for dynamic external plugins
+    # 1. Calculate plugin hash and check local approved manifest
+    plugin_hash_hex = None
+    try:
+        from agent.execution.tools.security import _calculate_skill_hash
+        plugin_hash = _calculate_skill_hash(Path(plugin_path))
+        plugin_hash_hex = plugin_hash.hex()
+        if plugin_hash_hex in _get_approved_plugin_hashes():
+            return
+    except Exception:
+        plugin_hash = None
+
+    # 2. Check signature for dynamic external plugins
     sig_path = Path(plugin_path) / "signature.sig"
     if sig_path.exists():
         try:
             from cryptography.hazmat.primitives.asymmetric import ed25519
-            from agent.execution.tools.security import _calculate_skill_hash
             
             sig_bytes = sig_path.read_bytes()
-            plugin_hash = _calculate_skill_hash(Path(plugin_path))
+            if not plugin_hash:
+                from agent.execution.tools.security import _calculate_skill_hash
+                plugin_hash = _calculate_skill_hash(Path(plugin_path))
+                plugin_hash_hex = plugin_hash.hex()
             
             trusted_keys = []
             env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
@@ -62,7 +102,9 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
                     continue
                     
             if verified:
-                # Cryptographic verification succeeded, safe to load
+                # Cryptographic verification succeeded! Auto-approve hash locally
+                if plugin_hash_hex:
+                    _approve_plugin_hash(plugin_hash_hex)
                 return
         except Exception:
             pass
