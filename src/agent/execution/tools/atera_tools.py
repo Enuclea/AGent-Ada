@@ -3,7 +3,12 @@
 import logging
 import asyncio
 from typing import Optional
-from enuclea.atera_tool import AteraClient, load_atera_credentials
+try:
+    from enuclea.atera_tool import AteraClient, load_atera_credentials
+except ImportError:
+    AteraClient = None
+    def load_atera_credentials():
+        return None, None
 
 logger = logging.getLogger(__name__)
 
