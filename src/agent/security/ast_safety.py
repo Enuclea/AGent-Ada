@@ -10,10 +10,18 @@ from typing import Set
 
 ALLOWED_MODULES: Set[str] = {
     "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
-    "asyncio", "logging", "math", "time", "agent", "google", "contextlib",
-    "enum", "dataclasses", "types", "enuclea", "traceback",
+    "asyncio", "logging", "math", "time", "google", "contextlib",
+    "enum", "dataclasses", "types", "traceback",
     "fcntl", "random", "playwright", "googleapiclient", "google_auth_oauthlib",
     "base64", "secrets", "email"
+}
+
+SAFE_BUILTINS: Set[str] = {
+    "abs", "all", "any", "ascii", "bin", "bool", "bytes", "bytearray", "callable", "chr",
+    "dict", "divmod", "enumerate", "filter", "float", "format", "frozenset",
+    "hash", "hex", "int", "isinstance", "issubclass", "iter", "len", "list",
+    "map", "max", "min", "next", "oct", "ord", "pow", "print", "range", "repr",
+    "reversed", "round", "set", "slice", "sorted", "str", "sum", "tuple", "zip"
 }
 
 class SafetyVisitor(ast.NodeVisitor):
@@ -146,13 +154,10 @@ class SafetyVisitor(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> None:
         if node.id == "__builtins__":
             self.errors.append("Forbidden access to name: __builtins__")
-        forbidden_builtins = (
-            "eval", "exec", "compile", "__import__", "getattr", "setattr",
-            "delattr", "hasattr", "vars", "globals", "locals"
-        )
-        if node.id in forbidden_builtins:
-            self.errors.append(f"Forbidden access to built-in: {node.id}")
-            self.errors.append(f"Forbidden dynamic built-in: {node.id}()")
+        import builtins
+        if hasattr(builtins, node.id):
+            if node.id not in SAFE_BUILTINS:
+                self.errors.append(f"Forbidden builtin access: {node.id}")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:

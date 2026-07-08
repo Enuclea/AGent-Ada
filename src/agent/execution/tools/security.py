@@ -65,6 +65,17 @@ def _sandbox_command_if_possible(command: str) -> List[str]:
     # Allow explicit bypass via env var (useful for testing/host dev control)
     if os.environ.get("ADA_DISABLE_SANDBOX") == "1":
         return ["bash", "-c", command]
+
+    # Check if running on Windows OS
+    if sys.platform == "win32":
+        if os.environ.get("ALLOW_UNSANDBOXED_EXECUTION") == "true":
+            print("[Security] Warning: Running on Windows without filesystem sandboxing. Sandbox restrictions are disabled.", file=sys.stderr)
+            return ["cmd.exe", "/c", command]
+        raise PermissionError(
+            "Security Exception: Filesystem sandboxing (Bubblewrap/Landlock) is not supported on Windows. "
+            "To run tools unsandboxed on Windows, you must explicitly acknowledge this by setting "
+            "ALLOW_UNSANDBOXED_EXECUTION=true in your environment or configuration."
+        )
         
     workspace_dir = Path.cwd().resolve()
     

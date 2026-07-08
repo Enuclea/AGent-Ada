@@ -8,12 +8,22 @@ from types import ModuleType
 
 def verify_plugin_ast_safety(plugin_path: Path) -> None:
     """Statically scans all Python files in the plugin package for unsafe calls,
-    unless the plugin has a valid cryptographic signature from the developer.
+    unless the plugin has a valid cryptographic signature from the developer,
+    or resides within the trusted built-in agent plugins package path.
     """
     try:
         from agent.execution.tools.security import _verify_skill_signature
         if _verify_skill_signature(plugin_path):
             return
+    except Exception:
+        pass
+
+    try:
+        import agent.plugins
+        for path_str in agent.plugins.__path__:
+            builtins_dir = Path(path_str).resolve()
+            if Path(plugin_path).resolve().is_relative_to(builtins_dir):
+                return
     except Exception:
         pass
 
