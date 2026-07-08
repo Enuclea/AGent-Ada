@@ -67,20 +67,11 @@ class CacheBodyMiddleware:
         body_consumed = False
 
         async def cached_receive():
-            nonlocal body_consumed
-            if body_consumed:
-                # Delegate to the original receive for disconnect/other events
-                return await receive()
-                
             message = await receive()
             if message["type"] == "http.request":
                 body_parts.append(message.get("body", b""))
                 if not message.get("more_body", False):
-                    body = b"".join(body_parts)
-                    scope["raw_body"] = body
-                    body_consumed = True
-                    # Return the full body
-                    return {"type": "http.request", "body": body, "more_body": False}
+                    scope["raw_body"] = b"".join(body_parts)
             return message
 
         await self.app(scope, cached_receive, send)

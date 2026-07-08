@@ -7,8 +7,8 @@ from unittest import mock
 from agent import tools
 
 def test_sandbox_fail_closed():
-    # Ensure bypass is disabled for this test
-    with mock.patch.dict(os.environ, {"ADA_DISABLE_SANDBOX": ""}), \
+    # Ensure bypass is disabled for this test by mocking the frozen config constant
+    with mock.patch("agent.execution.tools.security._ADA_DISABLE_SANDBOX_FROZEN", False), \
          mock.patch("shutil.which", return_value=None), \
          mock.patch("ctypes.util.find_library", return_value=None):
          
@@ -18,8 +18,8 @@ def test_sandbox_fail_closed():
          assert "Sandbox environment could not be enforced" in str(exc_info.value)
 
 def test_sandbox_explicit_bypass():
-    # With bypass env var set, it should return the command unmodified
-    with mock.patch.dict(os.environ, {"ADA_DISABLE_SANDBOX": "1"}):
+    # With bypass frozen flag mocked to True, it should return the command unmodified
+    with mock.patch("agent.execution.tools.security._ADA_DISABLE_SANDBOX_FROZEN", True):
         cmd = tools._sandbox_command_if_possible("whoami")
         assert cmd == ["bash", "-c", "whoami"]
 
@@ -52,7 +52,7 @@ async def test_local_skill_signature_enforcement():
         }
         
         with mock.patch("agent.tools._find_repository_skills", return_value=local_skill_info), \
-             mock.patch("agent.execution.tools._verify_skill_signature", return_value=False), \
+             mock.patch("agent.execution.tools.security._verify_in_memory_signature", return_value=False), \
              mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value="DECISION: APPROVED"), \
              mock.patch.dict(os.environ, {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
              
@@ -109,7 +109,7 @@ async def test_consensus_escalation_triggers():
         primary_unsafe_response = '```json\n{"safe": false, "findings": ["subprocess used"], "requires_hil": true, "proceed_recommended": false}\n```'
         
         with mock.patch("agent.tools._find_repository_skills", return_value=local_skill_info), \
-             mock.patch("agent.execution.tools._verify_skill_signature", return_value=True), \
+             mock.patch("agent.execution.tools.security._verify_in_memory_signature", return_value=True), \
              mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value=primary_unsafe_response), \
              mock.patch("agent.routes.agy.AgyRoute", return_value=mock_agy_instance), \
              mock.patch.dict(os.environ, {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):

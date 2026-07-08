@@ -109,11 +109,21 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
         except Exception:
             pass
 
-    from agent.security.ast_safety import verify_ast_safety
-    for py_file in plugin_path.rglob("*.py"):
-        with open(py_file, "r", encoding="utf-8", errors="replace") as f:
-            code = f.read()
-        verify_ast_safety(code, str(py_file))
+    # Under testing, fall back to AST scanning for test/mock plugins
+    if os.environ.get("TESTING") == "1":
+        from agent.security.ast_safety import verify_ast_safety
+        for py_file in plugin_path.rglob("*.py"):
+            with open(py_file, "r", encoding="utf-8", errors="replace") as f:
+                code = f.read()
+            verify_ast_safety(code, str(py_file))
+        return
+
+    # In production, UNSIGNED OR UNAPPROVED DYNAMIC PLUGINS ARE STRICTLY BLOCKED
+    raise ValueError(
+        f"Security Exception: Plugin '{plugin_path.name}' is unsigned or unapproved. "
+        "Dynamic plugins must be signed with the developer cryptographic key or registered via the sandbox testing suite "
+        "before they can be loaded in production."
+    )
 
 class PluginState(str, Enum):
     DISCOVERED = "DISCOVERED"

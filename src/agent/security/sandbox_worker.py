@@ -1,0 +1,151 @@
+import sys
+import os
+import json
+import types
+import asyncio
+from pathlib import Path
+
+# 1. Blocks unauthorized network/subprocess access
+def fail_unauthorized(module_name, func_name):
+    def block_call(*args, **kwargs):
+        log_event = {
+            "action": "security_alert",
+            "message": f"Blocked attempt to call {module_name}.{func_name}",
+            "args": [str(a) for a in args],
+            "kwargs": {k: str(v) for k, v in kwargs.items()}
+        }
+        sys.stdout.write(json.dumps(log_event) + "\n")
+        sys.stdout.flush()
+        raise PermissionError(f"Security Policy: Access to {module_name}.{func_name} is blocked in sandbox.")
+    return block_call
+
+# Monkeypatch standard library network/execution modules
+try:
+    import socket
+    socket.socket.connect = fail_unauthorized("socket", "connect")
+    socket.socket.connect_ex = fail_unauthorized("socket", "connect_ex")
+    socket.socket.bind = fail_unauthorized("socket", "bind")
+    socket.getaddrinfo = fail_unauthorized("socket", "getaddrinfo")
+    socket.gethostbyname = fail_unauthorized("socket", "gethostbyname")
+except Exception:
+    pass
+
+try:
+    import subprocess
+    subprocess.Popen = fail_unauthorized("subprocess", "Popen")
+    subprocess.run = fail_unauthorized("subprocess", "run")
+    subprocess.call = fail_unauthorized("subprocess", "call")
+except Exception:
+    pass
+
+# 2. Mock Routing Engine for safe LLM calls via Stdin/Stdout IPC
+class MockRoutingEngine:
+    async def execute(
+        self,
+        prompt: str,
+        model: str,
+        system_instructions = None,
+        timeout = None,
+        conversation_id = None,
+        task_priority = None,
+    ) -> str:
+        request = {
+            "action": "chat",
+            "prompt": prompt,
+            "model": model,
+            "system_instructions": system_instructions
+        }
+        sys.stdout.write(json.dumps(request) + "\n")
+        sys.stdout.flush()
+        
+        line = sys.stdin.readline()
+        if not line:
+            raise RuntimeError("Sandbox connection closed by host.")
+        
+        response = json.loads(line)
+        if response.get("error"):
+            raise RuntimeError(f"Host returned error: {response['error']}")
+        return response.get("response", "")
+
+# 3. Mock Agent Core & Tools packages to redirect calls to host
+routing_module = types.ModuleType("agent.core.routing")
+routing_module.RoutingEngine = MockRoutingEngine
+routing_module.routing_engine = MockRoutingEngine()
+sys.modules["agent.core.routing"] = routing_module
+
+class MockTools:
+    def __getattr__(self, name):
+        def mock_tool(*args, **kwargs):
+            request = {
+                "action": "tool_call",
+                "tool": name,
+                "args": [str(a) for a in args],
+                "kwargs": {k: str(v) for k, v in kwargs.items()}
+            }
+            sys.stdout.write(json.dumps(request) + "\n")
+            sys.stdout.flush()
+            
+            line = sys.stdin.readline()
+            if not line:
+                raise RuntimeError("Sandbox connection closed by host.")
+            response = json.loads(line)
+            if response.get("error"):
+                raise RuntimeError(f"Host tool execution failed: {response['error']}")
+            return response.get("response", None)
+        return mock_tool
+
+tools_module = types.ModuleType("agent.execution.tools")
+tools_module.tools = MockTools()
+sys.modules["agent.execution.tools"] = tools_module
+
+# Also mock system_tools, skills_tools submodules
+sys.modules["agent.execution.tools.system_tools"] = tools_module
+sys.modules["agent.execution.tools.skills_tools"] = tools_module
+
+# 4. Entrypoint to load and run the dynamic plugin/skill
+async def run_plugin(plugin_path_str: str, entrypoint_name: str, args_json: str):
+    plugin_path = Path(plugin_path_str)
+    sys.path.insert(0, str(plugin_path.parent))
+    
+    try:
+        # Log loading event
+        sys.stdout.write(json.dumps({"action": "log", "message": f"Loading plugin: {plugin_path.name}"}) + "\n")
+        sys.stdout.flush()
+        
+        # Load the module
+        import importlib
+        module = importlib.import_module(plugin_path.name)
+        
+        # Execute the targeted function/entrypoint
+        func = getattr(module, entrypoint_name, None)
+        if not func:
+            raise AttributeError(f"Entrypoint '{entrypoint_name}' not found in plugin module '{plugin_path.name}'.")
+            
+        kwargs = json.loads(args_json) if args_json else {}
+        
+        sys.stdout.write(json.dumps({"action": "log", "message": f"Executing entrypoint: {entrypoint_name}"}) + "\n")
+        sys.stdout.flush()
+        
+        # Check if function is async
+        if asyncio.iscoroutinefunction(func):
+            result = await func(**kwargs)
+        else:
+            result = func(**kwargs)
+            
+        sys.stdout.write(json.dumps({"action": "success", "response": result}) + "\n")
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        sys.stdout.write(json.dumps({"action": "error", "message": str(e), "trace": error_details}) + "\n")
+    sys.stdout.flush()
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python sandbox_worker.py <plugin_path> <entrypoint> [args_json]", file=sys.stderr)
+        sys.exit(1)
+        
+    plugin_path = sys.argv[1]
+    entrypoint = sys.argv[2]
+    args_json = sys.argv[3] if len(sys.argv) > 3 else "{}"
+    
+    asyncio.run(run_plugin(plugin_path, entrypoint, args_json))
