@@ -54,6 +54,32 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     except Exception:
         return False
 
+def _calculate_in_memory_hash(files_dict: dict) -> bytes:
+    import hashlib
+    hasher = hashlib.sha256()
+    sorted_keys = sorted(files_dict.keys())
+    for rel_path in sorted_keys:
+        if rel_path != "signature.sig" and not Path(rel_path).name.startswith('.'):
+            hasher.update(rel_path.encode('utf-8'))
+            hasher.update(files_dict[rel_path])
+    return hasher.digest()
+
+def _verify_in_memory_signature(files_dict: dict) -> bool:
+    if "signature.sig" not in files_dict:
+        return False
+    try:
+        signature = files_dict["signature.sig"]
+        skill_hash = _calculate_in_memory_hash(files_dict)
+        
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY", "4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+        pub_key_bytes = bytes.fromhex(pub_key_hex)
+        pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_key_bytes)
+        pub_key.verify(signature, skill_hash)
+        return True
+    except Exception:
+        return False
+
 from typing import List
 
 def _sandbox_command_if_possible(command: str) -> List[str]:

@@ -10,10 +10,15 @@ from typing import Set
 
 ALLOWED_MODULES: Set[str] = {
     "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
-    "asyncio", "logging", "math", "time", "google", "contextlib",
+    "asyncio", "logging", "math", "time", "contextlib",
     "enum", "dataclasses", "types", "traceback",
-    "fcntl", "random", "playwright", "googleapiclient", "google_auth_oauthlib",
-    "base64", "secrets", "email"
+    "fcntl", "random", "base64", "secrets", "email"
+}
+
+ALLOWED_SUBMODULES: Set[str] = {
+    "google.oauth2", "google.oauth2.credentials", "google.auth.transport.requests",
+    "google.auth", "google.protobuf", "googleapiclient.discovery",
+    "google_auth_oauthlib.flow", "playwright.async_api"
 }
 
 SAFE_BUILTINS: Set[str] = {
@@ -22,6 +27,27 @@ SAFE_BUILTINS: Set[str] = {
     "hash", "hex", "int", "isinstance", "issubclass", "iter", "len", "list",
     "map", "max", "min", "next", "oct", "ord", "pow", "print", "range", "repr",
     "reversed", "round", "set", "slice", "sorted", "str", "sum", "tuple", "zip"
+}
+
+FORBIDDEN_CALLABLE_PATHS: Set[str] = {
+    # Subprocess / Execution
+    "subprocess.run", "subprocess.Popen", "subprocess.call", "subprocess.check_call",
+    "subprocess.check_output", "subprocess.getstatusoutput", "subprocess.getoutput",
+    "os.system", "os.popen", "os.spawn", "os.spawnl", "os.spawnle", "os.spawnlp", "os.spawnlpe",
+    "os.spawnv", "os.spawnve", "os.spawnvp", "os.spawnvpe", "os.execve", "os.execl", "os.execvp",
+    "os.posix_spawn", "os.posix_spawnp",
+    "asyncio.create_subprocess_exec", "asyncio.create_subprocess_shell",
+    "asyncio.subprocess.create_subprocess_exec", "asyncio.subprocess.create_subprocess_shell",
+    # Dynamic Code Execution
+    "eval", "exec", "compile", "__import__", "importlib.import_module",
+    "getattr", "setattr", "delattr", "hasattr", "globals", "locals", "vars",
+    # File System access breakouts
+    "open", "io.open", "os.open", "os.fdopen",
+    # SQL injection breakouts
+    "sqlite3.connect",
+    # Network requests
+    "urllib.request.urlopen", "urllib.request.urlretrieve", "http.client.HTTPConnection",
+    "http.client.HTTPSConnection", "socket.socket", "socket.connect"
 }
 
 class SafetyVisitor(ast.NodeVisitor):
@@ -60,7 +86,13 @@ class SafetyVisitor(ast.NodeVisitor):
             parts = name.name.split(".")
             top_level = parts[0]
             if top_level not in ALLOWED_MODULES:
-                self.errors.append(f"Forbidden import: {name.name}")
+                is_submodule_allowed = False
+                for sub in ALLOWED_SUBMODULES:
+                    if name.name == sub or name.name.startswith(sub + "."):
+                        is_submodule_allowed = True
+                        break
+                if not is_submodule_allowed:
+                    self.errors.append(f"Forbidden import: {name.name}")
             if name.name == "sys":
                 self.sys_names.add(name.asname or name.name)
             local_name = name.asname or name.name
@@ -81,7 +113,13 @@ class SafetyVisitor(ast.NodeVisitor):
                     if name.name in ("modules", "*"):
                         self.errors.append(f"Forbidden import: {name.name} from sys")
             elif top_level not in ALLOWED_MODULES:
-                self.errors.append(f"Forbidden import from module: {node.module}")
+                is_submodule_allowed = False
+                for sub in ALLOWED_SUBMODULES:
+                    if node.module == sub or node.module.startswith(sub + "."):
+                        is_submodule_allowed = True
+                        break
+                if not is_submodule_allowed:
+                    self.errors.append(f"Forbidden import from module: {node.module}")
             
             for name in node.names:
                 local_name = name.asname or name.name
@@ -105,48 +143,53 @@ class SafetyVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        forbidden_builtins = (
-            "eval", "exec", "compile", "__import__", "getattr", "setattr",
-            "delattr", "hasattr", "vars", "globals", "locals"
-        )
-        
         # Check direct calls
         if isinstance(node.func, ast.Name):
-            if node.func.id in forbidden_builtins:
-                self.errors.append(f"Forbidden dynamic built-in: {node.func.id}()")
+            if node.func.id in FORBIDDEN_CALLABLE_PATHS:
+                if node.func.id in {"eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr", "vars", "globals", "locals"}:
+                    self.errors.append(f"Forbidden dynamic built-in: {node.func.id}()")
+                else:
+                    self.errors.append(f"Forbidden call: {node.func.id}()")
                 
         # Resolve target function call path
         resolved_path = self.resolve_attr_path(node.func)
         if resolved_path:
+            # Check if resolved_path matches any forbidden callable paths
+            if resolved_path in FORBIDDEN_CALLABLE_PATHS:
+                parts = resolved_path.split(".")
+                func_name = parts[-1]
+                if func_name in {"eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr", "vars", "globals", "locals"}:
+                    self.errors.append(f"Forbidden dynamic built-in: {func_name}()")
+                else:
+                    self.errors.append(f"Forbidden call: {resolved_path}()")
+                
+            # Block any method/function name matches that are in FORBIDDEN_CALLABLE_PATHS
             parts = resolved_path.split(".")
             func_name = parts[-1]
-            if func_name in forbidden_builtins:
-                self.errors.append(f"Forbidden call: {resolved_path}()")
+            if func_name in FORBIDDEN_CALLABLE_PATHS:
+                # Check if we already reported a forbidden call/built-in for this node.func
+                # (to avoid duplicate errors on the same call node)
+                already_reported = False
+                for err in self.errors:
+                    if f"{func_name}()" in err:
+                        already_reported = True
+                        break
+                if not already_reported:
+                    if func_name in {"eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr", "vars", "globals", "locals"}:
+                        self.errors.append(f"Forbidden dynamic built-in: {func_name}()")
+                    else:
+                        self.errors.append(f"Forbidden call: {resolved_path}()")
                 
-            # Block subprocess
-            if "subprocess" in resolved_path or any(term in resolved_path for term in ("run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput")):
-                if "subprocess" in resolved_path or not parts[0]:
-                    self.errors.append(f"Forbidden subprocess call: {resolved_path}()")
-                    
-            # Block os execution
-            if any(f"os.{term}" in resolved_path for term in ("system", "popen", "spawn")):
-                self.errors.append(f"Forbidden os execution call: {resolved_path}()")
-                
-            # Block serialization/deserialization
-            if any(term in resolved_path for term in ("pickle", "shelve", "marshal", "yaml.load")):
+            # Fallback substring checks for defense-in-depth subprocess/execution gating
+            path_lower = resolved_path.lower()
+            if any(term in path_lower for term in ("subprocess", "popen", "execve", "execl", "execvp", "posix_spawn", "create_subprocess")):
+                self.errors.append(f"Forbidden subprocess/execution call: {resolved_path}()")
+            if "pickle" in path_lower or "shelve" in path_lower or "marshal" in path_lower or "yaml.load" in path_lower:
                 self.errors.append(f"Forbidden serialization call: {resolved_path}()")
-                
-            # Block dynamic imports
-            if "importlib" in resolved_path or "__import__" in resolved_path:
-                self.errors.append(f"Forbidden dynamic import call: {resolved_path}()")
-
-            # Block urllib/urllib.request network request functions
-            if "urllib" in resolved_path or "urlopen" in resolved_path or "urlretrieve" in resolved_path:
+            if "urllib" in path_lower or "urlopen" in path_lower or "urlretrieve" in path_lower:
                 self.errors.append(f"Forbidden network request call: {resolved_path}()")
-
-            # Block sqlite3 database connection breakouts
-            if "sqlite3" in resolved_path or "connect" in resolved_path:
-                if "sqlite3" in resolved_path or not parts[0]:
+            if "sqlite3" in path_lower or "connect" in path_lower:
+                if "sqlite3" in path_lower or not parts[0]:
                     self.errors.append(f"Forbidden sqlite3 database connection call: {resolved_path}()")
 
         self.generic_visit(node)

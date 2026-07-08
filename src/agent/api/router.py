@@ -54,6 +54,37 @@ async def lifespan(app: FastAPI):
     scheduler_task.cancel()
     quota_task.cancel()
 
+class CacheBodyMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        body_parts = []
+        body_consumed = False
+
+        async def cached_receive():
+            nonlocal body_consumed
+            if body_consumed:
+                # Delegate to the original receive for disconnect/other events
+                return await receive()
+                
+            message = await receive()
+            if message["type"] == "http.request":
+                body_parts.append(message.get("body", b""))
+                if not message.get("more_body", False):
+                    body = b"".join(body_parts)
+                    scope["raw_body"] = body
+                    body_consumed = True
+                    # Return the full body
+                    return {"type": "http.request", "body": body, "more_body": False}
+            return message
+
+        await self.app(scope, cached_receive, send)
+
 security = HTTPBasic(auto_error=False)
 
 async def authenticate(request: Request, credentials: Optional[HTTPBasicCredentials] = Depends(security)):
@@ -74,10 +105,9 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
             # 5-minute sliding window check to prevent replay attacks
             if abs(time.time() - timestamp) < 300:
                 try:
-                    body = await request.body()
-                    async def receive():
-                        return {"type": "http.request", "body": body, "more_body": False}
-                    request._receive = receive
+                    body = getattr(request, "scope", {}).get("raw_body", b"")
+                    if not body:
+                        body = await request.body()
                     
                     body_hash = hashlib.sha256(body).hexdigest()
                     query_str = request.url.query or ""
@@ -106,6 +136,7 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
     return credentials
 
 app = FastAPI(title="Ada Task Engine Dashboard", lifespan=lifespan, dependencies=[Depends(authenticate)])
+app.add_middleware(CacheBodyMiddleware)
 
 @app.get("/health")
 async def health_endpoint():

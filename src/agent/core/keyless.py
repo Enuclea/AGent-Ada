@@ -326,9 +326,10 @@ class KeylessAgyResponse:
             Chunks of response output lines or timeout/error notices.
         """
         async def _stream_thoughts() -> AsyncIterator[str]:
+            from agent.security.pipeline import sanitize_output
             if self._completed_event.is_set():
                 for line in self.stdout_lines:
-                    yield line
+                    yield sanitize_output(line)
                 return
                 
             start_time: float = asyncio.get_event_loop().time()
@@ -337,6 +338,18 @@ class KeylessAgyResponse:
             prev_ticks, _ = get_process_activity_metrics(self.proc.pid) if self.proc else (0, [])
             idle_timeout: float = 120.0
             
+            # Keep a buffer of the accumulated stdout text to run sanitization across chunk boundaries
+            accumulated = ""
+            yielded_len = 0
+
+            def get_sanitized_chunk(text: str) -> str:
+                nonlocal accumulated, yielded_len
+                accumulated += text
+                sanitized = sanitize_output(accumulated)
+                chunk = sanitized[yielded_len:]
+                yielded_len = len(sanitized)
+                return chunk
+
             try:
                 while True:
                     current_time = asyncio.get_event_loop().time()
@@ -353,7 +366,7 @@ class KeylessAgyResponse:
                             break
                         decoded: str = chunk_bytes.decode("utf-8", errors="replace")
                         self.stdout_lines.append(decoded)
-                        yield decoded
+                        yield get_sanitized_chunk(decoded)
                         last_activity_time = asyncio.get_event_loop().time()
                     except asyncio.TimeoutError:
                         if self.proc.returncode is not None:
@@ -391,7 +404,7 @@ class KeylessAgyResponse:
                         task_manager.update_active_task_status(self.task_id, "failed")
                     except Exception:
                         pass
-                yield err_msg
+                yield get_sanitized_chunk(err_msg)
             except asyncio.CancelledError:
                 if self.task_id:
                     try:
@@ -407,7 +420,9 @@ class KeylessAgyResponse:
                         task_manager.update_active_task_status(self.task_id, "failed")
                     except Exception:
                         pass
-                yield f"\n[Error: {e}]\n"
+                err_msg = f"\n[Error: {e}]\n"
+                self.stdout_lines.append(err_msg)
+                yield get_sanitized_chunk(err_msg)
 
             try:
                 stderr_data: bytes = await self.proc.stderr.read()
@@ -428,7 +443,7 @@ class KeylessAgyResponse:
                 elif not self.agent.conversation_id and curr_newest:
                     self.agent.conversation_id = curr_newest
                     
-            self.text = "".join(self.stdout_lines)
+            self.text = sanitize_output("".join(self.stdout_lines))
             self._completed_event.set()
             if self.task_id:
                 try:

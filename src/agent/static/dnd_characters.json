@@ -1,52 +1,52 @@
 {
   "characters": [
     {
-      "name": "Thorne",
+      "name": "Sylas",
       "stats": {
-        "Strength": 8,
-        "Dexterity": 14,
-        "Constitution": 9,
-        "Intelligence": 9,
-        "Wisdom": 3,
-        "Charisma": 16
+        "Strength": 13,
+        "Dexterity": 12,
+        "Constitution": 10,
+        "Intelligence": 12,
+        "Wisdom": 14,
+        "Charisma": 13
       },
-      "suggested_class": "Bard"
+      "suggested_class": "Cleric"
+    },
+    {
+      "name": "Aurelia",
+      "stats": {
+        "Strength": 11,
+        "Dexterity": 12,
+        "Constitution": 6,
+        "Intelligence": 14,
+        "Wisdom": 17,
+        "Charisma": 14
+      },
+      "suggested_class": "Cleric"
     },
     {
       "name": "Morgath",
       "stats": {
-        "Strength": 15,
-        "Dexterity": 14,
-        "Constitution": 9,
-        "Intelligence": 16,
-        "Wisdom": 13,
-        "Charisma": 13
-      },
-      "suggested_class": "Wizard"
-    },
-    {
-      "name": "Lucius",
-      "stats": {
-        "Strength": 13,
-        "Dexterity": 16,
-        "Constitution": 11,
-        "Intelligence": 13,
-        "Wisdom": 13,
-        "Charisma": 11
-      },
-      "suggested_class": "Rogue"
-    },
-    {
-      "name": "Caelum",
-      "stats": {
-        "Strength": 13,
-        "Dexterity": 12,
+        "Strength": 10,
+        "Dexterity": 15,
         "Constitution": 12,
-        "Intelligence": 7,
-        "Wisdom": 5,
-        "Charisma": 12
+        "Intelligence": 15,
+        "Wisdom": 16,
+        "Charisma": 17
       },
-      "suggested_class": "Fighter"
+      "suggested_class": "Bard"
+    },
+    {
+      "name": "Jaxon",
+      "stats": {
+        "Strength": 8,
+        "Dexterity": 11,
+        "Constitution": 13,
+        "Intelligence": 11,
+        "Wisdom": 10,
+        "Charisma": 17
+      },
+      "suggested_class": "Bard"
     }
   ]
 }
