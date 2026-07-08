@@ -146,13 +146,21 @@ class SafetyVisitor(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> None:
         if node.id == "__builtins__":
             self.errors.append("Forbidden access to name: __builtins__")
+        forbidden_builtins = (
+            "eval", "exec", "compile", "__import__", "getattr", "setattr",
+            "delattr", "hasattr", "vars", "globals", "locals"
+        )
+        if node.id in forbidden_builtins:
+            self.errors.append(f"Forbidden access to built-in: {node.id}")
+            self.errors.append(f"Forbidden dynamic built-in: {node.id}()")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         forbidden_attrs = (
             "__dict__", "__class__", "__bases__", "__subclasses__",
             "__getattribute__", "__getattr__", "__setattr__", "__delattr__",
-            "_getframe", "modules", "__globals__", "__code__", "__closure__"
+            "_getframe", "modules", "__globals__", "__code__", "__closure__",
+            "ctypes", "cffi", "mmap"
         )
         if node.attr in forbidden_attrs:
             self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
@@ -181,6 +189,12 @@ class SafetyVisitor(ast.NodeVisitor):
                 self.errors.append(f"Forbidden subprocess access: {resolved_path}")
             if any(f"os.{term}" in resolved_path for term in ("system", "popen", "spawn")):
                 self.errors.append(f"Forbidden os execution access: {resolved_path}")
+            if any(term in resolved_path for term in ("execve", "execl", "execvp", "spawn")):
+                self.errors.append(f"Forbidden execution access: {resolved_path}")
+            if "ctypes" in resolved_path or "cffi" in resolved_path:
+                self.errors.append(f"Forbidden library access: {resolved_path}")
+            if "mmap" in resolved_path:
+                self.errors.append(f"Forbidden mmap access: {resolved_path}")
             if any(term in resolved_path for term in ("pickle", "shelve", "marshal", "yaml.load")):
                 self.errors.append(f"Forbidden serialization access: {resolved_path}")
             if "importlib" in resolved_path:

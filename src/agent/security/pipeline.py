@@ -41,8 +41,15 @@ class SecurityPipeline:
         
         # 3. Check for Base64 encoded payloads that might decode to injections (must use case-preserved)
         b64_pat = r'[a-zA-Z0-9+/]{16,}={0,2}'
+        last_idx = 0
+        chunks = []
+        has_replacements = False
+        
         for match in re.finditer(b64_pat, case_preserved):
             import base64
+            start, end = match.span()
+            chunks.append(case_preserved[last_idx:start])
+            last_idx = end
             try:
                 decoded = base64.b64decode(match.group(0)).decode('utf-8', errors='ignore')
                 if decoded.strip():
@@ -52,10 +59,19 @@ class SecurityPipeline:
                     sanitized_decoded = self.sanitize_input(decoded)
                     if sanitized_decoded.startswith("[injection attempt blocked"):
                         return "[injection attempt blocked (base64 obfuscated)]"
+                    
+                    chunks.append(sanitized_decoded)
+                    has_replacements = True
+                else:
+                    chunks.append(match.group(0))
             except Exception:
-                pass
+                chunks.append(match.group(0))
+                
+        if has_replacements:
+            chunks.append(case_preserved[last_idx:])
+            case_preserved = "".join(chunks)
 
-        cleaned = re.sub(r'[\u200b-\u200d\ufeff]', '', prompt)
+        cleaned = re.sub(r'[\u200b-\u200d\ufeff]', '', case_preserved)
 
         # 4. Check semantic keywords & override phrases
         semantic_patterns = [
@@ -102,8 +118,19 @@ class SecurityPipeline:
         for key in self.sensitive_keys:
             val = os.environ.get(key)
             if val and len(val) > 6:
-                escaped_val = re.escape(val)
-                redacted = re.sub(escaped_val, f"[REDACTED_{key}]", redacted)
+                # Spacing-insensitive, markdown-insensitive, zero-width-insensitive regex
+                char_pattern = r"[\s`_*~\u200b-\u200d\ufeff]*"
+                regex_parts = [re.escape(c) for c in val]
+                pattern_str = char_pattern.join(regex_parts)
+                redacted = re.sub(pattern_str, f"[REDACTED_{key}]", redacted)
+                
+                # Also check base64 encoded representation of the secret
+                import base64
+                val_b64 = base64.b64encode(val.encode()).decode().strip("=")
+                if len(val_b64) > 6:
+                    b64_regex_parts = [re.escape(c) for c in val_b64]
+                    b64_pattern_str = char_pattern.join(b64_regex_parts)
+                    redacted = re.sub(b64_pattern_str, f"[REDACTED_{key}]", redacted)
                 
         return redacted
 

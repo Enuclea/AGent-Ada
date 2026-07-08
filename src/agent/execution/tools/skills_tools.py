@@ -532,10 +532,12 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     import re
 
     # CRITICAL: Normalize input immediately and sanitise it to prevent Unicode normalization bypasses, null bytes, and path traversals
-    if not skill_name.isascii():
+    import urllib.parse
+    decoded_name = urllib.parse.unquote(skill_name)
+    normalized_name = unicodedata.normalize('NFKC', decoded_name).replace('\\', '/').replace('\0', '')
+    if ".." in normalized_name or "/" in normalized_name or "..." in normalized_name:
         return "Error: Directory traversal attempt detected."
-    normalized_name = unicodedata.normalize('NFKC', skill_name).replace('\0', '')
-    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$', normalized_name):
+    if not normalized_name.isascii() or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$', normalized_name):
         return "Error: Directory traversal attempt detected."
 
     clean_name = normalized_name
@@ -565,6 +567,11 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     old_umask = os.umask(0o077)
     try:
         temp_path = Path(tempfile.mkdtemp(prefix="skill_"))
+        os.chmod(temp_path, 0o700)
+        try:
+            os.chown(temp_path, os.getuid(), os.getgid())
+        except Exception:
+            pass
     finally:
         os.umask(old_umask)
 
@@ -775,9 +782,25 @@ You MUST end your response with a JSON block in the following format:
 
         if interesting_reason:
             hil_approved = False
-            if confirm or os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
-                hil_approved = True
-            elif sys.stdin.isatty():
+            
+            # Check if running in a sandboxed process context (e.g. prctl no_new_privs is set)
+            PR_GET_NO_NEW_PRIVS = 39
+            is_sandboxed = False
+            try:
+                from agent.core.landlock import libc
+                if libc:
+                    if libc.prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) == 1:
+                        is_sandboxed = True
+            except Exception:
+                pass
+                
+            # If not in the sandbox, allow confirm/env overrides (e.g. for host tests)
+            if not is_sandboxed:
+                if confirm or os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
+                    hil_approved = True
+            
+            # Require interactive TTY input if not approved
+            if not hil_approved and sys.stdin.isatty():
                 ans = input(f"Skill '{clean_name}' is flagged as interesting/high-risk ({'; '.join(interesting_reason)}). Proceed anyway? [y/N]: ")
                 if ans.strip().lower() in ("y", "yes"):
                     hil_approved = True

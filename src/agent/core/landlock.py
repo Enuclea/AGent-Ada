@@ -17,10 +17,18 @@ try:
 except Exception:
     libc = None
 
-# Syscall numbers for x86_64 Linux architecture
-SYS_LANDLOCK_CREATE_RULESET = 445
-SYS_LANDLOCK_ADD_RULE = 446
-SYS_LANDLOCK_RESTRICT_SELF = 447
+# Map Landlock syscall numbers dynamically based on platform architecture
+import platform
+_machine = platform.machine().lower()
+if "aarch64" in _machine or "arm64" in _machine:
+    SYS_LANDLOCK_CREATE_RULESET = 444
+    SYS_LANDLOCK_ADD_RULE = 445
+    SYS_LANDLOCK_RESTRICT_SELF = 446
+else:
+    # Default to x86_64 syscall mappings
+    SYS_LANDLOCK_CREATE_RULESET = 445
+    SYS_LANDLOCK_ADD_RULE = 446
+    SYS_LANDLOCK_RESTRICT_SELF = 447
 
 # Landlock rule type constants
 LANDLOCK_RULE_PATH_BENEATH = 1

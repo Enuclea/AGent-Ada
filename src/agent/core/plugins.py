@@ -9,12 +9,17 @@ from types import ModuleType
 def verify_plugin_ast_safety(plugin_path: Path) -> None:
     """Statically scans all Python files in the plugin package for unsafe calls."""
     try:
-        workspace_plugins = Path(__file__).resolve().parent.parent.parent.parent / "plugins"
-        if plugin_path.resolve().is_relative_to(workspace_plugins.resolve()):
-            return
+        workspace_plugins = (Path(__file__).resolve().parent.parent.parent.parent / "plugins").resolve()
+        resolved_path = plugin_path.resolve()
+        trusted_first_party_paths = {
+            (workspace_plugins / "enuclea_plugin").resolve(),
+            (workspace_plugins / "morgen_plugin").resolve()
+        }
+        for trusted_path in trusted_first_party_paths:
+            if resolved_path == trusted_path or resolved_path.is_relative_to(trusted_path):
+                return
     except Exception:
         pass
-
     from agent.security.ast_safety import verify_ast_safety
     for py_file in plugin_path.rglob("*.py"):
         with open(py_file, "r", encoding="utf-8", errors="replace") as f:
