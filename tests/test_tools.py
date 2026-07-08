@@ -417,7 +417,7 @@ def test_install_repository_skill_hitl(temp_skills_dir, mock_external_dirs):
                  mock.patch("builtins.input", return_value="y") as mock_input:
                 res = await tools.install_repository_skill("test-hitl")
                 assert "Successfully downloaded and installed" in res
-                mock_input.assert_called_once()
+                assert mock_input.call_count == 2
                 
             shutil.rmtree(temp_skills_dir / "test-hitl", ignore_errors=True)
             
