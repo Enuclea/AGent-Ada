@@ -23,7 +23,7 @@ ALLOWED_SUBMODULES: Set[str] = {
 
 SAFE_BUILTINS: Set[str] = {
     "abs", "all", "any", "ascii", "bin", "bool", "bytes", "bytearray", "callable", "chr",
-    "dict", "divmod", "enumerate", "filter", "float", "format", "frozenset",
+    "dict", "divmod", "enumerate", "filter", "float", "frozenset",
     "hash", "hex", "int", "isinstance", "issubclass", "iter", "len", "list",
     "map", "max", "min", "next", "oct", "ord", "pow", "print", "range", "repr",
     "reversed", "round", "set", "slice", "sorted", "str", "sum", "tuple", "zip"
@@ -43,6 +43,8 @@ FORBIDDEN_CALLABLE_PATHS: Set[str] = {
     "getattr", "setattr", "delattr", "hasattr", "globals", "locals", "vars",
     # File System access breakouts
     "open", "io.open", "os.open", "os.fdopen",
+    "read_text", "write_text", "read_bytes", "write_bytes",
+    "chmod", "rename", "unlink", "touch", "mkdir", "rmdir",
     # SQL injection breakouts
     "sqlite3.connect",
     # Network requests
@@ -209,7 +211,7 @@ class SafetyVisitor(ast.NodeVisitor):
             "__dict__", "__class__", "__bases__", "__subclasses__", "__mro__",
             "__getattribute__", "__getattr__", "__setattr__", "__delattr__",
             "_getframe", "modules", "__globals__", "__code__", "__closure__",
-            "ctypes", "cffi", "mmap"
+            "ctypes", "cffi", "mmap", "format"
         )
         if node.attr in forbidden_attrs or (node.attr.startswith("__") and node.attr not in {"__init__", "__name__", "__doc__", "__module__", "__call__"}):
             self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
