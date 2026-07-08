@@ -82,17 +82,10 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
                     body_hash = hashlib.sha256(body).hexdigest()
                     query_str = request.url.query or ""
                     
-                    # 1. Try secure signature format (bind method, path, query, timestamp, body_hash)
+                    # Try secure signature format (bind method, path, query, timestamp, body_hash)
                     secure_message = f"{request.method}:{request.url.path}:{query_str}:{timestamp_str}:{body_hash}".encode()
                     expected_secure_sig = hmac.new(shared_secret, secure_message, hashlib.sha256).hexdigest()
                     if hmac.compare_digest(sig, expected_secure_sig):
-                        return credentials
-                    
-                    # 2. Legacy fallback
-                    legacy_message = f"{request.method}:{request.url.path}:{timestamp_str}".encode()
-                    expected_legacy_sig = hmac.new(shared_secret, legacy_message, hashlib.sha256).hexdigest()
-                    if hmac.compare_digest(sig, expected_legacy_sig):
-                        print("[WARNING] API request authenticated using legacy HMAC signature. Please upgrade client to payload-bound signatures.")
                         return credentials
                 except Exception as auth_inner_err:
                     import traceback

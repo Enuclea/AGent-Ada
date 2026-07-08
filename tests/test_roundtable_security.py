@@ -274,7 +274,8 @@ async def test_hmac_signature_validation():
         res = await authenticate(mock_request, credentials=None)
         assert res is None  # authenticated successfully
         
-        # 2. Test legacy signature fallback validation
+        # 2. Test legacy signature fallback validation (MUST fail now with HTTPException 401)
+        from fastapi import HTTPException
         legacy_msg = f"POST:/api/skills:{timestamp_str}".encode()
         legacy_sig = hmac.new(b"mysecret", legacy_msg, hashlib.sha256).hexdigest()
         
@@ -282,5 +283,39 @@ async def test_hmac_signature_validation():
             "X-Signature": legacy_sig,
             "X-Timestamp": timestamp_str
         }
-        res = await authenticate(mock_request, credentials=None)
-        assert res is None  # authenticated successfully
+        with pytest.raises(HTTPException) as excinfo:
+            await authenticate(mock_request, credentials=None)
+        assert excinfo.value.status_code == 401
+
+def test_ast_safety_gaps_blocked():
+    from agent.core.plugins import verify_plugin_ast_safety
+    
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        plugin_path = Path(tmp_dir)
+        init_file = plugin_path / "__init__.py"
+        
+        # 1. urllib.request.urlopen blocked
+        with open(init_file, "w") as f:
+            f.write("from urllib import request\ndef test():\n    request.urlopen('http://malicious.com')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden network request call" in str(excinfo.value)
+
+        # 2. sqlite3.connect blocked
+        with open(init_file, "w") as f:
+            f.write("import sqlite3\ndef test():\n    sqlite3.connect('test.db')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden sqlite3 database connection call" in str(excinfo.value)
+
+        # 3. ATTACH database SQL query blocked in string constant
+        with open(init_file, "w") as f:
+            f.write("def test():\n    query = 'ATTACH DATABASE \"test.db\" AS test'\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden SQL ATTACH command" in str(excinfo.value)
+
+def test_view_repository_skill_code_traversal():
+    from agent.execution.tools.skills_tools import view_repository_skill_code
+    res = view_repository_skill_code("../../../etc/passwd")
+    assert "Directory traversal attempt detected" in res

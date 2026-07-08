@@ -114,12 +114,12 @@ async def get_repo_skill_code_endpoint(name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/repo-skills/{name}/install")
-async def install_repo_skill_endpoint(name: str, request: Request, paranoid: bool = True, confirm: bool = False):
+async def install_repo_skill_endpoint(name: str, request: Request, paranoid: bool = True):
     ip = request.client.host if request.client else "unknown"
     if not check_rate_limit(ip, limit=5, period=60):
         raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
     try:
-        res = await tools.install_repository_skill(name, paranoid=paranoid, confirm=confirm)
+        res = await tools.install_repository_skill(name, paranoid=paranoid, confirm=False)
         if res.startswith("Error"):
             raise HTTPException(status_code=400, detail=res)
         return {"status": "success", "detail": res}

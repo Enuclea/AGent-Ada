@@ -101,6 +101,15 @@ class SafetyVisitor(ast.NodeVisitor):
                 if val_name in ("", "importlib"):
                     self.errors.append(f"Forbidden dynamic import call: {func_name}()")
 
+            # Block urllib/urllib.request network request functions
+            if val_name in ("urllib", "request") or func_name in ("urlopen", "urlretrieve"):
+                if val_name in ("", "urllib", "request", "urllib.request"):
+                    self.errors.append(f"Forbidden network request call: {func_name}()")
+
+            # Block sqlite3 database connection breakouts
+            if val_name == "sqlite3" and func_name == "connect":
+                self.errors.append("Forbidden sqlite3 database connection call: connect()")
+
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
@@ -125,6 +134,20 @@ class SafetyVisitor(ast.NodeVisitor):
 
         if node.attr == "modules" and is_sys_ref(node.value):
             self.errors.append("Forbidden attribute access: sys.modules")
+        self.generic_visit(node)
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        if isinstance(node.value, str):
+            import re
+            if re.search(r"\battach\b", node.value, re.IGNORECASE):
+                self.errors.append("Forbidden SQL ATTACH command in string constant")
+        self.generic_visit(node)
+
+    def visit_Str(self, node: ast.Str) -> None:
+        if isinstance(node.s, str):
+            import re
+            if re.search(r"\battach\b", node.s, re.IGNORECASE):
+                self.errors.append("Forbidden SQL ATTACH command in string literal")
         self.generic_visit(node)
 
 

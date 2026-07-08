@@ -62,7 +62,8 @@ def _verify_skill_signature(src_folder: Path) -> bool:
         skill_hash = _calculate_skill_hash(src_folder)
         
         from cryptography.hazmat.primitives.asymmetric import ed25519
-        pub_key_bytes = bytes.fromhex("4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+        pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY", "4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+        pub_key_bytes = bytes.fromhex(pub_key_hex)
         pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_key_bytes)
         pub_key.verify(signature, skill_hash)
         return True
