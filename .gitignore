@@ -67,4 +67,7 @@ scratch/.cache/
 **/agy
 **/grok
 
+# Generated roundtable reports
+/reports/
+
 
