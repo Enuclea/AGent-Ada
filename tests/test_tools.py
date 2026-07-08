@@ -298,7 +298,7 @@ def test_repository_skills(temp_skills_dir, mock_external_dirs):
     
     # Verify install_repository_skill
     with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
-        with mock.patch("agent.execution.tools._verify_skill_signature", return_value=True), \
+        with mock.patch("agent.execution.tools.security._verify_in_memory_signature", return_value=True), \
              mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value="DECISION: APPROVED"):
             import asyncio
             install_res = asyncio.run(tools.install_repository_skill("apple-notes"))
@@ -392,7 +392,7 @@ def test_install_repository_skill_traversal(temp_skills_dir, mock_external_dirs)
 def test_install_repository_skill_hitl(temp_skills_dir, mock_external_dirs):
     """Test Human-in-the-loop (HITL) prompt and confirmation mechanism."""
     async def run_test():
-        with mock.patch("agent.execution.tools._verify_skill_signature", return_value=True), \
+        with mock.patch("agent.execution.tools.security._verify_in_memory_signature", return_value=True), \
              mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value="DECISION: APPROVED"):
             hermes_path = mock_external_dirs["hermes_skills"]
             skill_folder = hermes_path / "test-hitl"
@@ -565,7 +565,7 @@ def test_install_repository_skill_4step(temp_skills_dir, mock_external_dirs):
             f.write("---\nname: test-4step\ndescription: Test 4-step\n---\n# Test 4-step")
 
         # Mock dependencies
-        mock_verify = patch("agent.execution.tools._verify_skill_signature", return_value=True)
+        mock_verify = patch("agent.execution.tools.security._verify_in_memory_signature", return_value=True)
         
         # Scenario 1: Clean, safe primary review JSON -> Installs immediately
         primary_json_ok = '```json\n{"safe": true, "findings": [], "requires_hil": false, "proceed_recommended": true}\n```'
