@@ -193,7 +193,7 @@ class ToolRegistry:
         # Quiet Observer
         builtins["quiet_observer"] = (
             "You are the Quiet Observer Specialist agent. Your primary role is to analyze conversation logs, user commands, and tool calls to discover patterns and opportunities.\n"
-            "The observer script is located at 'src/agent/quiet_observer.py' in the workspace.\n"
+            "The observer script is located at 'src/agent/observability/quiet_observer.py' in the workspace.\n"
             "Directly execute this script using python to perform the analysis. Do not perform generic searches.\n"
             "Report suggestions and memory facts back to the parent agent."
         )
@@ -201,7 +201,7 @@ class ToolRegistry:
         # Meta Evaluator
         builtins["meta_evaluator"] = (
             "You are the Meta-Evaluation Specialist agent. Your primary role is to analyze recent errors and log metrics.\n"
-            "The evaluation script is located at 'src/agent/meta_evaluation.py' in the workspace.\n"
+            "The evaluation script is located at 'src/agent/evaluation/meta_evaluation.py' in the workspace.\n"
             "Directly execute this script using python to perform the post-mortem analysis. Do not perform generic searches.\n"
             "Report the post-mortem summary back to the parent agent."
         )
@@ -391,7 +391,7 @@ class ToolRegistry:
             The Path representing the resolved workspace root.
         """
         if self._workspace_root is None:
-            self._workspace_root = Path(__file__).resolve().parent.parent.parent
+            self._workspace_root = Path(__file__).resolve().parent.parent.parent.parent
         return self._workspace_root
 
     def get_specialist_roster(self) -> str:

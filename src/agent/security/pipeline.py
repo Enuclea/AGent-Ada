@@ -32,6 +32,14 @@ class SecurityPipeline:
         """Scans and cleans input prompts to prevent prompt injection attempts."""
         if not prompt:
             return ""
+            
+        # Translate common Cyrillic/Greek lookalikes to Latin equivalents to prevent homoglyph bypasses
+        homoglyphs = {
+            'а': 'a', 'с': 'c', 'е': 'e', 'і': 'i', 'ј': 'j', 'о': 'o', 'р': 'p', 'ѕ': 's', 'х': 'x', 'у': 'y',
+            'А': 'A', 'С': 'C', 'Е': 'E', 'І': 'I', 'Ј': 'J', 'О': 'O', 'Р': 'P', 'Ѕ': 'S', 'Х': 'X', 'У': 'Y'
+        }
+        for h, l in homoglyphs.items():
+            prompt = prompt.replace(h, l)
         
         # Normalize input to prevent obfuscation bypasses
         # 1. Strip zero-width spaces and control characters (preserving case for Base64)
@@ -73,26 +81,26 @@ class SecurityPipeline:
 
         cleaned = re.sub(r'[\u200b-\u200d\ufeff]', '', case_preserved)
 
-        # 4. Check semantic keywords & override phrases
+        # 4. Check semantic keywords & override phrases with flexible separators
         semantic_patterns = [
-            r"ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions",
-            r"disregard\s+(?:all\s+)?(?:previous|prior)\s+(?:instructions|directives|rules|guidelines)",
-            r"system\s+override",
-            r"bypass\s+(?:all\s+)?restrictions",
-            r"forget\s+(?:your\s+)?(?:rules|instructions|directives|guidelines|identity|name)",
-            r"you\s+are\s+now\s+a\s+different\s+agent",
+            r"ignore[\s\-\W]*(?:all[\s\-\W]*)?(?:previous|prior)[\s\-\W]*instructions",
+            r"disregard[\s\-\W]*(?:all[\s\-\W]*)?(?:previous|prior)[\s\-\W]*(?:instructions|directives|rules|guidelines)",
+            r"system[\s\-\W]*override",
+            r"bypass[\s\-\W]*(?:all[\s\-\W]*)?restrictions",
+            r"forget[\s\-\W]*(?:your[\s\-\W]*)?(?:rules|instructions|directives|guidelines|identity|name)",
+            r"you[\s\-\W]*are[\s\-\W]*now[\s\-\W]*a[\s\-\W]*different[\s\-\W]*agent",
             r"jailbreak",
-            r"developer\s+mode",
-            r"dan\s+mode",
-            r"do\s+anything\s+now",
-            r"override\s+system\s+prompt"
+            r"developer[\s\-\W]*mode",
+            r"dan[\s\-\W]*mode",
+            r"do[\s\-\W]*anything[\s\-\W]*now",
+            r"override[\s\-\W]*system[\s\-\W]*prompt"
         ]
         
         all_patterns = semantic_patterns + INJECTION_PATTERNS + [
-            r"disregard\s+instructions",
+            r"disregard[\s\-\W]*instructions",
             r"jailbreak",
-            r"developer\s+mode",
-            r"dan\s+mode"
+            r"developer[\s\-\W]*mode",
+            r"dan[\s\-\W]*mode"
         ]
         
         for pattern in all_patterns:

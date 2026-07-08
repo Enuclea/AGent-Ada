@@ -4,6 +4,9 @@ import shutil
 import shlex
 from pathlib import Path
 
+# Freeze sandboxing bypass flag once at import time to prevent runtime manipulation
+_ADA_DISABLE_SANDBOX_FROZEN = (os.environ.get("ADA_DISABLE_SANDBOX") == "1")
+
 def _is_safe_path(base_dir, path) -> bool:
     """Helper that resolves absolute paths and verifies that target path resides strictly within base_dir,
     recursively checking that no symlinks in the path resolve outside base_dir.
@@ -46,7 +49,9 @@ def _verify_skill_signature(src_folder: Path) -> bool:
         skill_hash = _calculate_skill_hash(src_folder)
         
         from cryptography.hazmat.primitives.asymmetric import ed25519
-        pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY", "4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+        pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY")
+        if not pub_key_hex:
+            raise ValueError("ADA_SKILL_PUBLIC_KEY environment variable must be set for signature verification.")
         pub_key_bytes = bytes.fromhex(pub_key_hex)
         pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_key_bytes)
         pub_key.verify(signature, skill_hash)
@@ -72,7 +77,9 @@ def _verify_in_memory_signature(files_dict: dict) -> bool:
         skill_hash = _calculate_in_memory_hash(files_dict)
         
         from cryptography.hazmat.primitives.asymmetric import ed25519
-        pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY", "4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8")
+        pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY")
+        if not pub_key_hex:
+            raise ValueError("ADA_SKILL_PUBLIC_KEY environment variable must be set for signature verification.")
         pub_key_bytes = bytes.fromhex(pub_key_hex)
         pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_key_bytes)
         pub_key.verify(signature, skill_hash)
@@ -89,7 +96,7 @@ def _sandbox_command_if_possible(command: str) -> List[str]:
     access to sensitive system files.
     """
     # Allow explicit bypass via env var (useful for testing/host dev control)
-    if os.environ.get("ADA_DISABLE_SANDBOX") == "1":
+    if _ADA_DISABLE_SANDBOX_FROZEN:
         return ["bash", "-c", command]
 
     # Check if running on Windows OS

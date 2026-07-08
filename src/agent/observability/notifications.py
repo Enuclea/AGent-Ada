@@ -28,7 +28,7 @@ def get_discord_config() -> Dict[str, Any]:
     if config_path_str:
         config_path: Path = Path(config_path_str)
     else:
-        config_path = Path(__file__).parent.parent.parent / "discord" / "config.json"
+        config_path = Path(__file__).resolve().parent.parent.parent.parent / "discord" / "config.json"
     
     if config_path.exists():
         try:
@@ -60,7 +60,7 @@ def get_bot_token() -> Optional[str]:
     if env_path_str:
         env_path: Path = Path(env_path_str)
     else:
-        env_path = Path(__file__).parent.parent.parent / "discord" / ".env"
+        env_path = Path(__file__).resolve().parent.parent.parent.parent / "discord" / ".env"
     
     if env_path.exists():
         try:

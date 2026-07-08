@@ -128,7 +128,7 @@ async def run_quiet_observer(days: int = 1) -> None:
     print(f"[QUIET-OBSERVER] Pattern analysis completed.")
     
     # Save the report to a stable location
-    output_dir = Path(__file__).parent.parent.parent / "scratch"
+    output_dir = Path(__file__).resolve().parent.parent.parent.parent / "scratch"
     output_dir.mkdir(parents=True, exist_ok=True)
     report_file = output_dir / "process_suggestions.md"
     with open(report_file, "w", encoding="utf-8") as f:

@@ -11,8 +11,8 @@ from typing import Set
 ALLOWED_MODULES: Set[str] = {
     "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
     "asyncio", "logging", "math", "time", "contextlib",
-    "enum", "dataclasses", "types", "traceback",
-    "fcntl", "random", "base64", "secrets", "email"
+    "enum", "dataclasses", "traceback",
+    "random", "base64", "secrets", "email"
 }
 
 ALLOWED_SUBMODULES: Set[str] = {
@@ -142,6 +142,7 @@ class SafetyVisitor(ast.NodeVisitor):
                         self.aliases[target.id] = val_resolved
         self.generic_visit(node)
 
+
     def visit_Call(self, node: ast.Call) -> None:
         # Check direct calls
         if isinstance(node.func, ast.Name):
@@ -205,7 +206,7 @@ class SafetyVisitor(ast.NodeVisitor):
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         forbidden_attrs = (
-            "__dict__", "__class__", "__bases__", "__subclasses__",
+            "__dict__", "__class__", "__bases__", "__subclasses__", "__mro__",
             "__getattribute__", "__getattr__", "__setattr__", "__delattr__",
             "_getframe", "modules", "__globals__", "__code__", "__closure__",
             "ctypes", "cffi", "mmap"

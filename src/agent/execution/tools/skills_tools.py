@@ -533,6 +533,8 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
 
     # CRITICAL: Normalize input immediately and sanitise it to prevent Unicode normalization bypasses, null bytes, and path traversals
     import urllib.parse
+    if any(unicodedata.category(c).startswith('C') for c in skill_name):
+        return "Error: Directory traversal attempt detected."
     decoded_name = urllib.parse.unquote(skill_name)
     normalized_name = unicodedata.normalize('NFKC', decoded_name).replace('\\', '/').replace('\0', '')
     if ".." in normalized_name or "/" in normalized_name or "..." in normalized_name:
@@ -545,6 +547,9 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     try:
         dest_folder = (tools.SKILLS_DIR / clean_name).resolve()
         if not dest_folder.is_relative_to(tools.SKILLS_DIR.resolve()):
+            return "Error: Directory traversal attempt detected."
+        import os
+        if os.path.commonpath([dest_folder, tools.SKILLS_DIR.resolve()]) != str(tools.SKILLS_DIR.resolve()):
             return "Error: Directory traversal attempt detected."
     except Exception:
         return "Error: Invalid path structure."
@@ -573,10 +578,6 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     old_umask = os.umask(0o077)
     try:
         temp_path = Path(tempfile.mkdtemp(prefix="skill_"))
-        try:
-            os.chown(temp_path, os.getuid(), os.getgid())
-        except Exception:
-            pass
     finally:
         os.umask(old_umask)
 
@@ -606,22 +607,8 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
                     pass
 
         # Enforce cryptographic signature verification on in-memory files immediately
-        from agent.execution.tools.security import _verify_in_memory_signature, _verify_skill_signature
-        import agent.execution.tools as execution_tools
-        is_mocked = False
-        try:
-            from unittest.mock import Mock, MagicMock
-            if (isinstance(_verify_skill_signature, (Mock, MagicMock)) or 
-                isinstance(tools._verify_skill_signature, (Mock, MagicMock)) or
-                isinstance(execution_tools._verify_skill_signature, (Mock, MagicMock))):
-                is_mocked = True
-        except ImportError:
-            pass
-
-        if is_mocked:
-            sig_ok = tools._verify_skill_signature(temp_path)
-        else:
-            sig_ok = _verify_in_memory_signature(in_memory_files)
+        from agent.execution.tools.security import _verify_in_memory_signature
+        sig_ok = _verify_in_memory_signature(in_memory_files)
 
         if not sig_ok:
             return f"Error: Skill '{clean_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
@@ -774,9 +761,6 @@ You MUST end your response with a JSON block in the following format:
             combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}"
             approved = primary_safe and primary_proceed
             
-        # Write review report to in_memory_files for transparency/documentation
-        in_memory_files["security_review.txt"] = combined_review.encode("utf-8")
-            
         # 4. Enforce security review / AST warnings check with HIL
         interesting_reason = []
         if ast_errors:
@@ -814,7 +798,7 @@ You MUST end your response with a JSON block in the following format:
                 pass
                 
             if not is_sandboxed:
-                if confirm or (os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "0"):
+                if confirm or (os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1"):
                     hil_approved = True
             
             # Require interactive TTY input if not approved
@@ -827,6 +811,11 @@ You MUST end your response with a JSON block in the following format:
                 return f"HIL_REQUIRED: Skill '{clean_name}' failed security review or contains interesting/high-risk elements: {'; '.join(interesting_reason)}.\n\n{combined_review}"
         
         try:
+            # Re-verify signature immediately prior to writing to disk to prevent TOCTOU modifications
+            from agent.execution.tools.security import _verify_in_memory_signature
+            if not _verify_in_memory_signature(in_memory_files):
+                return f"Error: Cryptographic signature verification failed right before writing to disk."
+
             if dest_folder.exists():
                 shutil.rmtree(dest_folder)
             dest_folder.mkdir(parents=True, exist_ok=True)
@@ -835,6 +824,12 @@ You MUST end your response with a JSON block in the following format:
                 file_dest.parent.mkdir(parents=True, exist_ok=True)
                 with open(file_dest, "wb") as f:
                     f.write(content_bytes)
+            
+            # Write review report directly to destination folder (outside of signature-verified set)
+            review_dest = dest_folder / "security_review.txt"
+            with open(review_dest, "w", encoding="utf-8") as f:
+                f.write(combined_review)
+
             return f"Successfully downloaded and installed skill '{clean_name}' to {dest_folder}.\nIt is now active and ready to be used by the agent."
         except Exception as e:
             return f"Error copying installed skill: {e}"

@@ -11,6 +11,9 @@ import ctypes.util
 from pathlib import Path
 from typing import List, Tuple
 
+# Freeze sandboxing bypass flag once at import time to prevent runtime manipulation
+_ALLOW_UNSANDBOXED_EXECUTION_FROZEN = (os.environ.get("ALLOW_UNSANDBOXED_EXECUTION") == "true")
+
 # Load libc dynamically to invoke low-level syscalls
 try:
     libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
@@ -154,8 +157,8 @@ def apply_landlock(workspace_dir: str) -> None:
     rules: List[Tuple[str, int]] = [
         # Workspace is fully readable & writable
         (workspace_dir_abs, handled_access_fs),
-        # /tmp is writable for temporary files
-        ("/tmp", handled_access_fs),
+        # /tmp is writable for temporary files, but cannot execute binaries (sandboxing hardening)
+        ("/tmp", handled_access_fs & ~LANDLOCK_ACCESS_FS_EXECUTE),
         # System paths are read-only / execute-only
         ("/usr", LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
         ("/lib", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
@@ -212,7 +215,7 @@ if __name__ == "__main__":
     try:
         apply_landlock(workspace)
     except Exception as e:
-        if os.environ.get("ALLOW_UNSANDBOXED_EXECUTION") == "true":
+        if _ALLOW_UNSANDBOXED_EXECUTION_FROZEN:
             print(f"[Landlock] Warning: Sandbox not applied: {e}. ALLOW_UNSANDBOXED_EXECUTION is true, continuing unsandboxed.", file=sys.stderr)
         else:
             print(f"[Landlock] Error: Sandbox could not be enforced: {e}. Halting execution because ALLOW_UNSANDBOXED_EXECUTION is not true.", file=sys.stderr)

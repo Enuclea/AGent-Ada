@@ -593,7 +593,7 @@ async def ask_discord_approval(task_id: str, tool_name: str, tool_args: str) -> 
     if not token:
         env_path = Path(os.environ.get("DISCORD_ENV_PATH", "discord/.env"))
         if not env_path.is_absolute():
-            env_path = Path(__file__).parent.parent.parent / env_path
+            env_path = Path(__file__).resolve().parent.parent.parent.parent / env_path
         if env_path.exists():
             with open(env_path, "r") as f:
                 for line in f:
@@ -609,7 +609,7 @@ async def ask_discord_approval(task_id: str, tool_name: str, tool_args: str) -> 
     config_path_str = os.environ.get("DISCORD_CONFIG_PATH", "discord/config.json")
     config_path = Path(config_path_str)
     if not config_path.is_absolute():
-        config_path = Path(__file__).parent.parent.parent / config_path
+        config_path = Path(__file__).resolve().parent.parent.parent.parent / config_path
     if config_path.exists():
         try:
             with open(config_path, "r", encoding="utf-8") as f:

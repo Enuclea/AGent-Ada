@@ -11,12 +11,6 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
     unless the plugin has a valid cryptographic signature from the developer,
     or resides within the trusted built-in agent plugins package path.
     """
-    try:
-        from agent.execution.tools.security import _verify_skill_signature
-        if _verify_skill_signature(plugin_path):
-            return
-    except Exception:
-        pass
 
     try:
         import agent.plugins
@@ -77,7 +71,7 @@ class PluginManager:
             plugin_paths = list(agent.plugins.__path__)
         except ImportError:
             # Fallback to local plugins folder if package structure is not initialized
-            plugin_paths = [str(Path(__file__).resolve().parent.parent.parent / "plugins")]
+            plugin_paths = [str(Path(__file__).resolve().parent.parent.parent.parent / "plugins")]
 
         for path_str in plugin_paths:
             plugins_dir = Path(path_str)
