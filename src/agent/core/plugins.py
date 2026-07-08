@@ -25,7 +25,7 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
         pass
 
     try:
-        if os.environ.get("TESTING") == "1" or "pytest" in sys.modules:
+        if os.environ.get("TESTING") == "1":
             import agent.plugins
             for path_str in agent.plugins.__path__:
                 if Path(plugin_path).resolve().is_relative_to(Path(path_str).resolve()):
@@ -33,16 +33,24 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
     except Exception:
         pass
 
-    try:
-        workspace_dir = Path.cwd().resolve()
-        trusted_paths = {
-            (workspace_dir / "plugins" / "enuclea_plugin").resolve(),
-            (workspace_dir / "plugins" / "morgen_plugin").resolve()
-        }
-        if Path(plugin_path).resolve() in trusted_paths:
+    # Check signature for dynamic external plugins
+    sig_path = Path(plugin_path) / "signature.sig"
+    if sig_path.exists():
+        try:
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+            from agent.execution.tools.security import _calculate_skill_hash
+            
+            sig_bytes = sig_path.read_bytes()
+            plugin_hash = _calculate_skill_hash(Path(plugin_path))
+            
+            pub_key_hex = os.environ.get("ADA_SKILL_PUBLIC_KEY") or "4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8"
+            pub_bytes = bytes.fromhex(pub_key_hex)
+            pub_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_bytes)
+            pub_key.verify(sig_bytes, plugin_hash)
+            # Cryptographic verification succeeded, safe to load
             return
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     from agent.security.ast_safety import verify_ast_safety
     for py_file in plugin_path.rglob("*.py"):

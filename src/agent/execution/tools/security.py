@@ -6,6 +6,7 @@ from pathlib import Path
 
 # Freeze sandboxing bypass flag once at import time to prevent runtime manipulation
 _ADA_DISABLE_SANDBOX_FROZEN = (os.environ.get("ADA_DISABLE_SANDBOX") == "1")
+_ALLOW_UNSANDBOXED_EXECUTION_FROZEN = (os.environ.get("ALLOW_UNSANDBOXED_EXECUTION") == "true")
 
 def _is_safe_path(base_dir, path) -> bool:
     """Helper that resolves absolute paths and verifies that target path resides strictly within base_dir,
@@ -101,7 +102,7 @@ def _sandbox_command_if_possible(command: str) -> List[str]:
 
     # Check if running on Windows OS
     if sys.platform == "win32":
-        if os.environ.get("ALLOW_UNSANDBOXED_EXECUTION") == "true":
+        if _ALLOW_UNSANDBOXED_EXECUTION_FROZEN:
             print("[Security] Warning: Running on Windows without filesystem sandboxing. Sandbox restrictions are disabled.", file=sys.stderr)
             return ["cmd.exe", "/c", command]
         raise PermissionError(

@@ -809,7 +809,7 @@ You MUST end your response with a JSON block in the following format:
                 pass
                 
             if not is_sandboxed:
-                if confirm or (os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1"):
+                if confirm or (os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1" and "pytest" in sys.modules):
                     hil_approved = True
             
             # Require interactive TTY input if not approved
@@ -831,7 +831,9 @@ You MUST end your response with a JSON block in the following format:
                 shutil.rmtree(dest_folder)
             dest_folder.mkdir(parents=True, exist_ok=True)
             for rel_path, content_bytes in in_memory_files.items():
-                file_dest = dest_folder / rel_path
+                file_dest = (dest_folder / rel_path).resolve()
+                if not file_dest.is_relative_to(dest_folder):
+                    return "Error: Path traversal attempt detected during installation."
                 file_dest.parent.mkdir(parents=True, exist_ok=True)
                 with open(file_dest, "wb") as f:
                     f.write(content_bytes)
