@@ -1,0 +1,14 @@
+{
+  "id": "gmail",
+  "name": "Gmail Integration",
+  "version": "1.0.0",
+  "description": "Scans your Gmail inbox for new unread emails, runs AI classification, and registers tasks.",
+  "author": "AntiGravity Core",
+  "dependencies": ["google-api-python-client", "google-auth-oauthlib", "google-auth-httplib2"],
+  "tools": [
+    {
+      "name": "sync_gmail_emails",
+      "description": "Scans your Gmail inbox for new unread emails and registers active tasks."
+    }
+  ]
+}

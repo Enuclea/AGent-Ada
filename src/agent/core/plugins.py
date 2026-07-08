@@ -15,7 +15,7 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
             "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
             "asyncio", "logging", "math", "time", "agent", "google", "contextlib",
             "enum", "dataclasses", "types", "sqlite3", "urllib", "enuclea", "traceback",
-            "fcntl", "sys", "random", "playwright"
+            "fcntl", "sys", "random", "playwright", "googleapiclient", "google_auth_oauthlib"
         }
 
         def __init__(self):
