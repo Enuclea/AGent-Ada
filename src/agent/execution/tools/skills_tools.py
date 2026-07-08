@@ -565,37 +565,21 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
         else:
             return "Error: Remote repository fetching is disabled."
 
+        # Enforce cryptographic signature verification on all skills (both local and remote) immediately
+        if not tools._verify_skill_signature(temp_path):
+            return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
+
         # --- SECURITY & CODE REVIEW GATEWAY ---
         # 1. Run AST Static Scan
         ast_errors = []
-        import ast
+        from agent.security.ast_safety import verify_ast_safety
         for py_file in temp_path.rglob("*.py"):
             try:
                 with open(py_file, "r", encoding="utf-8", errors="replace") as f:
                     code = f.read()
-                tree = ast.parse(code, filename=str(py_file))
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Call):
-                        if isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec"):
-                            ast_errors.append(f"Forbidden call in {py_file.name}: {node.func.id}()")
-                        elif isinstance(node.func, ast.Attribute):
-                            attr_name = node.func.attr
-                            val_name = node.func.value.id if isinstance(node.func.value, ast.Name) else ""
-                            if val_name == "os" and attr_name in ("system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"):
-                                ast_errors.append(f"Forbidden system call in {py_file.name}: os.{attr_name}()")
-                            elif val_name == "subprocess" and attr_name in ("run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"):
-                                ast_errors.append(f"Forbidden subprocess call in {py_file.name}: subprocess.{attr_name}()")
-                    elif isinstance(node, ast.ImportFrom):
-                        forbidden = {
-                            "os": {"system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
-                            "subprocess": {"run", "Popen", "call", "check_call", "check_output", "getstatusoutput", "getoutput"}
-                        }
-                        if node.module in forbidden:
-                            for name in node.names:
-                                if name.name in forbidden[node.module]:
-                                    ast_errors.append(f"Forbidden import in {py_file.name}: {name.name} from {node.module}")
+                verify_ast_safety(code, str(py_file))
             except Exception as e:
-                ast_errors.append(f"AST parse error in {py_file.name}: {e}")
+                ast_errors.append(str(e))
 
         # Construct a dump of all downloaded/copied file contents
         code_dump = []
@@ -771,10 +755,6 @@ You MUST end your response with a JSON block in the following format:
             if not hil_approved:
                 return f"HIL_REQUIRED: Skill '{skill_name}' failed security review or contains interesting/high-risk elements: {'; '.join(interesting_reason)}.\n\n{combined_review}"
         
-        # Enforce cryptographic signature verification on all skills (both local and remote)
-        if not tools._verify_skill_signature(temp_path):
-            return f"Error: Skill '{skill_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
-            
         try:
             if dest_folder.exists():
                 shutil.rmtree(dest_folder)

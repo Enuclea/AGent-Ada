@@ -28,15 +28,6 @@ if not shared_secret:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Apply Landlock sandboxing on startup if not disabled
-    if os.environ.get("ADA_DISABLE_SANDBOX", "false").lower() != "true":
-        try:
-            from agent.core.landlock import apply_landlock
-            apply_landlock(os.getcwd())
-            print(f"[Sandbox] Landlock sandbox restrictions applied to FastAPI startup path.")
-        except Exception as e:
-            print(f"[Sandbox] Warning: Failed to apply Landlock sandbox: {e}")
-
     # Clear any stale active tasks on startup
     memory.clear_active_tasks()
     

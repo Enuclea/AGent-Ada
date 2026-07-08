@@ -1,4 +1,4 @@
-import os
+from os import getenv
 import re
 import json
 import base64
@@ -21,7 +21,7 @@ from agent.core.keyless import KeylessAgyAgent
 logger = logging.getLogger("agent.plugins.gmail")
 
 # Compile general search patterns
-_SPAM_SUBJECT_RE = re.compile(r"\b(unsubscribe|verify your email|newsletter|receipt|invoice)\b", re.I)
+_SPAM_SUBJECT_PATTERN = r"\b(unsubscribe|verify your email|newsletter|receipt|invoice)\b"
 
 class EmailAnalysis(BaseModel):
     action_required: bool = Field(description="True if the email contains an actionable task or is highly important")
@@ -36,13 +36,13 @@ def load_gmail_paths() -> Tuple[Path, Path]:
     Fully extendable via environment overrides to allow pointing to custom
     workspaces or configuration folders:
     """
-    env_creds = os.environ.get("GMAIL_CREDENTIALS_PATH")
-    env_token = os.environ.get("GMAIL_TOKEN_PATH")
+    env_creds = getenv("GMAIL_CREDENTIALS_PATH")
+    env_token = getenv("GMAIL_TOKEN_PATH")
     if env_creds and env_token:
         return Path(env_creds), Path(env_token)
 
     # Defaults relative to the current project/workspace root
-    project_root = Path(os.getcwd())
+    project_root = Path.cwd()
     local_creds = project_root / "config" / "gmail_credentials.json"
     local_token = project_root / "config" / "gmail_token.json"
 
@@ -235,7 +235,7 @@ async def sync_gmail_emails(db_path: Optional[str] = None) -> str:
                 #     continue
                 
                 # Check for obvious newsletter/receipt spam
-                if _SPAM_SUBJECT_RE.search(subject):
+                if re.search(_SPAM_SUBJECT_PATTERN, subject, re.I):
                     logger.debug(f"Skipping spam/newsletter subject: {subject}")
                     lines.append(f"- **[SKIP]** '{subject}' from {sender} (Auto-spam filter)")
                     db.set_metadata("gmail_last_checked_timestamp", str(internal_date))

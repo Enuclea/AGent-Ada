@@ -1,4 +1,3 @@
-import os
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
 from google_auth_oauthlib.flow import Flow

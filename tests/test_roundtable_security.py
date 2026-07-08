@@ -20,6 +20,11 @@ def test_is_safe_relative_path():
         assert is_safe_relative_path(base, "../outside.txt") is False
         assert is_safe_relative_path(base, "..") is False
         
+        # Windows backslash traversal attempts
+        assert is_safe_relative_path(base, "safe\\..\\..\\outside.txt") is False
+        assert is_safe_relative_path(base, "..\\outside.txt") is False
+        assert is_safe_relative_path(base, "..\\") is False
+        
         # Symlink traversal attempts
         outside_file = Path(tmp_dir).parent / "outside.txt"
         outside_file.touch()
@@ -206,6 +211,27 @@ def test_verify_plugin_ast_safety_sys_modules():
         with pytest.raises(ValueError) as excinfo:
             verify_plugin_ast_safety(plugin_path)
         assert "Forbidden access to name: __builtins__" in str(excinfo.value)
+
+        # Test pickle.loads is blocked
+        with open(init_file, "w") as f:
+            f.write("import pickle\npickle.loads(b'...')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden import" in str(excinfo.value) or "Forbidden serialization call" in str(excinfo.value)
+
+        # Test importlib.import_module is blocked
+        with open(init_file, "w") as f:
+            f.write("import importlib\nimportlib.import_module('os')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden import" in str(excinfo.value) or "Forbidden dynamic import call" in str(excinfo.value)
+
+        # Test os.popen is blocked
+        with open(init_file, "w") as f:
+            f.write("import os\nos.popen('id')\n")
+        with pytest.raises(ValueError) as excinfo:
+            verify_plugin_ast_safety(plugin_path)
+        assert "Forbidden import" in str(excinfo.value) or "Forbidden os call" in str(excinfo.value)
 
 # 6. Test HMAC Secure Signature & Fallback
 @pytest.mark.asyncio

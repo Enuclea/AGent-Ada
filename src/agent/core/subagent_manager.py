@@ -11,6 +11,7 @@ def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
     logger = logging.getLogger("agent.security")
     try:
         # Enforce strict path normalization first
+        rel_str = rel_str.replace('\\', '/')
         normalized_rel = os.path.normpath(rel_str)
         if normalized_rel.startswith("../") or normalized_rel == "..":
             logger.warning(f"Path safety check failed: relative path traversal attempt '{rel_str}'")

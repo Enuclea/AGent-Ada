@@ -228,35 +228,7 @@ async def spawn_subagent(
     # Build enriched prompt with file context
     base_ws = Path(os.getcwd()).resolve()
     
-    def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
-        import logging
-        logger = logging.getLogger("agent.security")
-        try:
-            # Enforce strict path normalization first
-            normalized_rel = os.path.normpath(rel_str)
-            if normalized_rel.startswith("../") or normalized_rel == "..":
-                logger.warning(f"Path safety check failed: relative path traversal attempt '{rel_str}'")
-                return False
-                
-            base_resolved = base_path.resolve()
-            resolved = (base_resolved / normalized_rel).resolve()
-            if not (base_resolved == resolved or base_resolved in resolved.parents):
-                logger.warning(f"Path safety check failed: '{resolved}' is not under '{base_resolved}'")
-                return False
-                
-            # Walk up from resolved to base_resolved, verifying that any symlinks resolve inside base_resolved
-            curr = resolved
-            while curr != base_resolved and curr != curr.parent:
-                if curr.is_symlink():
-                    resolved_link = curr.resolve()
-                    if not (base_resolved == resolved_link or base_resolved in resolved_link.parents):
-                        logger.warning(f"Path safety check failed: symlink '{curr}' resolves to '{resolved_link}' outside '{base_resolved}'")
-                        return False
-                curr = curr.parent
-            return True
-        except Exception as e:
-            logger.warning(f"Path safety check encountered error processing '{rel_str}': {e}", exc_info=True)
-            return False  # Fail-closed
+    from agent.core.subagent_manager import is_safe_relative_path
 
     enriched_prompt = prompt
     if target_files:
@@ -380,35 +352,7 @@ async def run_boardroom(
     base_ws = Path(current_workspace).resolve()
     dest_base = sandbox_dir.resolve()
     
-    def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
-        import logging
-        logger = logging.getLogger("agent.security")
-        try:
-            # Enforce strict path normalization first
-            normalized_rel = os.path.normpath(rel_str)
-            if normalized_rel.startswith("../") or normalized_rel == "..":
-                logger.warning(f"Path safety check failed: relative path traversal attempt '{rel_str}'")
-                return False
-                
-            base_resolved = base_path.resolve()
-            resolved = (base_resolved / normalized_rel).resolve()
-            if not (base_resolved == resolved or base_resolved in resolved.parents):
-                logger.warning(f"Path safety check failed: '{resolved}' is not under '{base_resolved}'")
-                return False
-                
-            # Walk up from resolved to base_resolved, verifying that any symlinks resolve inside base_resolved
-            curr = resolved
-            while curr != base_resolved and curr != curr.parent:
-                if curr.is_symlink():
-                    resolved_link = curr.resolve()
-                    if not (base_resolved == resolved_link or base_resolved in resolved_link.parents):
-                        logger.warning(f"Path safety check failed: symlink '{curr}' resolves to '{resolved_link}' outside '{base_resolved}'")
-                        return False
-                curr = curr.parent
-            return True
-        except Exception as e:
-            logger.warning(f"Path safety check encountered error processing '{rel_str}': {e}", exc_info=True)
-            return False  # Fail-closed
+    from agent.core.subagent_manager import is_safe_relative_path
 
     # 1. Setup Sandbox Workspace (copy target files)
     def setup_sandbox_sync():

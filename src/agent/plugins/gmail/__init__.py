@@ -15,5 +15,5 @@ def setup_plugin(app: FastAPI, register_tools, register_scheduled_task):
     print("[PLUGINS: Gmail] Registered sync_gmail_emails tool.")
     
     # 3. Register standard scheduled task (check every 10 minutes)
-    register_scheduled_task("sync_gmail_emails", 10, sync_gmail_emails)
+    register_scheduled_task("sync_gmail_emails", 10, "sync_gmail_emails")
     print("[PLUGINS: Gmail] Scheduled periodic inbox check every 10 minutes.")

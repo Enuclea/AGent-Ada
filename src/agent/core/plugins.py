@@ -8,97 +8,11 @@ from types import ModuleType
 
 def verify_plugin_ast_safety(plugin_path: Path) -> None:
     """Statically scans all Python files in the plugin package for unsafe calls."""
-    import ast
-    
-    class SafetyVisitor(ast.NodeVisitor):
-        ALLOWED_MODULES = {
-            "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
-            "asyncio", "logging", "math", "time", "agent", "google", "contextlib",
-            "enum", "dataclasses", "types", "sqlite3", "urllib", "enuclea", "traceback",
-            "fcntl", "sys", "random", "playwright", "googleapiclient", "google_auth_oauthlib"
-        }
-
-        def __init__(self):
-            self.errors = []
-            self.sys_names = {"sys"}
-            
-        def visit_Import(self, node):
-            for name in node.names:
-                parts = name.name.split(".")
-                top_level = parts[0]
-                if top_level not in self.ALLOWED_MODULES:
-                    self.errors.append(f"Forbidden import: {name.name}")
-                if name.name == "sys":
-                    self.sys_names.add(name.asname or name.name)
-            self.generic_visit(node)
-            
-        def visit_ImportFrom(self, node):
-            if node.module:
-                parts = node.module.split(".")
-                top_level = parts[0]
-                if top_level == "os":
-                    # Strictly allow only 'environ' and 'getenv' from 'os'
-                    for name in node.names:
-                        if name.name not in {"environ", "getenv"}:
-                            self.errors.append(f"Forbidden import: {name.name} from os")
-                elif top_level == "sys":
-                    for name in node.names:
-                        if name.name in ("modules", "*"):
-                            self.errors.append(f"Forbidden import: {name.name} from sys")
-                elif top_level not in self.ALLOWED_MODULES:
-                    self.errors.append(f"Forbidden import from module: {node.module}")
-            self.generic_visit(node)
-            
-        def visit_Assign(self, node):
-            if isinstance(node.value, ast.Name) and node.value.id in self.sys_names:
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        self.sys_names.add(target.id)
-            self.generic_visit(node)
-            
-        def visit_Call(self, node):
-            forbidden_builtins = ("eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr", "vars", "globals", "locals")
-            if isinstance(node.func, ast.Name):
-                if node.func.id in forbidden_builtins:
-                    self.errors.append(f"Forbidden dynamic built-in: {node.func.id}()")
-            elif isinstance(node.func, ast.Attribute):
-                func_name = node.func.attr
-                if func_name in forbidden_builtins:
-                    self.errors.append(f"Forbidden call: .{func_name}()")
-            self.generic_visit(node)
-
-        def visit_Name(self, node):
-            if node.id == "__builtins__":
-                self.errors.append("Forbidden access to name: __builtins__")
-            self.generic_visit(node)
-
-        def visit_Attribute(self, node):
-            forbidden_attrs = ("__dict__", "__class__", "__bases__", "__subclasses__", "__getattribute__", "__getattr__", "__setattr__", "__delattr__")
-            if node.attr in forbidden_attrs:
-                self.errors.append(f"Forbidden dynamic attribute access: .{node.attr}")
-            
-            def is_sys_ref(val_node):
-                if isinstance(val_node, ast.Name):
-                    return val_node.id in self.sys_names
-                if isinstance(val_node, ast.Attribute):
-                    return val_node.attr == "sys" or is_sys_ref(val_node.value)
-                return False
-
-            if node.attr == "modules" and is_sys_ref(node.value):
-                self.errors.append("Forbidden attribute access: sys.modules")
-            self.generic_visit(node)
-
+    from agent.security.ast_safety import verify_ast_safety
     for py_file in plugin_path.rglob("*.py"):
-        try:
-            with open(py_file, "r", encoding="utf-8", errors="replace") as f:
-                code = f.read()
-            tree = ast.parse(code, filename=str(py_file))
-            visitor = SafetyVisitor()
-            visitor.visit(tree)
-            if visitor.errors:
-                raise ValueError(f"AST safety check failed for {py_file.name}: {', '.join(visitor.errors)}")
-        except SyntaxError as se:
-            raise ValueError(f"AST syntax error in {py_file.name}: {se}")
+        with open(py_file, "r", encoding="utf-8", errors="replace") as f:
+            code = f.read()
+        verify_ast_safety(code, str(py_file))
 
 class PluginState(str, Enum):
     DISCOVERED = "DISCOVERED"
