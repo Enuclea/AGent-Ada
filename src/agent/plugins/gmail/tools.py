@@ -138,7 +138,31 @@ async def get_message_details(service, msg_id: str) -> Dict[str, Any]:
         "body": body
     }
 
+_last_sync_time = 0.0
+_last_sync_result = None
+_sync_lock = asyncio.Lock()
+
 async def sync_gmail_emails(db_path: Optional[str] = None) -> str:
+    global _last_sync_time, _last_sync_result
+    import time
+    
+    now = time.time()
+    async with _sync_lock:
+        if now - _last_sync_time < 5.0 and _last_sync_result is not None:
+            return f"Sync skipped: Cooldown active. Returning cached result: {_last_sync_result}"
+        
+        _last_sync_time = time.time()
+        try:
+            result = await _sync_gmail_emails_impl(db_path)
+            _last_sync_result = result
+            _last_sync_time = time.time()
+            return result
+        except Exception as e:
+            _last_sync_time = 0.0
+            _last_sync_result = None
+            raise e
+
+async def _sync_gmail_emails_impl(db_path: Optional[str] = None) -> str:
     """Checks for new unread Gmail messages, runs AI evaluation, and creates active tasks.
     
     This is the core public task handler. It is designed to be fully modular and

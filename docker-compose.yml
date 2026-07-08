@@ -164,6 +164,7 @@ services:
       # Customize these local path decisions to match your installation.
       - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
       - ${HOME}/AGent:${HOME}/AGent:rw
+      - ./src/agent/observability/pubsub_listener.py:/app/src/agent/observability/pubsub_listener.py:ro
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app

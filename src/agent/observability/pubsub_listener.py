@@ -25,9 +25,12 @@ try:
     from enuclea.gmail_client import load_gmail_paths, get_gmail_service
     from enuclea.gmail_tool import sync_gmail_emails
 except ImportError:
-    load_gmail_paths = None
-    get_gmail_service = None
-    sync_gmail_emails = None
+    try:
+        from agent.plugins.gmail.tools import load_gmail_paths, get_gmail_service, sync_gmail_emails
+    except ImportError:
+        load_gmail_paths = None
+        get_gmail_service = None
+        sync_gmail_emails = None
 try:
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
@@ -147,7 +150,7 @@ class PubSubListener:
 
                 logger.info("Received %d messages from Pub/Sub.", len(received))
                 
-                # 3. Process each message
+                # 3. Process each message (decode and log payloads)
                 for msg_item in received:
                     message: Dict[str, Any] = msg_item.get("message", {})
                     data_b64: str = message.get("data", "")
@@ -159,14 +162,14 @@ class PubSubListener:
                             logger.info("Event payload: %s", data_json)
                         except Exception as decode_err:
                             logger.warning("Could not decode payload: %s", decode_err)
-                    
-                    # Trigger Gmail sync
-                    logger.info("Triggering async Gmail sync...")
-                    try:
-                        sync_res: str = await sync_gmail_emails()
-                        logger.info("Sync output: %s", sync_res)
-                    except Exception as sync_err:
-                        logger.error("Gmail sync failed: %s", sync_err)
+                
+                # Trigger a single Gmail sync for the batch of messages
+                logger.info("Triggering async Gmail sync for the batch...")
+                try:
+                    sync_res: str = await sync_gmail_emails()
+                    logger.info("Sync output: %s", sync_res)
+                except Exception as sync_err:
+                    logger.error("Gmail sync failed: %s", sync_err)
 
                 # 4. Acknowledge messages
                 ack_ids: List[str] = [m["ackId"] for m in received]
