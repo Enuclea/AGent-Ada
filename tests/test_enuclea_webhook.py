@@ -5,16 +5,6 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch, MagicMock
 
-try:
-    import enuclea
-except ImportError:
-    enuclea = None
-
-pytestmark = pytest.mark.skipif(
-    enuclea is None,
-    reason="Private enuclea package not available"
-)
-
 # Force a clean temporary database for web client testing to protect the user's live database
 tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 tmp_db_path = tmp_db.name
@@ -27,6 +17,12 @@ agent.db.DB_FILE_PATH = Path(tmp_db_path)
 memory.init_db()
 
 from agent.web import app
+from agent.core.plugins import plugin_manager
+
+pytestmark = pytest.mark.skipif(
+    "enuclea_plugin" not in plugin_manager.plugins,
+    reason="Private enuclea_plugin is not loaded"
+)
 
 def setup_module():
     pass
