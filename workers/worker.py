@@ -154,7 +154,7 @@ async def _register_with_hub():
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     f"{HUB_URL}/api/workers/register",
-                    json=manifest,
+                    content=body_bytes,
                     headers=headers,
                 )
                 if resp.status_code == 200:
