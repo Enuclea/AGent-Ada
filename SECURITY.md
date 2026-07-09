@@ -25,8 +25,10 @@ AGent-Ada implements defense-in-depth protections:
 
 Even with strong protections, certain risks remain — especially with third-party content:
 
+- **Plugins vs. Skills Architecture**:
+  - **Plugins** (in `/plugins/`) are administrative, host-loaded extensions that run in-process. They must *only* be installed by system administrators. AST scanning is run as a static speed-bump/audit check, but the security of the host depends on administrators only loading trusted plugins.
+  - **Skills** are dynamic user-level packages containing instructions and scripts. All user-supplied/remote skills are strictly executed *inside* the Bubblewrap/Landlock sandbox (`bwrap --unshare-all`), keeping untrusted code execution completely isolated from the host process.
 - **Prompt Injection** (direct or indirect via files/memory/context)
-- **Malicious Plugins/Skills** (supply-chain attacks, persistence)
 - **Implementation edge cases** (sandbox escapes, misconfigurations)
 - **Operator error** (running untrusted code)
 

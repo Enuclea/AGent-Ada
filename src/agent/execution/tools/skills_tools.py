@@ -100,6 +100,16 @@ description: "{clean_desc}"
     if script_content:
         if not script_filename:
             script_filename = "run.py"
+        if not script_filename.endswith(".py"):
+            return "Error: Custom skill helper scripts must be Python (.py) files to ensure security validation."
+            
+        # Verify AST safety of the custom python script before writing it
+        from agent.security.ast_safety import verify_ast_safety
+        try:
+            verify_ast_safety(script_content, script_filename)
+        except Exception as e:
+            return f"Error: Script failed AST safety check: {e}"
+            
         scripts_path = skill_path / "scripts"
         
         target_script = (scripts_path / script_filename).resolve()
@@ -267,6 +277,16 @@ description: "{clean_new_desc}"
     if script_content:
         if not script_filename:
             script_filename = "run.py"
+        if not script_filename.endswith(".py"):
+            return "Error: Custom skill helper scripts must be Python (.py) files to ensure security validation."
+            
+        # Verify AST safety of the custom python script before writing it
+        from agent.security.ast_safety import verify_ast_safety
+        try:
+            verify_ast_safety(script_content, script_filename)
+        except Exception as e:
+            return f"Error: Script failed AST safety check: {e}"
+            
         scripts_path = skill_path / "scripts"
         scripts_path.mkdir(parents=True, exist_ok=True)
         
@@ -807,7 +827,7 @@ You MUST end your response with a JSON block in the following format:
                 
             if not is_sandboxed:
                 is_real_pytest = any("pytest" in arg for arg in sys.argv) and "pytest" in sys.modules
-                if confirm or (is_real_pytest and os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1"):
+                if is_real_pytest and os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
                     hil_approved = True
             
             # Require interactive TTY input if not approved

@@ -105,12 +105,7 @@ class SafetyVisitor(ast.NodeVisitor):
         if node.module:
             parts = node.module.split(".")
             top_level = parts[0]
-            if top_level == "os":
-                # Strictly allow only 'environ' and 'getenv' from 'os'
-                for name in node.names:
-                    if name.name not in {"environ", "getenv"}:
-                        self.errors.append(f"Forbidden import: {name.name} from os")
-            elif top_level == "sys":
+            if top_level == "sys":
                 for name in node.names:
                     if name.name in ("modules", "*"):
                         self.errors.append(f"Forbidden import: {name.name} from sys")

@@ -287,6 +287,20 @@ async def ollama_generate_endpoint(
 
     if not req.prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
+        
+    if req.prompt == "healthcheck":
+        if req.stream:
+            return StreamingResponse(
+                generate_streamer(req.model, "healthy"),
+                media_type="application/x-ndjson"
+            )
+        return {
+            "model": req.model,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "response": "healthy",
+            "done": True
+        }
+
     # Model validation / allowlist enforcement
     allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini", "llama3"}
     model_name = req.model

@@ -31,10 +31,14 @@ if not is_testing:
         )
 
 if not shared_secret_str:
-    pwd = dashboard_password or "admin"
-    shared_secret = hashlib.sha256(pwd.encode()).digest()
+    if not is_testing:
+        raise RuntimeError(
+            "CRITICAL SECURITY EXCEPTION: Secure execution requires INTERNAL_API_SECRET to be configured in production. "
+            "Please specify a high-entropy secret key."
+        )
+    shared_secret = hashlib.sha256(b"admin").digest()
 else:
-    shared_secret = shared_secret_str.encode()
+    shared_secret = hashlib.sha256(shared_secret_str.encode()).digest()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -74,15 +78,29 @@ class CacheBodyMiddleware:
             return
 
         body_parts = []
-        body_consumed = False
-
-        async def cached_receive():
+        more_body = True
+        while more_body:
             message = await receive()
             if message["type"] == "http.request":
                 body_parts.append(message.get("body", b""))
-                if not message.get("more_body", False):
-                    scope["raw_body"] = b"".join(body_parts)
-            return message
+                more_body = message.get("more_body", False)
+            elif message["type"] == "http.disconnect":
+                break
+
+        raw_body = b"".join(body_parts)
+        scope["raw_body"] = raw_body
+
+        sent = False
+        async def cached_receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {
+                    "type": "http.request",
+                    "body": raw_body,
+                    "more_body": False
+                }
+            return await receive()
 
         await self.app(scope, cached_receive, send)
 
@@ -95,8 +113,8 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
 
 
 
-    # Unit testing context: allow testclient loopback bypass if explicitly configured
-    if os.environ.get("TESTING") == "1" and os.environ.get("ADA_ALLOW_TEST_BYPASS") == "1" and (not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")):
+    # Unit testing context: allow testclient loopback bypass if explicitly configured under pytest
+    if os.environ.get("TESTING") == "1" and os.environ.get("ADA_ALLOW_TEST_BYPASS") == "1" and "pytest" in sys.modules and (not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")):
         return credentials
 
     # Secure Service-to-Service: authenticate using X-Signature and X-Timestamp headers
@@ -131,13 +149,13 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+        correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin" if is_testing else "")
         if hmac.compare_digest(token, correct_password):
             return credentials
 
     # Basic Authentication for standard browser / dashboard clients
     correct_username = os.environ.get("DASHBOARD_USERNAME", "admin")
-    correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+    correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin" if is_testing else "")
     
     username_ok = hmac.compare_digest(credentials.username.encode(), correct_username.encode()) if credentials else False
     password_ok = hmac.compare_digest(credentials.password.encode(), correct_password.encode()) if credentials else False
@@ -157,13 +175,7 @@ app.add_middleware(CacheBodyMiddleware)
 async def health_endpoint():
     return {"status": "healthy"}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS disabled for security (all dashboard interactions serve from local origin)
 
 class PriorityLock:
     """Acquires a lock sequentially based on request priority (lowest integer value = highest priority)."""

@@ -37,7 +37,7 @@ def test_create_and_list_skills(temp_skills_dir):
         skill_name="test-workflow",
         description="Verifies unit testing workflow",
         instructions="1. Run pytest\n2. Check coverage",
-        script_content="import sys\nprint('running workflow')\nsys.exit(0)",
+        script_content="print('running workflow')",
         script_filename="run.py"
     )
     assert "Successfully created skill" in res_create
@@ -613,6 +613,52 @@ def test_subprocess_sandboxing_landlock():
         assert "landlock_test_ok" in res
 
     asyncio.run(run_test())
+
+
+def test_create_skill_security_checks(temp_skills_dir):
+    """Test that create_agent_skill and improve_agent_skill enforce security checks on custom helper scripts."""
+    # 1. Test create_agent_skill rejects non-py scripts
+    res = tools.create_agent_skill(
+        skill_name="test-security",
+        description="Test skill",
+        instructions="Instructions",
+        script_content="echo 'hello'",
+        script_filename="run.sh"
+    )
+    assert "Error: Custom skill helper scripts must be Python (.py) files" in res
+
+    # 2. Test create_agent_skill rejects scripts failing AST validation (e.g. importing forbidden os module)
+    res = tools.create_agent_skill(
+        skill_name="test-security",
+        description="Test skill",
+        instructions="Instructions",
+        script_content="import os\nos.system('evil')",
+        script_filename="run.py"
+    )
+    assert "Error: Script failed AST safety check" in res
+    assert "Forbidden import: os" in res
+
+    # 3. Test improve_agent_skill rejects non-py scripts on existing skill
+    tools.create_agent_skill(
+        skill_name="my-existing-skill",
+        description="Original description",
+        instructions="Original instructions"
+    )
+    res = tools.improve_agent_skill(
+        skill_name="my-existing-skill",
+        script_content="echo 'hello'",
+        script_filename="run.sh"
+    )
+    assert "Error: Custom skill helper scripts must be Python (.py) files" in res
+
+    # 4. Test improve_agent_skill rejects scripts failing AST safety
+    res = tools.improve_agent_skill(
+        skill_name="my-existing-skill",
+        script_content="import os\nos.system('evil')",
+        script_filename="run.py"
+    )
+    assert "Error: Script failed AST safety check" in res
+    assert "Forbidden import: os" in res
 
 
 

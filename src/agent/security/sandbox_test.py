@@ -163,9 +163,11 @@ async def run_in_sandbox(
                             
                             response_text = ""
                             try:
+                                from agent.security.pipeline import SecurityPipeline
                                 from agent.core.routing import routing_engine
+                                sanitized_prompt = SecurityPipeline().sanitize_input(prompt)
                                 response_text = await routing_engine.execute(
-                                    prompt=prompt,
+                                    prompt=sanitized_prompt,
                                     model=model,
                                     system_instructions=system_instructions,
                                     disable_agy=True

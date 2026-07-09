@@ -128,10 +128,12 @@ async def _register_with_hub():
     }
     
     # Calculate HMAC signature headers for hub authentication
-    secret = os.environ.get("INTERNAL_API_SECRET", "").encode()
-    if not secret:
+    secret_str = os.environ.get("INTERNAL_API_SECRET", "")
+    if not secret_str:
         dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
         secret = hashlib.sha256(dashboard_password.encode()).digest()
+    else:
+        secret = hashlib.sha256(secret_str.encode()).digest()
         
     path = "/api/workers/register"
     body_bytes = json.dumps(manifest).encode("utf-8")

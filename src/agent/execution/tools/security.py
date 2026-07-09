@@ -50,9 +50,10 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     
     from cryptography.hazmat.primitives.asymmetric import ed25519
     trusted_keys = []
-    env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
-    if env_key:
-        trusted_keys.append(env_key)
+    if os.environ.get("TESTING") == "1" and "pytest" in sys.modules:
+        env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
+        if env_key:
+            trusted_keys.append(env_key)
     from agent.core.config import DEVELOPER_PUBLIC_KEY
     trusted_keys.append(DEVELOPER_PUBLIC_KEY)
     
@@ -86,9 +87,10 @@ def _verify_in_memory_signature(files_dict: dict) -> bool:
     
     from cryptography.hazmat.primitives.asymmetric import ed25519
     trusted_keys = []
-    env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
-    if env_key:
-        trusted_keys.append(env_key)
+    if os.environ.get("TESTING") == "1" and "pytest" in sys.modules:
+        env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
+        if env_key:
+            trusted_keys.append(env_key)
     from agent.core.config import DEVELOPER_PUBLIC_KEY
     trusted_keys.append(DEVELOPER_PUBLIC_KEY)
     

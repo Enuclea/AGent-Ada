@@ -32,10 +32,13 @@ class SecurityPipeline:
         if extra_keys:
             self.sensitive_keys.extend([k.strip() for k in extra_keys.split(",") if k.strip()])
 
-    def sanitize_input(self, prompt: str) -> str:
+    def sanitize_input(self, prompt: str, depth: int = 0) -> str:
         """Scans and cleans input prompts to prevent prompt injection attempts."""
         if not prompt:
             return ""
+            
+        if depth > 2:
+            return prompt
             
         # Translate common Cyrillic/Greek lookalikes to Latin equivalents to prevent homoglyph bypasses
         homoglyphs = {
@@ -68,7 +71,7 @@ class SecurityPipeline:
                     decoded_norm = re.sub(r'\s+', ' ', decoded).strip().lower()
                     if any(kw in decoded_norm for kw in ["ignore", "system override", "bypass", "instruction", "forget your"]):
                         raise InjectionDetectedError("Prompt injection attempt detected and blocked (base64 obfuscated).")
-                    sanitized_decoded = self.sanitize_input(decoded)
+                    sanitized_decoded = self.sanitize_input(decoded, depth=depth + 1)
                     chunks.append(sanitized_decoded)
                     has_replacements = True
                 else:
@@ -147,9 +150,9 @@ class SecurityPipeline:
 # Instantiate a shared pipeline instance to keep the module-level functions backwards compatible
 _shared_pipeline = SecurityPipeline()
 
-def sanitize_input(prompt: str) -> str:
+def sanitize_input(prompt: str, depth: int = 0) -> str:
     """Scans and cleans input prompts to prevent prompt injection attempts."""
-    return _shared_pipeline.sanitize_input(prompt)
+    return _shared_pipeline.sanitize_input(prompt, depth=depth)
 
 def sanitize_output(response: str) -> str:
     """Scans response payloads to redact sensitive tokens, credentials, or keys."""
