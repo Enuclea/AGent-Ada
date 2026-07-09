@@ -115,6 +115,14 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
         except ValueError:
             pass
 
+    # Bearer Token Authentication
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+        if hmac.compare_digest(token, correct_password):
+            return credentials
+
     # Basic Authentication for standard browser / dashboard clients
     correct_username = os.environ.get("DASHBOARD_USERNAME", "admin")
     correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin")

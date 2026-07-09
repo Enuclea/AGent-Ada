@@ -87,3 +87,27 @@ def test_ollama_chat_endpoint_invalid():
     headers = {"X-Ada-Mode": "sandbox-review"}
     resp = client.post("/api/ollama/api/chat", json={"model": "llama3", "messages": []}, headers=headers)
     assert resp.status_code == 400
+
+def test_ollama_bearer_token_authentication():
+    old_testing = os.environ.get("TESTING")
+    if "TESTING" in os.environ:
+        os.environ.pop("TESTING")
+    
+    with mock.patch.dict(os.environ, {"DASHBOARD_PASSWORD": "secret-token"}):
+        payload = {
+            "model": "llama3",
+            "prompt": "Test Prompt",
+            "stream": False
+        }
+        headers_invalid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer bad-token"}
+        resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_invalid)
+        assert resp.status_code == 401
+        
+        headers_valid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer secret-token"}
+        with mock.patch("agent.core.routing.routing_engine.execute", return_value="Token Success"):
+            resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_valid)
+            assert resp.status_code == 200
+            assert resp.json()["response"] == "Token Success"
+
+    if old_testing is not None:
+        os.environ["TESTING"] = old_testing
