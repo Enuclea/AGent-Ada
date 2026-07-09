@@ -90,10 +90,12 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
     if model_name:
         target_model = model_name
 
-    # Build the prompt with optional system instructions
+    # Build the prompt with system instructions.
+    # Note: agy injects its own Antigravity identity which takes precedence,
+    # but the no-tools constraint still helps shape the response.
     full_prompt = prompt
     if system_instructions:
-        full_prompt = f"[System Instructions]\n{system_instructions}\n\n[User Prompt]\n{prompt}"
+        full_prompt = f"[Context: {system_instructions}]\n\n{prompt}"
 
     cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions", "--model", target_model]
 
