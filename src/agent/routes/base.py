@@ -143,6 +143,11 @@ class BaseRoute(ABC):
         """Executes the prompt on this route using predictable Pydantic inputs/outputs."""
         pass
 
+    @property
+    def supports_tools(self) -> bool:
+        """Returns True if this route supports agent tool execution."""
+        return False
+
     def supports_model(self, model: str) -> bool:
         """Returns True if this route supports the given model name."""
         if self.name.lower() == "agy" and get_harness_path() is None:

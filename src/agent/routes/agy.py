@@ -10,6 +10,10 @@ class AgyRoute(BaseRoute):
         return "agy"
 
     @property
+    def supports_tools(self) -> bool:
+        return True
+
+    @property
     def default_status(self) -> RouteStatus:
         return RouteStatus.PRIMARY
 

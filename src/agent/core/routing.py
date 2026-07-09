@@ -322,7 +322,7 @@ class RoutingEngine:
 
         routes = self.resolve_routes(model, task_priority)
         if disable_agy:
-            routes = [r for r in routes if r.name != "agy"]
+            routes = [r for r in routes if not r.supports_tools]
         if not routes:
             raise RuntimeError(f"No active routes support the model '{model}' for task priority {task_priority.name} (disable_agy={disable_agy})")
 

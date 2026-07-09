@@ -1,6 +1,7 @@
 import os
 os.environ["ADA_DISABLE_SANDBOX"] = "1"
 os.environ["TESTING"] = "1"
+os.environ["ADA_ALLOW_TEST_BYPASS"] = "1"
 import sys
 from pathlib import Path
 project_root = str(Path(__file__).resolve().parent.parent)

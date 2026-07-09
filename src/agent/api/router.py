@@ -96,7 +96,7 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
 
 
     # Unit testing context: allow testclient loopback bypass if explicitly configured
-    if os.environ.get("TESTING") == "1" and (not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")):
+    if os.environ.get("TESTING") == "1" and os.environ.get("ADA_ALLOW_TEST_BYPASS") == "1" and (not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")):
         return credentials
 
     # Secure Service-to-Service: authenticate using X-Signature and X-Timestamp headers
