@@ -836,8 +836,10 @@ You MUST end your response with a JSON block in the following format:
                 with open(file_dest, "wb") as f:
                     f.write(content_bytes)
             
-            # Write review report directly to destination folder (outside of signature-verified set)
-            review_dest = dest_folder / "security_review.txt"
+            # Write review report to sibling reports folder (completely outside of skill directory)
+            reports_dir = dest_folder.parent.parent / "reports" / "skills"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            review_dest = reports_dir / f"{clean_name}_security_review.txt"
             with open(review_dest, "w", encoding="utf-8") as f:
                 f.write(combined_review)
 

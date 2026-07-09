@@ -22,7 +22,7 @@ def _calculate_skill_hash(src_folder: Path) -> bytes:
     for root, dirs, files in os.walk(src_folder):
         dirs[:] = [d for d in dirs if not d.startswith('.')]
         for f in files:
-            if f not in ("signature.sig", "security_review.txt") and not f.startswith('.'):
+            if f != "signature.sig" and not f.startswith('.'):
                 file_paths.append(Path(root) / f)
                 
     file_paths.sort(key=lambda p: p.relative_to(src_folder))

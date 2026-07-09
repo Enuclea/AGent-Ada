@@ -154,10 +154,12 @@ async def run_in_sandbox(
                         elif action == "error":
                             results["error"] = event.get("message")
                         elif action == "chat":
-                            # Handle LLM Chat proxy request safely (no tools)
+                            # Handle LLM Chat proxy request safely (no tools, static prompt, allowed models)
                             prompt = event.get("prompt")
-                            system_instructions = event.get("system_instructions")
+                            system_instructions = None
                             model = event.get("model") or "gemini-2.5-flash"
+                            if model not in ("gemini-2.5-flash", "gemini-3.5-flash", "claude-sonnet-4.6"):
+                                model = "gemini-2.5-flash"
                             
                             response_text = ""
                             try:
