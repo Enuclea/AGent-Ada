@@ -81,29 +81,35 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
     await asyncio.to_thread(_run)
 
 async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, system_instructions: Optional[str] = None) -> str:
-    from google.antigravity import Agent, LocalAgentConfig
-    from google.antigravity.types import CapabilitiesConfig
+    import httpx
     import os
 
-    # Ensure a dummy key is set so Pydantic validation passes
-    os.environ.setdefault("GEMINI_API_KEY", "keyless-dummy-key")
+    url = "http://localhost:11435/api/generate"
+    headers = {
+        "Authorization": "Bearer admin@Win2aplin.",
+        "Content-Type": "application/json"
+    }
 
     target_model = "gemini-2.5-flash"
     if model_name and "gemini" in model_name.lower():
         target_model = model_name
 
-    config = LocalAgentConfig(
-        model=target_model,
-        capabilities=CapabilitiesConfig(
-            enabled_tools=[]
-        ),
-        policies=[],
-        tools=[],
-        system_instructions=system_instructions
-    )
-    async with Agent(config) as agent:
-        resp = await agent.chat(prompt)
-        return await resp.text()
+    payload = {
+        "model": target_model,
+        "prompt": prompt,
+        "system": system_instructions,
+        "stream": False
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, headers=headers, json=payload, timeout=60.0)
+            if resp.status_code != 200:
+                raise RuntimeError(f"Keyless proxy returned status {resp.status_code}: {resp.text}")
+            data = resp.json()
+            return data.get("response", "")
+    except Exception as e:
+        raise RuntimeError(f"Failed to communicate with keyless proxy: {e}")
 
 class OllamaChatMessage(BaseModel):
     role: str
