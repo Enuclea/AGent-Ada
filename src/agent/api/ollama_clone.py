@@ -81,49 +81,23 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
     await asyncio.to_thread(_run)
 
 async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, system_instructions: Optional[str] = None) -> str:
-    import os
-    from agent.routes.base import get_harness_path
-
-    harness_path = get_harness_path() or "agy"
+    from agent.core.keyless import KeylessAgyAgent
 
     target_model = "gemini-3.5-flash"
     if model_name:
         target_model = model_name
 
     # Build the prompt with system instructions.
-    # Note: agy injects its own Antigravity identity which takes precedence,
-    # but the no-tools constraint still helps shape the response.
     full_prompt = prompt
     if system_instructions:
         full_prompt = f"[Context: {system_instructions}]\n\n{prompt}"
 
-    cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions", "--model", target_model]
-
-    sub_env = dict(os.environ)
-    sub_env["PYTHONUNBUFFERED"] = "1"
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=sub_env
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120.0)
-
-        if proc.returncode == 0:
-            return stdout.decode("utf-8", errors="replace").strip()
-        else:
-            err = stderr.decode("utf-8", errors="replace").strip()
-            raise RuntimeError(f"agy exited with code {proc.returncode}: {err}")
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
-        raise RuntimeError("agy execution timed out after 120 seconds")
+    agent = KeylessAgyAgent()
+    response_text = await agent._call_direct_api(target_model, full_prompt)
+    if not response_text:
+        raise RuntimeError("Direct API call returned empty response or failed.")
+        
+    return response_text
 
 class OllamaChatMessage(BaseModel):
     role: str
@@ -213,27 +187,41 @@ async def head_root_compatibility():
 def verify_sandbox_review_mode(
     x_ada_mode: Optional[str] = Header(None, alias="X-Ada-Mode"),
     mode: Optional[str] = Query(None)
-):
-    """Bypasses strict enforcement to allow standard client integrations."""
-    pass
+) -> bool:
+    """Checks if the request is in sandbox-review mode."""
+    return x_ada_mode == "sandbox-review" or mode == "review"
 
 # Register routes for both /api/ollama/api/chat and /api/ollama/chat formats
 @app.post("/api/ollama/api/chat")
 @app.post("/api/ollama/chat")
 async def ollama_chat_endpoint(
-    req: OllamaChatRequest
+    req: OllamaChatRequest,
+    is_review: bool = Depends(verify_sandbox_review_mode)
 ):
+    # Enforce maximum prompt payload size to prevent memory exhaustion DoS
+    MAX_PROMPT_SIZE = 1_000_000 # 1MB
+    try:
+        payload_size = len(req.model_dump_json())
+    except Exception:
+        payload_size = len(str(req))
+    if payload_size > MAX_PROMPT_SIZE:
+        raise HTTPException(status_code=413, detail="Payload too large")
+
     if not req.messages:
         raise HTTPException(status_code=400, detail="messages array cannot be empty")
     
     prompt_parts = []
-    system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
+    if is_review:
+        system_instructions = REVIEW_SYSTEM_PROMPT
+    else:
+        system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
     
     for msg in req.messages:
         role = msg.role.strip().lower()
         content = msg.content
         if role == "system":
-            system_instructions = content
+            if not is_review:
+                system_instructions = content
         elif role == "user":
             prompt_parts.append(f"User: {content}")
         elif role in ("assistant", "model"):
@@ -242,19 +230,19 @@ async def ollama_chat_endpoint(
     prompt = "\n".join(prompt_parts)
     
     # Model validation / allowlist enforcement
-    allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini"}
+    allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini", "llama3"}
     model_name = req.model
     if model_name.startswith("ollama/"):
         model_name = model_name[7:]
     if ":" in model_name:
         model_name = model_name.split(":")[0]
     # Normalize common aliases
-    if model_name in ("gemini", "gemini-2.5-flash"):
+    if model_name in ("gemini", "gemini-2.5-flash", "llama3"):
         model_name = "gemini-3.5-flash"
     elif model_name in ("claude",):
         model_name = "claude-sonnet-4.6"
     if model_name not in allowed_models:
-        model_name = "gemini-3.5-flash"
+        raise HTTPException(status_code=400, detail=f"Model '{req.model}' is not supported")
     
     try:
         response_text = await execute_keyless_gemini(
@@ -288,26 +276,39 @@ async def ollama_chat_endpoint(
 @app.post("/api/ollama/generate")
 @app.post("/api/generate")
 async def ollama_generate_endpoint(
-    req: OllamaGenerateRequest
+    req: OllamaGenerateRequest,
+    is_review: bool = Depends(verify_sandbox_review_mode)
 ):
+    # Enforce maximum prompt payload size to prevent memory exhaustion DoS
+    MAX_PROMPT_SIZE = 1_000_000 # 1MB
+    try:
+        payload_size = len(req.model_dump_json())
+    except Exception:
+        payload_size = len(str(req))
+    if payload_size > MAX_PROMPT_SIZE:
+        raise HTTPException(status_code=413, detail="Payload too large")
+
     if not req.prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
     # Model validation / allowlist enforcement
-    allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini"}
+    allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini", "llama3"}
     model_name = req.model
     if model_name.startswith("ollama/"):
         model_name = model_name[7:]
     if ":" in model_name:
         model_name = model_name.split(":")[0]
     # Normalize common aliases
-    if model_name in ("gemini", "gemini-2.5-flash"):
+    if model_name in ("gemini", "gemini-2.5-flash", "llama3"):
         model_name = "gemini-3.5-flash"
     elif model_name in ("claude",):
         model_name = "claude-sonnet-4.6"
     if model_name not in allowed_models:
-        model_name = "gemini-3.5-flash"
+        raise HTTPException(status_code=400, detail=f"Model '{req.model}' is not supported")
         
-    system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
+    if is_review:
+        system_instructions = REVIEW_SYSTEM_PROMPT
+    else:
+        system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
         
     try:
         response_text = await execute_keyless_gemini(

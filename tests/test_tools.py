@@ -299,7 +299,7 @@ def test_repository_skills(temp_skills_dir, mock_external_dirs):
     # Verify install_repository_skill
     with mock.patch.dict("os.environ", {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
         with mock.patch("agent.execution.tools.security._verify_in_memory_signature", return_value=True), \
-             mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value="DECISION: APPROVED"):
+             mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value='{"safe": true, "findings": [], "requires_hil": false, "proceed_recommended": true}'):
             import asyncio
             install_res = asyncio.run(tools.install_repository_skill("apple-notes"))
     assert "Successfully downloaded and installed skill" in install_res
@@ -393,7 +393,7 @@ def test_install_repository_skill_hitl(temp_skills_dir, mock_external_dirs):
     """Test Human-in-the-loop (HITL) prompt and confirmation mechanism."""
     async def run_test():
         with mock.patch("agent.execution.tools.security._verify_in_memory_signature", return_value=True), \
-             mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value="DECISION: APPROVED"):
+             mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value='{"safe": true, "findings": [], "requires_hil": false, "proceed_recommended": true}'):
             hermes_path = mock_external_dirs["hermes_skills"]
             skill_folder = hermes_path / "test-hitl"
             skill_folder.mkdir(parents=True, exist_ok=True)

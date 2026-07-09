@@ -535,24 +535,10 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     import urllib.parse
     import posixpath
     
-    if '\\' in skill_name or '\0' in skill_name or '..' in skill_name or '/' in skill_name:
-        return "Error: Directory traversal attempt detected."
-        
-    # Enforce strict posixpath normalization and deny traversal segments
-    clean_skill_name = posixpath.normpath(skill_name).lstrip('/')
-    if '..' in clean_skill_name or '/' in clean_skill_name or clean_skill_name != skill_name:
-        return "Error: Directory traversal attempt detected."
-        
-    if any(unicodedata.category(c).startswith('C') for c in skill_name):
-        return "Error: Directory traversal attempt detected."
-    decoded_name = urllib.parse.unquote(skill_name)
-    normalized_name = unicodedata.normalize('NFKC', decoded_name).replace('\\', '/').replace('\0', '')
-    if ".." in normalized_name or "/" in normalized_name or "..." in normalized_name:
-        return "Error: Directory traversal attempt detected."
-    if not normalized_name.isascii() or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$', normalized_name):
+    if not skill_name.isascii() or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$', skill_name):
         return "Error: Directory traversal attempt detected."
 
-    clean_name = normalized_name
+    clean_name = skill_name
 
     try:
         dest_folder = (tools.SKILLS_DIR / clean_name).resolve()
@@ -588,14 +574,27 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     old_umask = os.umask(0o077)
     try:
         temp_dir = tempfile.mkdtemp(prefix="skill_install_", suffix=os.urandom(8).hex())
+        import stat
+        os.chmod(temp_dir, stat.S_IRWXU) # Secure 0700 permissions explicitly
         temp_path = Path(temp_dir)
     finally:
         os.umask(old_umask)
 
     try:
         if not info.get("remote") and "path" in info and info["path"]:
-            # Local skill
             src_folder = Path(info["path"])
+            # Forbid symlinks in local skill repository to prevent symlink traversal attacks
+            try:
+                for root, dirs, files in os.walk(src_folder, followlinks=False):
+                    for d in dirs:
+                        if os.path.islink(os.path.join(root, d)):
+                            return "Error: Symlink detected in skill directory. Forbidding symlinks to prevent path traversal."
+                    for f in files:
+                        if os.path.islink(os.path.join(root, f)):
+                            return "Error: Symlink detected in skill directory. Forbidding symlinks to prevent path traversal."
+            except Exception as e:
+                return f"Error scanning local skill directory: {e}"
+
             try:
                 shutil.copytree(src_folder, temp_path, dirs_exist_ok=True)
             except Exception as e:
@@ -693,13 +692,10 @@ You MUST end your response with a JSON block in the following format:
             primary_requires_hil = lacie_json.get("requires_hil", False)
             primary_proceed = lacie_json.get("proceed_recommended", False)
         else:
-            # Fallback to legacy substring checks for backward compatibility (e.g. mock results in tests)
-            primary_safe = "DECISION: APPROVED" in lacie_review
-            primary_findings = []
-            if "DECISION: REJECTED" in lacie_review:
-                primary_findings.append("LLM reviewer rejected the skill")
-            primary_requires_hil = "DECISION: REJECTED" in lacie_review
-            primary_proceed = primary_safe
+            primary_safe = False
+            primary_findings = ["Failed to parse structured JSON from Lacie review"]
+            primary_requires_hil = True
+            primary_proceed = False
 
         if paranoid is None:
             is_paranoid = os.environ.get("ADA_PARANOID_MODE") == "1"
@@ -761,12 +757,10 @@ You MUST end your response with a JSON block in the following format:
                 secondary_requires_hil = claude_json.get("requires_hil", False)
                 secondary_proceed = claude_json.get("proceed_recommended", False)
             else:
-                secondary_safe = "DECISION: APPROVED" in claude_review
-                secondary_findings = []
-                if "DECISION: REJECTED" in claude_review:
-                    secondary_findings.append("Claude reviewer rejected the skill")
-                secondary_requires_hil = "DECISION: REJECTED" in claude_review
-                secondary_proceed = secondary_safe
+                secondary_safe = False
+                secondary_findings = ["Failed to parse structured JSON from Claude roundtable"]
+                secondary_requires_hil = True
+                secondary_proceed = False
 
         if requires_secondary:
             combined_review = f"=== Lacie (Gemini) Review ===\n{lacie_review}\n\n=== Claude (agy) Review ===\n{claude_review}"

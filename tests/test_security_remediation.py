@@ -53,7 +53,7 @@ async def test_local_skill_signature_enforcement():
         
         with mock.patch("agent.tools._find_repository_skills", return_value=local_skill_info), \
              mock.patch("agent.execution.tools.security._verify_in_memory_signature", return_value=False), \
-             mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value="DECISION: APPROVED"), \
+             mock.patch("agent.execution.tools.system_tools.spawn_subagent", return_value='{"safe": true, "findings": [], "requires_hil": false, "proceed_recommended": true}'), \
              mock.patch.dict(os.environ, {"ADA_SKILL_INSTALL_CONFIRMED": "1"}):
              
              # Try installing the local skill — it must fail because signature verification returned False

@@ -182,6 +182,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ada-sandbox
+    env_file:
+      - .env
     restart: unless-stopped
     command: ["python", "workers/worker.py"]
     extra_hosts:
@@ -200,7 +202,7 @@ services:
       - WORKER_PORT=8051
       - OLLAMA_HOST=http://host.docker.internal:8000/api/ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", '{"model": "llama3", "prompt": "healthcheck"}', "http://host.docker.internal:8000/api/ollama/generate?mode=review"]
+      test: "curl -f -u admin:$$DASHBOARD_PASSWORD -X POST -H 'Content-Type: application/json' -d '{\"model\":\"llama3\",\"prompt\":\"healthcheck\"}' http://host.docker.internal:8000/api/ollama/generate"
       interval: 30s
       timeout: 10s
       retries: 3

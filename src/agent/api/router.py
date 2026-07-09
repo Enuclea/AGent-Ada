@@ -19,12 +19,22 @@ from agent import memory, tools
 from agent.core.scheduler import run_scheduler, run_quota_refresh_loop, ensure_default_scheduled_tasks
 
 # Generate or load the derived HMAC shared secret for service-to-service calls
-shared_secret = os.environ.get("INTERNAL_API_SECRET", "").encode()
-if not shared_secret:
-    dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
-    if dashboard_password == "admin":
-        print("[WARNING] Security alert: Secure service-to-service communication is using the default password 'admin' as secret. Please configure INTERNAL_API_SECRET or DASHBOARD_PASSWORD.")
-    shared_secret = hashlib.sha256(dashboard_password.encode()).digest()
+shared_secret_str = os.environ.get("INTERNAL_API_SECRET", "")
+dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "")
+is_testing = os.environ.get("TESTING") == "1"
+
+if not is_testing:
+    if not dashboard_password or dashboard_password == "admin":
+        raise RuntimeError(
+            "CRITICAL SECURITY EXCEPTION: Secure execution requires a non-default DASHBOARD_PASSWORD. "
+            "Please configure DASHBOARD_PASSWORD in production environment."
+        )
+
+if not shared_secret_str:
+    pwd = dashboard_password or "admin"
+    shared_secret = hashlib.sha256(pwd.encode()).digest()
+else:
+    shared_secret = shared_secret_str.encode()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -82,6 +92,8 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
     # Bypass health and status checks
     if request.url.path in ("/health", "/health/", "/api/status", "/api/status/"):
         return credentials
+
+
 
     # Unit testing context: allow testclient loopback bypass if explicitly configured
     if os.environ.get("TESTING") == "1" and (not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")):
