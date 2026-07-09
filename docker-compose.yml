@@ -176,3 +176,34 @@ services:
       - SYS_ADMIN
     depends_on:
       - ada-core
+
+  ada-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ada-sandbox
+    restart: unless-stopped
+    command: ["python", "workers/worker.py"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.5
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HUB_URL=http://host.docker.internal:8000
+      - WORKER_ID=ada-sandbox-worker
+      - WORKER_PORT=8051
+      - OLLAMA_HOST=http://host.docker.internal:8000/api/ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", '{"model": "llama3", "prompt": "healthcheck"}', "http://host.docker.internal:8000/api/ollama/generate?mode=review"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - ada-core
+

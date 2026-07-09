@@ -287,6 +287,7 @@ class RoutingEngine:
         timeout: Optional[float] = None,
         conversation_id: Optional[str] = None,
         task_priority: TaskPriority = TaskPriority.INTERACTIVE,
+        disable_agy: bool = False,
     ) -> str:
         """Runs execution sequence across eligible routes until one succeeds.
 
@@ -320,8 +321,10 @@ class RoutingEngine:
                 print(f"[ROUTING: CACHE] Cache retrieval error: {e}")
 
         routes = self.resolve_routes(model, task_priority)
+        if disable_agy:
+            routes = [r for r in routes if r.name != "agy"]
         if not routes:
-            raise RuntimeError(f"No active routes support the model '{model}' for task priority {task_priority.name}")
+            raise RuntimeError(f"No active routes support the model '{model}' for task priority {task_priority.name} (disable_agy={disable_agy})")
 
         # Group routes by priority tier
         from collections import defaultdict

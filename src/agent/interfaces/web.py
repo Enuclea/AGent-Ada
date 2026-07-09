@@ -16,6 +16,7 @@ import agent.api.subagents
 import agent.api.skills
 import agent.api.plugins
 import agent.api.workers
+import agent.api.ollama_clone
 
 # Expose cron/scheduler utilities for backward compatibility
 from agent.core.scheduler import get_next_cron_run, ensure_default_scheduled_tasks, fetch_real_quotas_sync, discover_language_server

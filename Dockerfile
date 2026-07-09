@@ -18,21 +18,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create data directory and set permissions
 RUN mkdir -p /data && chown -R nobody:nogroup /data /app
 
-# Copy package management files and source code first
+# Copy package management files first
 COPY pyproject.toml README.md ./
-COPY src/ ./src/
-COPY enuclea/ ./enuclea/
-COPY discord/ ./discord/
+
+# Create dummy package structure to allow dependency installation caching
+RUN mkdir -p src/agent && touch src/agent/__init__.py
 
 # Set Playwright browsers path to a shared location
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Install the dependencies
+# Install dependencies and Playwright browser (cached unless pyproject.toml changes)
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -e . && \
     mkdir -p /ms-playwright && \
     playwright install --with-deps chromium && \
     chmod -R 777 /ms-playwright
+
+# Copy the actual source code and other directories
+COPY src/ ./src/
+COPY enuclea/ ./enuclea/
+COPY discord/ ./discord/
+COPY workers/ ./workers/
 
 # Set ownership of all copied files to nobody
 RUN chown -R nobody:nogroup /app
