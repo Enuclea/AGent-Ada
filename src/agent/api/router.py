@@ -138,7 +138,11 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
     # Basic Authentication for standard browser / dashboard clients
     correct_username = os.environ.get("DASHBOARD_USERNAME", "admin")
     correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
-    if not credentials or credentials.username != correct_username or credentials.password != correct_password:
+    
+    username_ok = hmac.compare_digest(credentials.username.encode(), correct_username.encode()) if credentials else False
+    password_ok = hmac.compare_digest(credentials.password.encode(), correct_password.encode()) if credentials else False
+    
+    if not credentials or not username_ok or not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
