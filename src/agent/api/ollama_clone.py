@@ -81,35 +81,47 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
     await asyncio.to_thread(_run)
 
 async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, system_instructions: Optional[str] = None) -> str:
-    import httpx
     import os
+    from agent.routes.base import get_harness_path
 
-    url = "http://localhost:11435/api/generate"
-    headers = {
-        "Authorization": "Bearer admin@Win2aplin.",
-        "Content-Type": "application/json"
-    }
+    harness_path = get_harness_path() or "agy"
 
-    target_model = "gemini-2.5-flash"
-    if model_name and "gemini" in model_name.lower():
+    target_model = "gemini-3.5-flash"
+    if model_name:
         target_model = model_name
 
-    payload = {
-        "model": target_model,
-        "prompt": prompt,
-        "system": system_instructions,
-        "stream": False
-    }
+    # Build the prompt with optional system instructions
+    full_prompt = prompt
+    if system_instructions:
+        full_prompt = f"[System Instructions]\n{system_instructions}\n\n[User Prompt]\n{prompt}"
+
+    cmd = [harness_path, "-p", full_prompt, "--dangerously-skip-permissions", "--model", target_model]
+
+    sub_env = dict(os.environ)
+    sub_env["PYTHONUNBUFFERED"] = "1"
 
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, headers=headers, json=payload, timeout=60.0)
-            if resp.status_code != 200:
-                raise RuntimeError(f"Keyless proxy returned status {resp.status_code}: {resp.text}")
-            data = resp.json()
-            return data.get("response", "")
-    except Exception as e:
-        raise RuntimeError(f"Failed to communicate with keyless proxy: {e}")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=sub_env
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+
+        if proc.returncode == 0:
+            return stdout.decode("utf-8", errors="replace").strip()
+        else:
+            err = stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"agy exited with code {proc.returncode}: {err}")
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        raise RuntimeError("agy execution timed out after 120 seconds")
 
 class OllamaChatMessage(BaseModel):
     role: str
@@ -126,6 +138,16 @@ class OllamaGenerateRequest(BaseModel):
     prompt: str
     system: Optional[str] = None
     stream: Optional[bool] = True
+
+OLLAMA_SYSTEM_PROMPT = (
+    "You are Gemini, a large language model built by Google. "
+    "You are operating in a text-only conversational mode with no access to tools, "
+    "code execution, file operations, web browsing, or any external actions. "
+    "You cannot run code, create files, search the internet, or interact with any systems. "
+    "Answer questions directly and conversationally using only your training knowledge. "
+    "Be helpful, accurate, and concise. If asked to perform an action you cannot do, "
+    "politely explain that you are in a text-only mode without those capabilities."
+)
 
 REVIEW_SYSTEM_PROMPT = (
     "You are a neutral code analysis engine. Analyze the given code or inputs strictly "
@@ -203,7 +225,7 @@ async def ollama_chat_endpoint(
         raise HTTPException(status_code=400, detail="messages array cannot be empty")
     
     prompt_parts = []
-    system_instructions = req.system or None
+    system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
     
     for msg in req.messages:
         role = msg.role.strip().lower()
@@ -218,14 +240,19 @@ async def ollama_chat_endpoint(
     prompt = "\n".join(prompt_parts)
     
     # Model validation / allowlist enforcement
-    allowed_models = {"gemini-2.5-flash", "llama3", "gemma", "ollama/gemma", "ollama/llama3"}
+    allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini"}
     model_name = req.model
     if model_name.startswith("ollama/"):
         model_name = model_name[7:]
     if ":" in model_name:
         model_name = model_name.split(":")[0]
+    # Normalize common aliases
+    if model_name in ("gemini", "gemini-2.5-flash"):
+        model_name = "gemini-3.5-flash"
+    elif model_name in ("claude",):
+        model_name = "claude-sonnet-4.6"
     if model_name not in allowed_models:
-        model_name = "gemini-2.5-flash"
+        model_name = "gemini-3.5-flash"
     
     try:
         response_text = await execute_keyless_gemini(
@@ -264,16 +291,21 @@ async def ollama_generate_endpoint(
     if not req.prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
     # Model validation / allowlist enforcement
-    allowed_models = {"gemini-2.5-flash", "llama3", "gemma", "ollama/gemma", "ollama/llama3"}
+    allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini"}
     model_name = req.model
     if model_name.startswith("ollama/"):
         model_name = model_name[7:]
     if ":" in model_name:
         model_name = model_name.split(":")[0]
+    # Normalize common aliases
+    if model_name in ("gemini", "gemini-2.5-flash"):
+        model_name = "gemini-3.5-flash"
+    elif model_name in ("claude",):
+        model_name = "claude-sonnet-4.6"
     if model_name not in allowed_models:
-        model_name = "gemini-2.5-flash"
+        model_name = "gemini-3.5-flash"
         
-    system_instructions = req.system or None
+    system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
         
     try:
         response_text = await execute_keyless_gemini(
@@ -306,48 +338,33 @@ async def ollama_tags_endpoint():
     return {
         "models": [
             {
-                "name": "gemini-2.5-flash:latest",
-                "model": "gemini-2.5-flash:latest",
+                "name": "gemini-3.5-flash:latest",
+                "model": "gemini-3.5-flash:latest",
                 "modified_at": "2026-07-09T00:00:00Z",
-                "size": 4700000000,
+                "size": 0,
                 "digest": "sha256:8a156e54e4f2b3e8e19c00bcf9e6e12e022f46e65b75b63bc58d4a990a07156",
                 "details": {
                     "parent_model": "",
-                    "format": "gguf",
+                    "format": "api",
                     "family": "gemini",
                     "families": ["gemini"],
                     "parameter_size": "unknown",
-                    "quantization_level": "unknown"
+                    "quantization_level": "N/A"
                 }
             },
             {
-                "name": "llama3:latest",
-                "model": "llama3:latest",
+                "name": "claude-sonnet-4.6:latest",
+                "model": "claude-sonnet-4.6:latest",
                 "modified_at": "2026-07-09T00:00:00Z",
-                "size": 4700000000,
+                "size": 0,
                 "digest": "sha256:a406579be42f2b3e8e19c00bcf9e6e12e022f46e65b75b63bc58d4a990a07156",
                 "details": {
                     "parent_model": "",
-                    "format": "gguf",
-                    "family": "llama",
-                    "families": ["llama"],
-                    "parameter_size": "8B",
-                    "quantization_level": "Q4_K_M"
-                }
-            },
-            {
-                "name": "gemma:latest",
-                "model": "gemma:latest",
-                "modified_at": "2026-07-09T00:00:00Z",
-                "size": 4700000000,
-                "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "details": {
-                    "parent_model": "",
-                    "format": "gguf",
-                    "family": "gemma",
-                    "families": ["gemma"],
-                    "parameter_size": "7B",
-                    "quantization_level": "Q4_K_M"
+                    "format": "api",
+                    "family": "claude",
+                    "families": ["claude"],
+                    "parameter_size": "unknown",
+                    "quantization_level": "N/A"
                 }
             }
         ]
@@ -360,14 +377,15 @@ class OllamaShowRequest(BaseModel):
 @app.post("/api/ollama/api/show")
 @app.post("/api/show")
 async def ollama_show_endpoint(req: OllamaShowRequest):
+    model_family = "gemini" if "gemini" in req.name.lower() else "claude"
     return {
-        "license": "Google/Meta License",
+        "license": "Google License" if model_family == "gemini" else "Anthropic License",
         "modelfile": f"FROM {req.name}",
         "parameters": "",
         "template": "{{ .System }}\n{{ .Prompt }}",
         "details": {
-            "format": "gguf",
-            "family": "llama"
+            "format": "api",
+            "family": model_family
         }
     }
 

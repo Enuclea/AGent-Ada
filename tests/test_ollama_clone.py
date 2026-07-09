@@ -21,7 +21,7 @@ def setup_env():
 
 def test_ollama_generate_endpoint_success():
     payload = {
-        "model": "llama3",
+        "model": "gemini-3.5-flash",
         "prompt": "Test Generate Prompt",
         "system": "Test System Instructions",
         "stream": False
@@ -31,18 +31,18 @@ def test_ollama_generate_endpoint_success():
         resp = client.post("/api/ollama/api/generate", json=payload, headers=headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert data["model"] == "llama3"
+        assert data["model"] == "gemini-3.5-flash"
         assert data["response"] == "Test Generate Answer"
         assert data["done"] is True
         mock_exec.assert_called_once_with(
             prompt="Test Generate Prompt",
-            model_name="llama3",
+            model_name="gemini-3.5-flash",
             system_instructions="Test System Instructions"
         )
 
 def test_ollama_chat_endpoint_success_query():
     payload = {
-        "model": "ollama/gemma",
+        "model": "claude-sonnet-4.6",
         "messages": [
             {"role": "system", "content": "Chat System"},
             {"role": "user", "content": "Hello User"},
@@ -56,19 +56,19 @@ def test_ollama_chat_endpoint_success_query():
         resp = client.post("/api/ollama/chat?mode=review", json=payload)
         assert resp.status_code == 200
         data = resp.json()
-        assert data["model"] == "ollama/gemma"
+        assert data["model"] == "claude-sonnet-4.6"
         assert data["message"]["role"] == "assistant"
         assert data["message"]["content"] == "Chat Answer"
         assert data["done"] is True
         mock_exec.assert_called_once_with(
             prompt=expected_prompt,
-            model_name="gemma",
+            model_name="claude-sonnet-4.6",
             system_instructions="Chat System"
         )
 
 def test_ollama_missing_mode_header_and_query():
     payload = {
-        "model": "llama3",
+        "model": "gemini-3.5-flash",
         "prompt": "Test Prompt",
         "stream": False
     }
