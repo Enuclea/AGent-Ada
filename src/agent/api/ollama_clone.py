@@ -93,7 +93,7 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
         full_prompt = f"[Context: {system_instructions}]\n\n{prompt}"
 
     agent = KeylessAgyAgent()
-    response_text = await agent._call_direct_api(target_model, full_prompt, bypass_sanitization=True)
+    response_text = await agent._call_direct_api(target_model, full_prompt, bypass_sanitization=False)
     if not response_text:
         raise RuntimeError("Direct API call returned empty response or failed.")
         
@@ -214,15 +214,12 @@ async def ollama_chat_endpoint(
     if is_review:
         system_instructions = REVIEW_SYSTEM_PROMPT
     else:
-        system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
+        system_instructions = OLLAMA_SYSTEM_PROMPT
     
     for msg in req.messages:
         role = msg.role.strip().lower()
         content = msg.content
-        if role == "system":
-            if not is_review:
-                system_instructions = content
-        elif role == "user":
+        if role == "user":
             prompt_parts.append(f"User: {content}")
         elif role in ("assistant", "model"):
             prompt_parts.append(f"Assistant: {content}")
@@ -308,7 +305,7 @@ async def ollama_generate_endpoint(
     if is_review:
         system_instructions = REVIEW_SYSTEM_PROMPT
     else:
-        system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
+        system_instructions = OLLAMA_SYSTEM_PROMPT
         
     try:
         response_text = await execute_keyless_gemini(

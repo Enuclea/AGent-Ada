@@ -158,8 +158,8 @@ def _sandbox_command_if_possible(command: str) -> List[str]:
         libc_path = ctypes.util.find_library("c")
         if libc_path:
             libc = ctypes.CDLL(libc_path, use_errno=True)
-            # Check SYS_LANDLOCK_CREATE_RULESET (syscall 445) support
-            abi = libc.syscall(445, 0, 0, 1 << 0)
+            # Check SYS_LANDLOCK_CREATE_RULESET (syscall 444) support
+            abi = libc.syscall(444, 0, 0, 1 << 0)
             if abi > 0:
                 python_exe = sys.executable or "python3"
                 landlock_runner = [
