@@ -166,14 +166,15 @@ def apply_landlock(workspace_dir: str) -> None:
 
     # Define path-specific rules: (path, allowed_access_mask)
     rules: List[Tuple[str, int]] = [
-        # Workspace is fully readable & writable
-        (workspace_dir_abs, handled_access_fs),
+        # Workspace is fully readable & writable, but cannot execute binaries
+        (workspace_dir_abs, handled_access_fs & ~LANDLOCK_ACCESS_FS_EXECUTE),
         # Unique sandbox temp directory is writable, but cannot execute binaries
         (sandbox_tmp, handled_access_fs & ~LANDLOCK_ACCESS_FS_EXECUTE),
         # Global /tmp is strictly read-only (no execution, no writes)
         ("/tmp", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
         # System paths are read-only / execute-only
         ("/usr", LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
+        # /lib and /lib64 are strictly read-only (no execution, no writes)
         ("/lib", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
         ("/lib64", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
         ("/bin", LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
@@ -181,10 +182,10 @@ def apply_landlock(workspace_dir: str) -> None:
         ("/etc", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR),
     ]
 
-    # Append runtime environments (like Docker containers and configs) if they exist
+    # Append runtime environments (like Docker containers and configs) if they exist (read-only, no execution)
     for opt_path in ("/data", "/app", str(Path.home())):
         if os.path.exists(opt_path) and opt_path not in [r[0] for r in rules]:
-            rules.append((opt_path, LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR))
+            rules.append((opt_path, LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR))
 
     # Register each rule directory by opening its file descriptor and adding it to the ruleset
     for path, mask in rules:

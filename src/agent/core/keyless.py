@@ -559,12 +559,13 @@ class KeylessAgyAgent:
         db_files.sort(key=os.path.getmtime, reverse=True)
         return os.path.basename(db_files[0])[:-3]
 
-    async def _call_direct_api(self, model_name: str, full_prompt: str) -> Optional[str]:
+    async def _call_direct_api(self, model_name: str, full_prompt: str, bypass_sanitization: bool = False) -> Optional[str]:
         """Attempt to call direct provider APIs if API keys are found in environment.
 
         Args:
             model_name: Name of the model to use.
             full_prompt: Fully formatted prompt text.
+            bypass_sanitization: Whether to skip input security validation (e.g. for safe reviews).
 
         Returns:
             The API string response if successful, or None on failure.
@@ -572,8 +573,11 @@ class KeylessAgyAgent:
         import aiohttp
         from agent.security.pipeline import SecurityPipeline
         
-        pipeline = SecurityPipeline()
-        sanitized_prompt = pipeline.sanitize_input(full_prompt)
+        if not bypass_sanitization:
+            pipeline = SecurityPipeline()
+            sanitized_prompt = pipeline.sanitize_input(full_prompt)
+        else:
+            sanitized_prompt = full_prompt
         
         # 1. Gemini direct API
         gemini_key: Optional[str] = os.environ.get("GEMINI_API_KEY")

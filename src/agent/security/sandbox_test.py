@@ -165,7 +165,8 @@ async def run_in_sandbox(
                                 response_text = await routing_engine.execute(
                                     prompt=prompt,
                                     model=model,
-                                    system_instructions=system_instructions
+                                    system_instructions=system_instructions,
+                                    disable_agy=True
                                 )
                                 ipc_response = {"response": response_text}
                             except Exception as re:

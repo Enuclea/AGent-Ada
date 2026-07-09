@@ -93,7 +93,7 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
         full_prompt = f"[Context: {system_instructions}]\n\n{prompt}"
 
     agent = KeylessAgyAgent()
-    response_text = await agent._call_direct_api(target_model, full_prompt)
+    response_text = await agent._call_direct_api(target_model, full_prompt, bypass_sanitization=True)
     if not response_text:
         raise RuntimeError("Direct API call returned empty response or failed.")
         

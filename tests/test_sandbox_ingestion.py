@@ -11,7 +11,7 @@ from unittest import mock
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
 
-from agent.security.sandbox_test import run_in_sandbox, sign_plugin_if_approved
+from agent.security.sandbox_test import run_in_sandbox, sign_plugin_if_approved, _probe_bwrap_capability
 
 @pytest.fixture
 def temp_plugin_dir():
@@ -21,8 +21,22 @@ def temp_plugin_dir():
     yield plugin_path
     shutil.rmtree(temp_dir, ignore_errors=True)
 
+@pytest.fixture
+def verify_bwrap():
+    bwrap_path = shutil.which("bwrap")
+    if not bwrap_path:
+        pytest.skip("bwrap executable not found. Skipping sandbox test.")
+    try:
+        supported = asyncio.run(_probe_bwrap_capability(bwrap_path))
+    except RuntimeError:
+        # If a loop is already running, run it via the current loop
+        loop = asyncio.get_event_loop()
+        supported = loop.run_until_complete(_probe_bwrap_capability(bwrap_path))
+    if not supported:
+        pytest.skip("bwrap namespace capability not supported on this kernel. Skipping sandbox test.")
+
 @pytest.mark.asyncio
-async def test_sandbox_execution_success(temp_plugin_dir):
+async def test_sandbox_execution_success(temp_plugin_dir, verify_bwrap):
     # Create a simple safe plugin function
     code = """
 def run_main():
@@ -38,7 +52,7 @@ def run_main():
     assert not results["error"]
 
 @pytest.mark.asyncio
-async def test_sandbox_execution_blocked_calls(temp_plugin_dir):
+async def test_sandbox_execution_blocked_calls(temp_plugin_dir, verify_bwrap):
     # Create a plugin attempting to open a network socket
     code = """
 import socket
@@ -56,7 +70,7 @@ def run_main():
     assert results["error"] is not None
 
 @pytest.mark.asyncio
-async def test_sandbox_ipc_llm_chat(temp_plugin_dir):
+async def test_sandbox_ipc_llm_chat(temp_plugin_dir, verify_bwrap):
     # Create a plugin that performs an LLM chat call
     code = """
 from agent.core.routing import routing_engine
@@ -75,7 +89,8 @@ async def run_main():
         mock_execute.assert_called_once_with(
             prompt="Query",
             model="gemini-2.5-flash",
-            system_instructions=None
+            system_instructions=None,
+            disable_agy=True
         )
 
 def test_sandbox_sign_plugin(temp_plugin_dir):
