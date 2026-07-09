@@ -96,7 +96,25 @@ async def get_or_create_agent(
     )
 
 @app.post("/api/chat")
-async def chat_endpoint(req: ChatRequest):
+async def chat_endpoint(request: Request):
+    body_bytes = await request.body()
+    try:
+        payload = json.loads(body_bytes)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    
+    if "messages" in payload:
+        from agent.api.ollama_clone import ollama_chat_endpoint, OllamaChatRequest
+        try:
+            req = OllamaChatRequest(**payload)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid Ollama chat request: {e}")
+        return await ollama_chat_endpoint(req)
+        
+    try:
+        req = ChatRequest(**payload)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Invalid ChatRequest: {e}")
     global active_agents
     active_agents = orchestration_service.active_agents
     lookup_id = req.session_id or "default"

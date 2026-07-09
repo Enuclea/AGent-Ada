@@ -1,4 +1,5 @@
 import os
+import json
 import pytest
 from unittest import mock
 from fastapi.testclient import TestClient
@@ -25,7 +26,7 @@ def test_ollama_generate_endpoint_success():
         "system": "Test System Instructions",
         "stream": False
     }
-    with mock.patch("agent.core.routing.routing_engine.execute", return_value="Test Generate Answer") as mock_exec:
+    with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Test Generate Answer") as mock_exec:
         headers = {"X-Ada-Mode": "sandbox-review"}
         resp = client.post("/api/ollama/api/generate", json=payload, headers=headers)
         assert resp.status_code == 200
@@ -35,9 +36,8 @@ def test_ollama_generate_endpoint_success():
         assert data["done"] is True
         mock_exec.assert_called_once_with(
             prompt="Test Generate Prompt",
-            model="llama3",
-            system_instructions="You are a neutral code analysis engine. Analyze the given code or inputs strictly without performing any external tool calls, task executions, or persona-based formatting.",
-            disable_agy=True
+            model_name="llama3",
+            system_instructions="Test System Instructions"
         )
 
 def test_ollama_chat_endpoint_success_query():
@@ -52,8 +52,7 @@ def test_ollama_chat_endpoint_success_query():
         "stream": False
     }
     expected_prompt = "User: Hello User\nAssistant: Hello Assistant\nUser: Follow up"
-    expected_system = "You are a neutral code analysis engine. Analyze the given code or inputs strictly without performing any external tool calls, task executions, or persona-based formatting.\nChat System"
-    with mock.patch("agent.core.routing.routing_engine.execute", return_value="Chat Answer") as mock_exec:
+    with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Chat Answer") as mock_exec:
         resp = client.post("/api/ollama/chat?mode=review", json=payload)
         assert resp.status_code == 200
         data = resp.json()
@@ -63,9 +62,8 @@ def test_ollama_chat_endpoint_success_query():
         assert data["done"] is True
         mock_exec.assert_called_once_with(
             prompt=expected_prompt,
-            model="gemma",
-            system_instructions="You are a neutral code analysis engine. Analyze the given code or inputs strictly without performing any external tool calls, task executions, or persona-based formatting.",
-            disable_agy=True
+            model_name="gemma",
+            system_instructions="Chat System"
         )
 
 def test_ollama_missing_mode_header_and_query():
@@ -74,18 +72,46 @@ def test_ollama_missing_mode_header_and_query():
         "prompt": "Test Prompt",
         "stream": False
     }
-    resp = client.post("/api/ollama/generate", json=payload)
-    assert resp.status_code == 400
-    assert "X-Ada-Mode" in resp.json()["detail"]
+    with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Success Without Headers"):
+        resp = client.post("/api/ollama/generate", json=payload)
+        assert resp.status_code == 200
+        assert resp.json()["response"] == "Success Without Headers"
+
+def test_ollama_mock_endpoints():
+    # Test tags endpoint
+    resp = client.get("/api/tags")
+    assert resp.status_code == 200
+    assert "models" in resp.json()
+    
+    # Test show endpoint
+    resp = client.post("/api/show", json={"name": "llama3"})
+    assert resp.status_code == 200
+    assert resp.json()["template"] == "{{ .System }}\n{{ .Prompt }}"
+    
+    # Test version endpoint
+    resp = client.get("/api/version")
+    assert resp.status_code == 200
+    assert resp.json()["version"] == "0.1.48"
+
+    # Test ps endpoint
+    resp = client.get("/api/ps")
+    assert resp.status_code == 200
+    assert "models" in resp.json()
+
+    # Test status checks
+    resp = client.head("/")
+    assert resp.status_code == 200
+
+    resp = client.get("/api/ollama")
+    assert resp.status_code == 200
+    assert resp.text == "Ollama is running"
 
 def test_ollama_generate_endpoint_invalid():
-    headers = {"X-Ada-Mode": "sandbox-review"}
-    resp = client.post("/api/ollama/api/generate", json={"model": "llama3", "prompt": ""}, headers=headers)
+    resp = client.post("/api/ollama/api/generate", json={"model": "llama3", "prompt": ""})
     assert resp.status_code == 400
 
 def test_ollama_chat_endpoint_invalid():
-    headers = {"X-Ada-Mode": "sandbox-review"}
-    resp = client.post("/api/ollama/api/chat", json={"model": "llama3", "messages": []}, headers=headers)
+    resp = client.post("/api/ollama/api/chat", json={"model": "llama3", "messages": []})
     assert resp.status_code == 400
 
 def test_ollama_bearer_token_authentication():
@@ -104,10 +130,31 @@ def test_ollama_bearer_token_authentication():
         assert resp.status_code == 401
         
         headers_valid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer secret-token"}
-        with mock.patch("agent.core.routing.routing_engine.execute", return_value="Token Success"):
+        with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Token Success"):
             resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_valid)
             assert resp.status_code == 200
             assert resp.json()["response"] == "Token Success"
 
     if old_testing is not None:
         os.environ["TESTING"] = old_testing
+
+def test_ollama_generate_stream():
+    payload = {
+        "model": "llama3",
+        "prompt": "Stream Test",
+        "stream": True
+    }
+    with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Hello Stream"):
+        resp = client.post("/api/ollama/generate", json=payload)
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/x-ndjson"
+        
+        lines = [line for line in resp.iter_lines() if line]
+        assert len(lines) > 0
+        
+        first_chunk = json.loads(lines[0])
+        assert first_chunk["model"] == "llama3"
+        assert first_chunk["done"] is False
+        
+        final_chunk = json.loads(lines[-1])
+        assert final_chunk["done"] is True

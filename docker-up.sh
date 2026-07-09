@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
+# If run with sudo, restore Sudo user's HOME to preserve credentials mapping
+if [ -n "$SUDO_USER" ] && [ "$HOME" = "/root" ]; then
+    USER_HOME=$(eval echo "~$SUDO_USER")
+    export HOME="$USER_HOME"
+fi
+
 # Determine the correct docker compose command to use
 DOCKER_CMD="docker compose"
 
