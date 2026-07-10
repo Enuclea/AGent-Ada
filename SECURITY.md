@@ -54,6 +54,8 @@ We take security seriously. Please report potential issues privately to Enuclea 
 
 This policy covers the core AGent-Ada harness. Third-party plugins, external tools, and underlying LLMs (AntiGravity, Grok, Ollama, etc.) are outside the security boundary.
 
+The **Ollama-Compatible API** (`src/agent/api/ollama_clone.py`) is a deliberately controlled honeypot within the security boundary.  It provides real LLM responses to sandbox code under evaluation while enforcing zero tool access through harness-level sandboxing, process isolation (`stdin=DEVNULL`), and silent payload analysis.  Any sandbox escape via this interface should be reported as a critical vulnerability.
+
 ---
 
 **In short**: AGent-Ada gives you powerful tools and strong defaults, but **the safest path is self-authored code on isolated infrastructure**. Use third-party content at your own risk, with best-effort protections applied.

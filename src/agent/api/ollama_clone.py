@@ -1,3 +1,52 @@
+"""Ollama-Compatible API Interface — Sandbox Evaluation Honeypot.
+
+This module implements an Ollama-compatible HTTP API that serves as a
+controlled observation endpoint for sandbox code evaluation.  It exposes
+the standard Ollama REST endpoints (/api/chat, /api/generate, /api/tags,
+etc.) so that code under evaluation can make LLM requests and receive
+genuine model responses — allowing normal execution flow to continue
+uninterrupted.
+
+Architecture & Purpose
+----------------------
+When evaluating untrusted code in the sandbox, the code may attempt to
+interact with an LLM.  Rather than blocking these requests or returning
+fake responses (which would alert the code that it is being evaluated),
+this interface provides real LLM completions through the keyless ``agy``
+harness while maintaining strict isolation:
+
+* **Real LLM responses** — Prompts are forwarded to the Gemini model via
+  the ``agy`` CLI binary, producing authentic completions.
+* **Zero tool access** — The ``agy`` binary is invoked in sandboxed,
+  non-interactive print mode (``--sandbox``, ``-p``) WITHOUT the
+  ``--dangerously-skip-permissions`` flag.  Since ``stdin`` is
+  ``/dev/null``, tool permission prompts can never be approved.
+  This makes the harness text-only regardless of prompt content.
+* **Silent security analysis** — Every request and response pair is
+  asynchronously scanned by ``quiet_security_analysis()`` for prompt
+  injection attempts, suspicious tool invocation patterns, sandbox
+  escape keywords, and unsafe code in extracted Python blocks.
+  Detections are logged to telemetry without alerting the caller.
+
+Security Model
+--------------
+The honeypot is sealed through three independent layers:
+
+1. **Harness-level denial**: ``--sandbox`` flag + no permission auto-approve.
+2. **Process isolation**: ``stdin=DEVNULL`` prevents any interactive approval.
+3. **Payload analysis**: Prompts and responses are scanned for AST violations,
+   suspicious system call patterns, and sandbox escape language.
+
+Endpoints
+---------
+- ``POST /api/chat``            — Ollama chat completions (streaming/non-streaming)
+- ``POST /api/generate``        — Ollama text generation (streaming/non-streaming)
+- ``GET  /api/tags``            — Model listing (returns allowed model catalog)
+- ``POST /api/show``            — Model metadata
+- ``GET  /api/version``         — Version compatibility
+- ``GET  /api/ps``              — Running models
+- ``HEAD /``                    — Health check (Ollama client compatibility)
+"""
 import time
 import asyncio
 import json

@@ -80,6 +80,22 @@ To protect your agents and system, all messages pass through an inline security 
 * **Output Redaction**: Automatically scrubs and redacts API keys, passwords, and sensitive environment secrets before responses are written or sent.
 * **Custom Route Loader Security**: Custom route modules are statically scanned to block world-writable permissions or unsafe system calls (`eval(`, `exec(`, `os.system(`, etc.).
 
+### 5. Ollama-Compatible API — Sandbox Evaluation Honeypot
+
+AGent-Ada exposes a full [Ollama-compatible REST API](src/agent/api/ollama_clone.py) (`/api/chat`, `/api/generate`, `/api/tags`, etc.) designed as a **controlled observation endpoint** for sandbox code evaluation.
+
+When evaluating untrusted code, the code may attempt to interact with an LLM.  Rather than blocking these requests (which would alert the code to the sandbox) or returning fabricated responses (which would break execution flow), this interface provides **real LLM completions** through the keyless `agy` harness while maintaining strict isolation:
+
+* **Genuine Model Responses**: Prompts are forwarded to Gemini via the `agy` CLI, producing authentic completions that allow normal code execution to continue uninterrupted.
+* **Zero Tool Access**: The `agy` binary is invoked with `--sandbox` (terminal restrictions) and **without** `--dangerously-skip-permissions`.  Since `stdin` is `/dev/null`, tool permission prompts can never be approved — the harness is text-only regardless of what the prompt requests.
+* **Silent Security Analysis**: Every request/response pair is asynchronously scanned for prompt injection attempts, suspicious tool invocation patterns (`subprocess`, `eval`, `exec`, sandbox escape language), and unsafe Python code blocks.  Detections are logged to telemetry without alerting the caller.
+* **Three-Layer Security Model**:
+  1. **Harness-level denial** — `--sandbox` flag + no permission auto-approve
+  2. **Process isolation** — `stdin=DEVNULL` prevents interactive tool approval
+  3. **Payload analysis** — AST safety checks, keyword scanning, and telemetry logging
+
+This makes the interface a transparent observation layer: malicious code gets real LLM responses but zero actual tool access, and every interaction is captured for security evaluation before code is promoted from the sandbox to production.
+
 ---
 
 ## 📐 System Architecture Diagram
