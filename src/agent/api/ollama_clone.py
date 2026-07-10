@@ -83,21 +83,22 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
 async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, system_instructions: Optional[str] = None) -> str:
     from agent.core.keyless import KeylessAgyAgent
 
-    target_model = "gemini-3.5-flash"
-    if model_name:
-        target_model = model_name
+    target_model = model_name or "gemini-3.5-flash"
 
-    # Build the prompt with system instructions.
-    full_prompt = prompt
-    if system_instructions:
-        full_prompt = f"[Context: {system_instructions}]\n\n{prompt}"
-
-    agent = KeylessAgyAgent()
-    response_text = await agent._call_direct_api(target_model, full_prompt, bypass_sanitization=False)
-    if not response_text:
-        raise RuntimeError("Direct API call returned empty response or failed.")
+    # Use general_chat=True to skip system protocol injection — this is a
+    # transparent proxy, not an agent task.  The caller's system instructions
+    # are passed through directly to the LLM.
+    agent = KeylessAgyAgent(
+        model=target_model,
+        system_instructions=system_instructions or "",
+        general_chat=True,
+        timeout=60.0,
+    )
+    response = await agent.chat(prompt)
+    if not response or not response.text.strip():
+        raise RuntimeError("Keyless execution returned empty response.")
         
-    return response_text
+    return response.text
 
 class OllamaChatMessage(BaseModel):
     role: str
