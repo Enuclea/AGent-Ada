@@ -170,24 +170,44 @@ async def get_discord_members():
         raise HTTPException(status_code=500, detail=f"Failed to retrieve Discord members: {e}")
 
 def load_modules():
-    modules_dir = Path(__file__).parent.parent / "static" / "modules"
-    if not modules_dir.exists():
-        return []
-    
     modules = []
-    for path in modules_dir.iterdir():
-        if path.is_dir():
-            config_file = path / "module.json"
-            if config_file.exists():
-                try:
-                    with open(config_file, "r") as f:
-                        data = json.load(f)
-                        data["id"] = path.name
-                        data.setdefault("enabled", True)
-                        if data.get("enabled"):
-                            modules.append(data)
-                except Exception as e:
-                    print(f"Error loading module config from {path}: {e}")
+    
+    # 1. Legacy: scan static/modules/ for module descriptors
+    modules_dir = Path(__file__).parent.parent / "static" / "modules"
+    if modules_dir.exists():
+        for path in modules_dir.iterdir():
+            if path.is_dir():
+                config_file = path / "module.json"
+                if config_file.exists():
+                    try:
+                        with open(config_file, "r") as f:
+                            data = json.load(f)
+                            data["id"] = path.name
+                            data.setdefault("enabled", True)
+                            if data.get("enabled"):
+                                modules.append(data)
+                    except Exception as e:
+                        print(f"Error loading module config from {path}: {e}")
+    
+    # 2. Plugins: scan active plugin directories for static/module.json
+    try:
+        from agent.core.plugins import plugin_manager, PluginState
+        for name, plugin in plugin_manager.plugins.items():
+            if plugin.state == PluginState.ACTIVE:
+                config_file = plugin.path / "static" / "module.json"
+                if config_file.exists():
+                    try:
+                        with open(config_file, "r") as f:
+                            data = json.load(f)
+                            data["id"] = name
+                            data.setdefault("enabled", True)
+                            if data.get("enabled"):
+                                modules.append(data)
+                    except Exception as e:
+                        print(f"Error loading plugin module config from {name}: {e}")
+    except Exception:
+        pass  # Plugin system not available
+    
     return modules
 
 @app.get("/api/modules")
