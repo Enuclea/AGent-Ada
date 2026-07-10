@@ -152,11 +152,12 @@ class SafetyVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         # Check direct calls
         if isinstance(node.func, ast.Name):
-            if node.func.id in FORBIDDEN_CALLABLE_PATHS:
-                if node.func.id in {"eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr", "vars", "globals", "locals"}:
-                    self.errors.append(f"Forbidden dynamic built-in: {node.func.id}()")
+            func_id = self.aliases.get(node.func.id, node.func.id)
+            if func_id in FORBIDDEN_CALLABLE_PATHS:
+                if func_id in {"eval", "exec", "compile", "__import__", "getattr", "setattr", "delattr", "hasattr", "vars", "globals", "locals"}:
+                    self.errors.append(f"Forbidden dynamic built-in: {func_id}()")
                 else:
-                    self.errors.append(f"Forbidden call: {node.func.id}()")
+                    self.errors.append(f"Forbidden call: {func_id}()")
                 
         # Resolve target function call path
         resolved_path = self.resolve_attr_path(node.func)

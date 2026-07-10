@@ -38,14 +38,7 @@ def _calculate_skill_hash(src_folder: Path) -> bytes:
             
     return hasher.digest()
 
-_TEST_KEY_SENTINEL = object()
 _additional_trusted_keys = []
-
-def add_test_trusted_key(sentinel, key_hex: str) -> None:
-    """Allows test suite to temporarily register additional trusted public keys for signature verification."""
-    if sentinel is _TEST_KEY_SENTINEL:
-        if key_hex not in _additional_trusted_keys:
-            _additional_trusted_keys.append(key_hex)
 
 def _verify_skill_signature(src_folder: Path) -> bool:
     sig_path = src_folder / "signature.sig"
@@ -109,7 +102,7 @@ def _verify_in_memory_signature(files_dict: dict) -> bool:
 
 from typing import List
 
-def _sandbox_command_if_possible(command: str) -> List[str]:
+def _sandbox_command_if_possible(command: str, require_network_isolation: bool = False) -> List[str]:
     """Wraps a shell command in bubblewrap or Landlock sandbox if available on Linux.
     
     Isolates file write access to the workspace and /tmp directories, and restricts
@@ -154,6 +147,13 @@ def _sandbox_command_if_possible(command: str) -> List[str]:
         ]
         return bwrap_args + ["--", "bash", "-c", command]
         
+    # If strict network isolation is required, we cannot fall back to Landlock (filesystem-only)
+    if require_network_isolation:
+        raise PermissionError(
+            "Security Exception: Sandbox environment could not be enforced with network isolation. "
+            "Bubblewrap (bwrap) is not available, and Landlock does not support network namespace isolation."
+        )
+
     # 2. Try Landlock (IMPORTANT: Landlock provides filesystem-only isolation.
     # Unlike Bubblewrap, it does NOT restrict network access. Commands running
     # under the Landlock fallback can still make outbound network requests.

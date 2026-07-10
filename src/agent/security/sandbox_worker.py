@@ -6,15 +6,24 @@ import types
 import asyncio
 from pathlib import Path
 
-# Transient IPC Token and Helper
+# 1. Immediately extract and validate the transient IPC Token
 IPC_TOKEN = None
+if "--token" in sys.argv:
+    try:
+        idx = sys.argv.index("--token")
+        IPC_TOKEN = sys.argv[idx + 1]
+        sys.argv.pop(idx)
+        sys.argv.pop(idx)
+    except (ValueError, IndexError):
+        pass
+
+if not IPC_TOKEN or len(IPC_TOKEN) < 16:
+    print("Sandbox security violation: Invalid or missing IPC token.", file=sys.stderr)
+    sys.exit(1)
 
 def send_ipc(action, **kwargs):
     payload = {"action": action, **kwargs}
-    if IPC_TOKEN:
-        sys.stdout.write(f"[IPC:{IPC_TOKEN}] " + json.dumps(payload) + "\n")
-    else:
-        sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.write(f"[IPC:{IPC_TOKEN}] " + json.dumps(payload) + "\n")
     sys.stdout.flush()
 
 # Defense-in-depth telemetry: Monkeypatches below are NOT a security boundary.
@@ -158,21 +167,6 @@ async def run_plugin(plugin_path_str: str, entrypoint_name: str, args_json: str)
         send_ipc("error", message=str(e), trace=error_details)
 
 if __name__ == "__main__":
-    token = None
-    if "--token" in sys.argv:
-        try:
-            idx = sys.argv.index("--token")
-            token = sys.argv[idx + 1]
-            sys.argv.pop(idx)
-            sys.argv.pop(idx)
-        except (ValueError, IndexError):
-            pass
-    IPC_TOKEN = token
-
-    # Strict token validation to prevent None or empty token bypass
-    if not IPC_TOKEN or len(IPC_TOKEN) < 16:
-        print("Sandbox security violation: Invalid or missing IPC token.", file=sys.stderr)
-        sys.exit(1)
 
     # Scrub environment of sensitive tokens/keys
     safe_env = {

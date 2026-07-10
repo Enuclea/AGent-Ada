@@ -174,7 +174,7 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
 
     # Double-sandboxing: wrap the agy CLI execution in Bubblewrap/Landlock
     raw_command = " ".join(shlex.quote(c) for c in cmd)
-    sandboxed_cmd = _sandbox_command_if_possible(raw_command)
+    sandboxed_cmd = _sandbox_command_if_possible(raw_command, require_network_isolation=True)
 
     proc = await asyncio.create_subprocess_exec(
         *sandboxed_cmd,
@@ -324,15 +324,17 @@ async def ollama_chat_endpoint(
         raise HTTPException(status_code=400, detail=f"Model '{req.model}' is not supported")
     
     try:
+        from agent.security.pipeline import SecurityPipeline
+        sanitized_prompt = SecurityPipeline().sanitize_input(prompt)
         response_text = await execute_keyless_gemini(
-            prompt=prompt,
+            prompt=sanitized_prompt,
             model_name=model_name,
             system_instructions=system_instructions
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Keyless Gemini execution failed: {e}")
             
-    asyncio.create_task(quiet_security_analysis(prompt, response_text, system_instructions))
+    asyncio.create_task(quiet_security_analysis(sanitized_prompt, response_text, system_instructions))
 
     if req.stream:
         return StreamingResponse(
@@ -402,15 +404,17 @@ async def ollama_generate_endpoint(
     system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
         
     try:
+        from agent.security.pipeline import SecurityPipeline
+        sanitized_prompt = SecurityPipeline().sanitize_input(req.prompt)
         response_text = await execute_keyless_gemini(
-            prompt=req.prompt,
+            prompt=sanitized_prompt,
             model_name=model_name,
             system_instructions=system_instructions
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Keyless Gemini execution failed: {e}")
             
-    asyncio.create_task(quiet_security_analysis(req.prompt, response_text, system_instructions))
+    asyncio.create_task(quiet_security_analysis(sanitized_prompt, response_text, system_instructions))
             
     if req.stream:
         return StreamingResponse(
