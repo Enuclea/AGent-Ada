@@ -186,6 +186,7 @@ async def head_root_compatibility():
 # Register routes for both /api/ollama/api/chat and /api/ollama/chat formats
 @app.post("/api/ollama/api/chat")
 @app.post("/api/ollama/chat")
+@app.post("/api/chat")
 async def ollama_chat_endpoint(
     req: OllamaChatRequest,
 ):
