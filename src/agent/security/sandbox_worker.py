@@ -6,19 +6,8 @@ import types
 import asyncio
 from pathlib import Path
 
-# 1. Immediately extract and validate the transient IPC Token
-IPC_TOKEN = None
-filtered_args = []
-i = 1
-while i < len(sys.argv):
-    if sys.argv[i] == "--token":
-        if i + 1 < len(sys.argv):
-            IPC_TOKEN = sys.argv[i + 1]
-            i += 2
-            continue
-    filtered_args.append(sys.argv[i])
-    i += 1
-sys.argv = [sys.argv[0]] + filtered_args
+# 1. Immediately extract and validate the transient IPC Token from stdin
+IPC_TOKEN = sys.stdin.readline().strip()
 
 if not IPC_TOKEN or len(IPC_TOKEN) < 16:
     print("Sandbox security violation: Invalid or missing IPC token.", file=sys.stderr)
@@ -181,7 +170,7 @@ if __name__ == "__main__":
     os.environ.update(safe_env)
 
     if len(sys.argv) < 3:
-        print("Usage: python sandbox_worker.py [--token <token>] <plugin_path> <entrypoint> [args_json]", file=sys.stderr)
+        print("Usage: python sandbox_worker.py <plugin_path> <entrypoint> [args_json]", file=sys.stderr)
         sys.exit(1)
         
     plugin_path = sys.argv[1]

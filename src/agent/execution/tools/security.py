@@ -33,8 +33,8 @@ def _calculate_skill_hash(src_folder: Path) -> bytes:
             with open(p, "rb") as f:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
-        except Exception:
-            pass
+        except Exception as e:
+            raise IOError(f"Failed to read file {p} during hash calculation: {e}")
             
     return hasher.digest()
 

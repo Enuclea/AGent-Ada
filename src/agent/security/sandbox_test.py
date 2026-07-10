@@ -109,7 +109,6 @@ async def run_in_sandbox(
             "--",
             sys.executable,
             "sandbox_worker.py",
-            "--token", sandbox_token,
             str(plugin_dest),
             entrypoint,
             args_json
@@ -122,6 +121,10 @@ async def run_in_sandbox(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
+        
+        # Write the transient token to stdin as the first line for bootstrap validation
+        proc.stdin.write((sandbox_token + "\n").encode("utf-8"))
+        await proc.stdin.drain()
         
         # 5. Handle IPC stream communication in the event loop
         async def process_stdout():
