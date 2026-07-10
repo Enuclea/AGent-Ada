@@ -20,6 +20,7 @@ def setup_env():
         os.environ.pop("TESTING", None)
 
 def test_ollama_generate_endpoint_success():
+    """Caller-provided system instructions are passed through transparently."""
     payload = {
         "model": "gemini-3.5-flash",
         "prompt": "Test Generate Prompt",
@@ -27,8 +28,7 @@ def test_ollama_generate_endpoint_success():
         "stream": False
     }
     with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Test Generate Answer") as mock_exec:
-        headers = {"X-Ada-Mode": "sandbox-review"}
-        resp = client.post("/api/ollama/api/generate", json=payload, headers=headers)
+        resp = client.post("/api/ollama/api/generate", json=payload)
         assert resp.status_code == 200
         data = resp.json()
         assert data["model"] == "gemini-3.5-flash"
@@ -40,11 +40,29 @@ def test_ollama_generate_endpoint_success():
             system_instructions="Test System Instructions"
         )
 
-def test_ollama_chat_endpoint_success_query():
+def test_ollama_generate_default_system_prompt():
+    """When no system field provided, falls back to OLLAMA_SYSTEM_PROMPT."""
+    from agent.api.ollama_clone import OLLAMA_SYSTEM_PROMPT
+    payload = {
+        "model": "gemini-3.5-flash",
+        "prompt": "Test Prompt",
+        "stream": False
+    }
+    with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Answer") as mock_exec:
+        resp = client.post("/api/ollama/generate", json=payload)
+        assert resp.status_code == 200
+        mock_exec.assert_called_once_with(
+            prompt="Test Prompt",
+            model_name="gemini-3.5-flash",
+            system_instructions=OLLAMA_SYSTEM_PROMPT
+        )
+
+def test_ollama_chat_endpoint_system_message_passthrough():
+    """System message from messages array is passed through to LLM."""
     payload = {
         "model": "claude-sonnet-4.6",
         "messages": [
-            {"role": "system", "content": "Chat System"},
+            {"role": "system", "content": "You are a Python expert."},
             {"role": "user", "content": "Hello User"},
             {"role": "assistant", "content": "Hello Assistant"},
             {"role": "user", "content": "Follow up"}
@@ -53,7 +71,7 @@ def test_ollama_chat_endpoint_success_query():
     }
     expected_prompt = "User: Hello User\nAssistant: Hello Assistant\nUser: Follow up"
     with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Chat Answer") as mock_exec:
-        resp = client.post("/api/ollama/chat?mode=review", json=payload)
+        resp = client.post("/api/ollama/chat", json=payload)
         assert resp.status_code == 200
         data = resp.json()
         assert data["model"] == "claude-sonnet-4.6"
@@ -63,10 +81,30 @@ def test_ollama_chat_endpoint_success_query():
         mock_exec.assert_called_once_with(
             prompt=expected_prompt,
             model_name="claude-sonnet-4.6",
-            system_instructions="Chat System"
+            system_instructions="You are a Python expert."
+        )
+
+def test_ollama_chat_endpoint_no_system_message():
+    """When no system message in messages array, falls back to OLLAMA_SYSTEM_PROMPT."""
+    from agent.api.ollama_clone import OLLAMA_SYSTEM_PROMPT
+    payload = {
+        "model": "gemini-3.5-flash",
+        "messages": [
+            {"role": "user", "content": "Just a question"}
+        ],
+        "stream": False
+    }
+    with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Answer") as mock_exec:
+        resp = client.post("/api/ollama/chat", json=payload)
+        assert resp.status_code == 200
+        mock_exec.assert_called_once_with(
+            prompt="User: Just a question",
+            model_name="gemini-3.5-flash",
+            system_instructions=OLLAMA_SYSTEM_PROMPT
         )
 
 def test_ollama_missing_mode_header_and_query():
+    """Requests without mode headers still work normally."""
     payload = {
         "model": "gemini-3.5-flash",
         "prompt": "Test Prompt",
@@ -131,11 +169,11 @@ def test_ollama_bearer_token_authentication():
                 "prompt": "Test Prompt",
                 "stream": False
             }
-            headers_invalid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer bad-token"}
+            headers_invalid = {"Authorization": "Bearer bad-token"}
             resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_invalid)
             assert resp.status_code == 401
             
-            headers_valid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer secret-token"}
+            headers_valid = {"Authorization": "Bearer secret-token"}
             with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Token Success"):
                 resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_valid)
                 assert resp.status_code == 200

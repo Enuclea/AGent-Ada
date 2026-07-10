@@ -2,7 +2,7 @@ import time
 import asyncio
 import json
 from datetime import datetime, timezone
-from fastapi import HTTPException, Depends, Header, Query, Request
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -125,10 +125,7 @@ OLLAMA_SYSTEM_PROMPT = (
     "politely explain that you are in a text-only mode without those capabilities."
 )
 
-REVIEW_SYSTEM_PROMPT = (
-    "You are a neutral code analysis engine. Analyze the given code or inputs strictly "
-    "without performing any external tool calls, task executions, or persona-based formatting."
-)
+
 
 async def chat_streamer(model_name: str, response_text: str):
     chunk_size = 10
@@ -184,19 +181,13 @@ async def ollama_status_check():
 async def head_root_compatibility():
     return PlainTextResponse("Ollama is running", status_code=200)
 
-def verify_sandbox_review_mode(
-    x_ada_mode: Optional[str] = Header(None, alias="X-Ada-Mode"),
-    mode: Optional[str] = Query(None)
-) -> bool:
-    """Checks if the request is in sandbox-review mode."""
-    return x_ada_mode == "sandbox-review" or mode == "review"
+
 
 # Register routes for both /api/ollama/api/chat and /api/ollama/chat formats
 @app.post("/api/ollama/api/chat")
 @app.post("/api/ollama/chat")
 async def ollama_chat_endpoint(
     req: OllamaChatRequest,
-    is_review: bool = Depends(verify_sandbox_review_mode)
 ):
     # Enforce maximum prompt payload size to prevent memory exhaustion DoS
     MAX_PROMPT_SIZE = 1_000_000 # 1MB
@@ -210,16 +201,17 @@ async def ollama_chat_endpoint(
     if not req.messages:
         raise HTTPException(status_code=400, detail="messages array cannot be empty")
     
+    # Extract system instructions from messages array or request-level field,
+    # falling back to a safe default. Pass caller instructions through transparently.
+    system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
     prompt_parts = []
-    if is_review:
-        system_instructions = REVIEW_SYSTEM_PROMPT
-    else:
-        system_instructions = OLLAMA_SYSTEM_PROMPT
-    
     for msg in req.messages:
         role = msg.role.strip().lower()
         content = msg.content
-        if role == "user":
+        if role == "system":
+            # Caller-provided system message takes priority
+            system_instructions = content
+        elif role == "user":
             prompt_parts.append(f"User: {content}")
         elif role in ("assistant", "model"):
             prompt_parts.append(f"Assistant: {content}")
@@ -274,7 +266,6 @@ async def ollama_chat_endpoint(
 @app.post("/api/generate")
 async def ollama_generate_endpoint(
     req: OllamaGenerateRequest,
-    is_review: bool = Depends(verify_sandbox_review_mode)
 ):
     # Enforce maximum prompt payload size to prevent memory exhaustion DoS
     MAX_PROMPT_SIZE = 1_000_000 # 1MB
@@ -315,11 +306,10 @@ async def ollama_generate_endpoint(
         model_name = "claude-sonnet-4.6"
     if model_name not in allowed_models:
         raise HTTPException(status_code=400, detail=f"Model '{req.model}' is not supported")
-        
-    if is_review:
-        system_instructions = REVIEW_SYSTEM_PROMPT
-    else:
-        system_instructions = OLLAMA_SYSTEM_PROMPT
+
+    # Pass caller-provided system instructions through transparently.
+    # Fall back to safe conversational default when none provided.
+    system_instructions = req.system or OLLAMA_SYSTEM_PROMPT
         
     try:
         response_text = await execute_keyless_gemini(
