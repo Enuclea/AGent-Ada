@@ -133,16 +133,34 @@ async def test_auth_bypass_prevention():
     mock_request.client = MagicMock()
     mock_request.client.host = "127.0.0.1"
     
-    # 1. When TESTING is "1", the bypass should work (returns credentials without raising HTTPException)
-    with patch.dict(os.environ, {"TESTING": "1"}):
-        res = await authenticate(mock_request, credentials=None)
-        assert res is None
+    # 1. When TESTING is "1" but sentinel is NOT enabled, the bypass must NOT work
+    #    (This is the key security improvement: env vars alone are insufficient)
+    from agent.api.router import _test_bypass_enabled
+    original_bypass = _test_bypass_enabled
+    try:
+        import agent.api.router as router_mod
+        router_mod._test_bypass_enabled = False
+        with patch.dict(os.environ, {"TESTING": "1", "DASHBOARD_PASSWORD": "password"}):
+            with pytest.raises(HTTPException) as excinfo:
+                await authenticate(mock_request, credentials=None)
+            assert excinfo.value.status_code == 401
+    finally:
+        router_mod._test_bypass_enabled = original_bypass
         
     # 2. When TESTING is NOT "1", the bypass MUST NOT work (should raise HTTPException)
     with patch.dict(os.environ, {"TESTING": "0", "DASHBOARD_USERNAME": "admin", "DASHBOARD_PASSWORD": "password"}):
         with pytest.raises(HTTPException) as excinfo:
             await authenticate(mock_request, credentials=None)
         assert excinfo.value.status_code == 401
+    
+    # 3. When sentinel IS enabled AND TESTING=1, bypass should work (conftest.py activates this)
+    try:
+        router_mod._test_bypass_enabled = True
+        with patch.dict(os.environ, {"TESTING": "1"}):
+            res = await authenticate(mock_request, credentials=None)
+            assert res is None
+    finally:
+        router_mod._test_bypass_enabled = original_bypass
 
 # 5. Test Hardened AST Safety scan (sys.modules and vars check)
 def test_verify_plugin_ast_safety_sys_modules():

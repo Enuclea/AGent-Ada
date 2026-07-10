@@ -1,12 +1,16 @@
 import asyncio
+import collections
 import os
+import posixpath
 import sys
 import hashlib
 import hmac
 import time
+import threading
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
+from urllib.parse import urlparse, urlencode, parse_qsl
 
 from fastapi import FastAPI, Request, Response, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -22,6 +26,16 @@ from agent.core.scheduler import run_scheduler, run_quota_refresh_loop, ensure_d
 shared_secret_str = os.environ.get("INTERNAL_API_SECRET", "")
 dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "")
 is_testing = os.environ.get("TESTING") == "1"
+
+# In-process sentinel that can only be set by pytest fixtures, never by env vars alone
+_ADA_TEST_BYPASS_SENTINEL = object()
+_test_bypass_enabled = False
+
+def enable_test_bypass(sentinel):
+    """Called by pytest fixtures to enable test auth bypass. Requires the in-process sentinel."""
+    global _test_bypass_enabled
+    if sentinel is _ADA_TEST_BYPASS_SENTINEL:
+        _test_bypass_enabled = True
 
 if not is_testing:
     if not dashboard_password or dashboard_password == "admin":
@@ -39,6 +53,46 @@ if not shared_secret_str:
     shared_secret = hashlib.sha256(b"admin").digest()
 else:
     shared_secret = hashlib.sha256(shared_secret_str.encode()).digest()
+
+# Replay nonce cache: stores (signature, timestamp) tuples to prevent request replay.
+# Uses an OrderedDict as an LRU with a max size and TTL-based eviction.
+_REPLAY_CACHE_MAX = 10000
+_REPLAY_CACHE_TTL = 310  # slightly longer than the 300s window
+_replay_cache = collections.OrderedDict()  # key=(sig,ts) -> insert_time
+_replay_lock = threading.Lock()
+
+def _check_and_record_nonce(sig: str, timestamp_str: str) -> bool:
+    """Returns True if this (sig, timestamp) is fresh (not replayed). Records it for future checks."""
+    key = (sig, timestamp_str)
+    now = time.time()
+    with _replay_lock:
+        # Evict expired entries
+        while _replay_cache:
+            oldest_key, oldest_time = next(iter(_replay_cache.items()))
+            if now - oldest_time > _REPLAY_CACHE_TTL:
+                _replay_cache.pop(oldest_key)
+            else:
+                break
+        # Check for replay
+        if key in _replay_cache:
+            return False  # Replayed request
+        # Record and enforce max size
+        _replay_cache[key] = now
+        if len(_replay_cache) > _REPLAY_CACHE_MAX:
+            _replay_cache.popitem(last=False)
+    return True
+
+def _normalize_path(raw_path: str) -> str:
+    """Normalize URL path to prevent traversal-based HMAC bypass (e.g. /api/../api/chat)."""
+    return posixpath.normpath(raw_path) or "/"
+
+def _canonicalize_query(raw_query: str) -> str:
+    """Sort query parameters by key for canonical HMAC computation."""
+    if not raw_query:
+        return ""
+    params = parse_qsl(raw_query, keep_blank_values=True)
+    params.sort(key=lambda x: x[0])
+    return urlencode(params)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -108,13 +162,15 @@ security = HTTPBasic(auto_error=False)
 
 async def authenticate(request: Request, credentials: Optional[HTTPBasicCredentials] = Depends(security)):
     # Bypass health and status checks
-    if request.url.path in ("/health", "/health/", "/api/status", "/api/status/"):
+    normalized_path = _normalize_path(request.url.path)
+    if normalized_path in ("/health", "/api/status"):
         return credentials
 
-
-
-    # Unit testing context: allow testclient loopback bypass if explicitly configured under pytest
-    if os.environ.get("TESTING") == "1" and os.environ.get("ADA_ALLOW_TEST_BYPASS") == "1" and "pytest" in sys.modules and (not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")):
+    # Unit testing context: allow testclient loopback bypass ONLY if the in-process sentinel was activated
+    # by a pytest fixture. Environment variables alone are insufficient to enable this bypass.
+    if _test_bypass_enabled and is_testing and "pytest" in sys.modules and (
+        not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")
+    ):
         return credentials
 
     # Secure Service-to-Service: authenticate using X-Signature and X-Timestamp headers
@@ -131,17 +187,19 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
                         body = await request.body()
                     
                     body_hash = hashlib.sha256(body).hexdigest()
-                    query_str = request.url.query or ""
+                    # Normalize path and canonicalize query to prevent traversal/reordering bypass
+                    canon_query = _canonicalize_query(request.url.query or "")
                     
-                    # Try secure signature format (bind method, path, query, timestamp, body_hash)
-                    secure_message = f"{request.method}:{request.url.path}:{query_str}:{timestamp_str}:{body_hash}".encode()
+                    # Secure signature format: bind method, normalized path, canonical query, timestamp, body_hash
+                    secure_message = f"{request.method}:{normalized_path}:{canon_query}:{timestamp_str}:{body_hash}".encode()
                     expected_secure_sig = hmac.new(shared_secret, secure_message, hashlib.sha256).hexdigest()
                     if hmac.compare_digest(sig, expected_secure_sig):
-                        return credentials
-                except Exception as auth_inner_err:
-                    import traceback
-                    print(f"[AUTH EXCEPTION] Error during HMAC signature verification:")
-                    traceback.print_exc()
+                        # Replay protection: reject if this exact (sig, timestamp) was already used
+                        if _check_and_record_nonce(sig, timestamp_str):
+                            return credentials
+                        # Silent rejection on replay — do not disclose reason
+                except Exception:
+                    pass  # Silent rejection — do not print tracebacks on auth failures
         except ValueError:
             pass
 
@@ -149,13 +207,20 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin" if is_testing else "")
-        if hmac.compare_digest(token, correct_password):
+        correct_password = os.environ.get("DASHBOARD_PASSWORD", "")
+        if correct_password and hmac.compare_digest(token, correct_password):
             return credentials
 
     # Basic Authentication for standard browser / dashboard clients
     correct_username = os.environ.get("DASHBOARD_USERNAME", "admin")
-    correct_password = os.environ.get("DASHBOARD_PASSWORD", "admin" if is_testing else "")
+    correct_password = os.environ.get("DASHBOARD_PASSWORD", "")
+    
+    if not correct_password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication not configured",
+            headers={"WWW-Authenticate": "Basic"},
+        )
     
     username_ok = hmac.compare_digest(credentials.username.encode(), correct_username.encode()) if credentials else False
     password_ok = hmac.compare_digest(credentials.password.encode(), correct_password.encode()) if credentials else False

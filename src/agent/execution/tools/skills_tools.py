@@ -647,9 +647,14 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
             return f"Error: Skill '{clean_name}' has an invalid or missing cryptographic signature. Cannot install unsigned skills."
 
         # --- SECURITY & CODE REVIEW GATEWAY ---
+        # 0. Reject non-Python executable artifacts (binary payloads, shell scripts, etc.)
+        from agent.security.ast_safety import verify_ast_safety, verify_artifact_safety
+        artifact_errors = verify_artifact_safety(in_memory_files, base_description=f"skill '{clean_name}'")
+        if artifact_errors:
+            return f"Error: Skill '{clean_name}' contains forbidden artifacts: {', '.join(artifact_errors)}"
+
         # 1. Run AST Static Scan on in-memory files
         ast_errors = []
-        from agent.security.ast_safety import verify_ast_safety
         for rel_path, content_bytes in in_memory_files.items():
             if rel_path.endswith(".py"):
                 try:

@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import hmac
 import types
 import asyncio
 from pathlib import Path
@@ -16,7 +17,11 @@ def send_ipc(action, **kwargs):
         sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
 
-# 1. Blocks unauthorized network/subprocess access
+# Defense-in-depth telemetry: Monkeypatches below are NOT a security boundary.
+# They exist solely to detect and log unauthorized access attempts from naive code paths.
+# The real isolation boundary is Bubblewrap (--unshare-all) in sandbox_test.py.
+# Untrusted code can trivially bypass these patches via importlib.reload(), ctypes, or
+# capturing original references before the patch. Do not treat these as security controls.
 def fail_unauthorized(module_name, func_name):
     def block_call(*args, **kwargs):
         send_ipc(
@@ -69,9 +74,9 @@ class MockRoutingEngine:
         if not line:
             raise RuntimeError("Sandbox connection closed by host.")
         
-        # Verify bidirectional token authentication
+        # Verify bidirectional token authentication (constant-time comparison)
         prefix = f"[IPC:{IPC_TOKEN}] "
-        if not line.startswith(prefix):
+        if len(line) < len(prefix) or not hmac.compare_digest(line[:len(prefix)], prefix):
             raise RuntimeError("Sandbox security violation: IPC message untrusted.")
         
         response = json.loads(line[len(prefix):])
@@ -99,9 +104,9 @@ class MockTools:
             if not line:
                 raise RuntimeError("Sandbox connection closed by host.")
             
-            # Verify bidirectional token authentication
+            # Verify bidirectional token authentication (constant-time comparison)
             prefix = f"[IPC:{IPC_TOKEN}] "
-            if not line.startswith(prefix):
+            if len(line) < len(prefix) or not hmac.compare_digest(line[:len(prefix)], prefix):
                 raise RuntimeError("Sandbox security violation: IPC message untrusted.")
                 
             response = json.loads(line[len(prefix):])

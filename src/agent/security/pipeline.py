@@ -127,6 +127,11 @@ class SecurityPipeline:
         redacted = re.sub(r"sk-[a-zA-Z0-9_\-]{20,80}", "[REDACTED_API_KEY]", redacted)
         redacted = re.sub(r"AIzaSy[a-zA-Z0-9_-]{33}", "[REDACTED_API_KEY]", redacted)
         redacted = re.sub(r"(?i)bearer\s+[a-zA-Z0-9_\-\.]{16,}", "Bearer [REDACTED_TOKEN]", redacted)
+        # Discord bot tokens follow the pattern: base64(bot_id).base64(timestamp).base64(hmac)
+        redacted = re.sub(
+            r"[MN][A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,8}\.[A-Za-z0-9_-]{27,40}",
+            "[REDACTED_DISCORD_TOKEN]", redacted
+        )
 
         # 2. Dynamic redaction of loaded environment variables/secrets
         for key in self.sensitive_keys:

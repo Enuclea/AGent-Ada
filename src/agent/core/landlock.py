@@ -227,9 +227,30 @@ if __name__ == "__main__":
             print(f"[Landlock] Error: Sandbox could not be enforced: {e}. Halting execution because ALLOW_UNSANDBOXED_EXECUTION is not true.", file=sys.stderr)
             sys.exit(126)
 
-    # Execute the requested command, replacing the current process image
+    # Scrub environment to prevent PATH injection and credential leakage
+    # (Unlike sandbox_worker.py which runs inside bwrap, the Landlock path
+    # does NOT have network namespace isolation, so we must be extra careful
+    # about what environment the child process inherits.)
+    safe_env = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+    os.environ.clear()
+    os.environ.update(safe_env)
+
+    # Execute the requested command using absolute path to prevent PATH hijacking
+    # NOTE: Landlock is filesystem-only — it does NOT provide network isolation.
+    # Network egress must be controlled at a higher layer (bwrap, iptables, etc.)
     try:
-        os.execvp(cmd_args[0], cmd_args)
+        # Resolve command to absolute path if it's "bash" to avoid PATH lookup
+        if cmd_args[0] == "bash":
+            bash_abs = "/usr/bin/bash"
+            if os.path.exists(bash_abs):
+                cmd_args[0] = bash_abs
+        os.execv(cmd_args[0], cmd_args)
     except Exception as e:
         print(f"[Landlock] Failed to execute {cmd_args}: {e}", file=sys.stderr)
         sys.exit(127)
+

@@ -153,7 +153,10 @@ def _sandbox_command_if_possible(command: str) -> List[str]:
         ]
         return bwrap_args + ["--", "bash", "-c", command]
         
-    # 2. Try Landlock
+    # 2. Try Landlock (IMPORTANT: Landlock provides filesystem-only isolation.
+    # Unlike Bubblewrap, it does NOT restrict network access. Commands running
+    # under the Landlock fallback can still make outbound network requests.
+    # If network isolation is required, Bubblewrap must be installed.)
     try:
         import ctypes
         import ctypes.util
@@ -163,12 +166,16 @@ def _sandbox_command_if_possible(command: str) -> List[str]:
             # Check SYS_LANDLOCK_CREATE_RULESET (syscall 444) support
             abi = libc.syscall(444, 0, 0, 1 << 0)
             if abi > 0:
+                print("[Security] Warning: Falling back to Landlock sandbox. "
+                      "Landlock provides filesystem isolation ONLY — network "
+                      "access is NOT restricted. Install Bubblewrap (bwrap) for "
+                      "full isolation.", file=sys.stderr)
                 python_exe = sys.executable or "python3"
                 landlock_runner = [
                     python_exe,
                     "-m", "agent.core.landlock",
                     str(workspace_dir),
-                    "bash", "-c", command
+                    "/usr/bin/bash", "-c", command
                 ]
                 return landlock_runner
     except Exception:

@@ -5,8 +5,9 @@ dynamic execution vectors, namespace extraction attempts, and filesystem breakou
 """
 
 import ast
+import re
 from pathlib import Path
-from typing import Set
+from typing import Set, List, Dict
 
 ALLOWED_MODULES: Set[str] = {
     "typing", "fastapi", "pydantic", "datetime", "json", "pathlib", "uuid", "re",
@@ -82,6 +83,14 @@ class SafetyVisitor(ast.NodeVisitor):
             base = self.resolve_attr_path(node.func)
             return f"{base}()"
         return ""
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        """Block subscript access patterns like __builtins__['eval'] or __dict__['key']."""
+        base_path = self.resolve_attr_path(node.value)
+        if base_path:
+            if "__builtins__" in base_path or "__dict__" in base_path:
+                self.errors.append(f"Forbidden subscript access on sensitive object: {base_path}")
+        self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
         for name in node.names:
@@ -250,16 +259,68 @@ class SafetyVisitor(ast.NodeVisitor):
 
     def visit_Constant(self, node: ast.Constant) -> None:
         if isinstance(node.value, str):
-            import re
             if re.search(r"\battach\b", node.value, re.IGNORECASE):
                 self.errors.append("Forbidden SQL ATTACH command in string constant")
+            # Detect obfuscated dangerous patterns in string constants
+            # e.g. "ev" + "al", "__imp" + "ort__", "ex" + "ec"
+            _DANGEROUS_FRAGMENTS = (
+                "eval", "exec", "compile", "__import__", "importlib",
+                "getattr", "setattr", "__builtins__", "os.system",
+                "subprocess", "Popen", "os.popen", "posix_spawn",
+            )
+            val_lower = node.value.lower().strip()
+            for frag in _DANGEROUS_FRAGMENTS:
+                if val_lower == frag:
+                    self.errors.append(f"Suspicious string constant matching dangerous name: '{node.value}'")
+                    break
         self.generic_visit(node)
 
     def visit_Str(self, node: ast.Str) -> None:
         if isinstance(node.s, str):
-            import re
             if re.search(r"\battach\b", node.s, re.IGNORECASE):
                 self.errors.append("Forbidden SQL ATTACH command in string literal")
+        self.generic_visit(node)
+
+    def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
+        """Block f-strings that reference dangerous attributes or builtins as format gadgets."""
+        for value in node.values:
+            if isinstance(value, ast.FormattedValue):
+                resolved = self.resolve_attr_path(value.value)
+                if resolved:
+                    dangerous_refs = (
+                        "__builtins__", "__dict__", "__class__", "__subclasses__",
+                        "__globals__", "__code__", "sys.modules", "os.system",
+                        "subprocess", "importlib",
+                    )
+                    for ref in dangerous_refs:
+                        if ref in resolved:
+                            self.errors.append(f"Forbidden f-string format gadget referencing: {resolved}")
+                            break
+        self.generic_visit(node)
+
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        """Block string concatenation that constructs dangerous function names.
+        
+        Catches patterns like: getattr(obj, 'ev' + 'al') or 'os.sys' + 'tem'
+        """
+        if isinstance(node.op, ast.Add):
+            # Check if both sides are string constants being concatenated
+            if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
+                if isinstance(node.left.value, str) and isinstance(node.right.value, str):
+                    combined = (node.left.value + node.right.value).lower()
+                    _DANGEROUS_CONCAT = (
+                        "eval", "exec", "compile", "__import__", "importlib",
+                        "getattr", "setattr", "__builtins__", "os.system",
+                        "subprocess", "popen", "posix_spawn", "__globals__",
+                        "__dict__", "__class__", "__subclasses__",
+                    )
+                    for frag in _DANGEROUS_CONCAT:
+                        if frag in combined:
+                            self.errors.append(
+                                f"Forbidden string concatenation constructing dangerous name: "
+                                f"'{node.left.value}' + '{node.right.value}' -> '{combined}'"
+                            )
+                            break
         self.generic_visit(node)
 
 
@@ -277,3 +338,57 @@ def verify_ast_safety(code: str, filename: str) -> None:
             raise ValueError(f"AST safety check failed for {Path(filename).name}: {', '.join(visitor.errors)}")
     except SyntaxError as se:
         raise ValueError(f"AST syntax error in {Path(filename).name}: {se}")
+
+
+# Forbidden non-Python executable artifact extensions
+_FORBIDDEN_EXTENSIONS = {
+    ".pyc", ".pyo", ".pyd", ".so", ".dll", ".dylib",
+    ".sh", ".bash", ".zsh", ".csh", ".ksh",
+    ".bat", ".cmd", ".ps1", ".psm1",
+    ".exe", ".com", ".msi",
+    ".jar", ".class", ".war",
+    ".wasm",
+}
+
+
+def verify_artifact_safety(files: Dict[str, bytes], base_description: str = "skill") -> List[str]:
+    """Validates that a collection of files does not contain non-Python executable artifacts.
+    
+    Rejects .pyc, .so, .sh, .exe, symlinks-as-content, and any file that cannot be
+    verified as safe plain-text or data.
+    
+    Args:
+        files: Dictionary mapping relative paths to file content bytes.
+        base_description: Description of the artifact source for error messages.
+        
+    Returns:
+        List of error strings. Empty list means all artifacts are safe.
+    """
+    errors = []
+    for rel_path, content_bytes in files.items():
+        path = Path(rel_path)
+        ext = path.suffix.lower()
+        
+        # Reject forbidden executable extensions
+        if ext in _FORBIDDEN_EXTENSIONS:
+            errors.append(
+                f"Forbidden executable artifact in {base_description}: {rel_path} "
+                f"(extension '{ext}' is not allowed)"
+            )
+            continue
+        
+        # Reject files with ELF/PE/Mach-O magic bytes (binary executables)
+        if len(content_bytes) >= 4:
+            magic = content_bytes[:4]
+            if magic[:4] == b'\x7fELF':  # ELF binary
+                errors.append(f"Forbidden ELF binary detected in {base_description}: {rel_path}")
+            elif magic[:2] == b'MZ':  # PE/Windows executable
+                errors.append(f"Forbidden PE binary detected in {base_description}: {rel_path}")
+            elif magic[:4] in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
+                               b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe'):  # Mach-O
+                errors.append(f"Forbidden Mach-O binary detected in {base_description}: {rel_path}")
+            elif magic[:2] == b'\x42\x5a' or magic[:4] == b'\x00asm':  # bzip2 / WASM
+                errors.append(f"Forbidden binary artifact detected in {base_description}: {rel_path}")
+    
+    return errors
+

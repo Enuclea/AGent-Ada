@@ -1,7 +1,9 @@
 import os
 os.environ["ADA_DISABLE_SANDBOX"] = "1"
 os.environ["TESTING"] = "1"
-os.environ["ADA_ALLOW_TEST_BYPASS"] = "1"
+# Enable test auth bypass using in-process sentinel (env vars alone are insufficient)
+from agent.api.router import enable_test_bypass, _ADA_TEST_BYPASS_SENTINEL
+enable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
 import sys
 from pathlib import Path
 project_root = str(Path(__file__).resolve().parent.parent)
