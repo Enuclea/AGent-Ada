@@ -555,6 +555,10 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
     import urllib.parse
     import posixpath
     
+    # Normalize Unicode to NFKC form before validation to prevent homoglyph bypass attacks.
+    import unicodedata
+    skill_name = unicodedata.normalize('NFKC', skill_name)
+    
     if not skill_name.isascii() or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$', skill_name):
         return "Error: Directory traversal attempt detected."
 
@@ -579,7 +583,10 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
         
     info = repo_skills[clean_name]
     
-    if os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "0":
+    # Test bypass: only if the in-process sentinel is enabled AND pytest is running.
+    # Never gate on os.environ["TESTING"] alone — env vars can leak across processes.
+    from agent.api import router
+    if getattr(router, "_test_bypass_enabled", False) and "pytest" in sys.modules and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "0":
         pass
     elif sys.stdin.isatty():
         ans = input(f"Explicit human confirmation required to install skill '{clean_name}'. Proceed? [y/N]: ")
@@ -871,6 +878,27 @@ You MUST end your response with a JSON block in the following format:
                 
                 with open(file_dest, "wb") as f:
                     f.write(content_bytes)
+
+            # Post-write verification: re-read files from disk and verify hash
+            # matches in-memory contents to close the TOCTOU window.
+            import hashlib
+            expected_hash = hashlib.sha256()
+            for rel_path in sorted(in_memory_files.keys()):
+                expected_hash.update(rel_path.encode('utf-8'))
+                expected_hash.update(in_memory_files[rel_path])
+
+            actual_hash = hashlib.sha256()
+            for rel_path in sorted(in_memory_files.keys()):
+                written_file = (dest_folder / rel_path).resolve()
+                if not written_file.exists() or not written_file.is_relative_to(dest_folder):
+                    shutil.rmtree(dest_folder, ignore_errors=True)
+                    return f"Error: Post-write verification failed — file '{rel_path}' missing or escaped sandbox."
+                actual_hash.update(rel_path.encode('utf-8'))
+                actual_hash.update(written_file.read_bytes())
+
+            if expected_hash.digest() != actual_hash.digest():
+                shutil.rmtree(dest_folder, ignore_errors=True)
+                return "Error: Post-write verification failed — written files do not match in-memory contents. Possible TOCTOU attack."
             
             # Write review report to sibling reports folder (completely outside of skill directory)
             reports_dir = dest_folder.parent.parent / "reports" / "skills"

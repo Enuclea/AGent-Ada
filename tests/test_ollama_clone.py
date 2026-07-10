@@ -58,7 +58,9 @@ def test_ollama_generate_default_system_prompt():
         )
 
 def test_ollama_chat_endpoint_system_message_passthrough():
-    """System message from messages array is passed through to LLM."""
+    """System message from messages array is demoted to supplementary context,
+    never overriding the safety-critical OLLAMA_SYSTEM_PROMPT."""
+    from agent.api.ollama_clone import OLLAMA_SYSTEM_PROMPT
     payload = {
         "model": "claude-sonnet-4.6",
         "messages": [
@@ -69,7 +71,8 @@ def test_ollama_chat_endpoint_system_message_passthrough():
         ],
         "stream": False
     }
-    expected_prompt = "User: Hello User\nAssistant: Hello Assistant\nUser: Follow up"
+    # System message is demoted to [Caller Context] in the prompt, not used as system_instructions
+    expected_prompt = "[Caller Context]: You are a Python expert.\nUser: Hello User\nAssistant: Hello Assistant\nUser: Follow up"
     with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Chat Answer") as mock_exec:
         resp = client.post("/api/ollama/chat", json=payload)
         assert resp.status_code == 200
@@ -81,7 +84,7 @@ def test_ollama_chat_endpoint_system_message_passthrough():
         mock_exec.assert_called_once_with(
             prompt=expected_prompt,
             model_name="claude-sonnet-4.6",
-            system_instructions="You are a Python expert."
+            system_instructions=OLLAMA_SYSTEM_PROMPT  # Must always be the honeypot prompt
         )
 
 def test_ollama_chat_endpoint_no_system_message():

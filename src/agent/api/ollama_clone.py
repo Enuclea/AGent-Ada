@@ -316,8 +316,10 @@ async def ollama_chat_endpoint(
         role = msg.role.strip().lower()
         content = msg.content
         if role == "system":
-            # Caller-provided system message takes priority
-            system_instructions = content
+            # Caller-provided system message is appended as supplementary context,
+            # NEVER as a replacement for the safety-critical OLLAMA_SYSTEM_PROMPT.
+            # This prevents untrusted callers from overriding honeypot constraints.
+            prompt_parts.append(f"[Caller Context]: {content}")
         elif role == "user":
             prompt_parts.append(f"User: {content}")
         elif role in ("assistant", "model"):

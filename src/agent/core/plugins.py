@@ -11,6 +11,23 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
     """Statically scans all Python files in the plugin package for unsafe calls,
     unless the plugin has a valid cryptographic signature.
     """
+    # 0. Reject any plugin directory that contains dotfiles or dot-directories.
+    #    These are excluded from the signature hash, so they could contain
+    #    unsigned, unreviewed code that executes in-process.
+    for root, dirs, files in os.walk(plugin_path):
+        for d in dirs:
+            if d.startswith('.') and d not in ('__pycache__',):
+                raise RuntimeError(
+                    f"Security violation: Plugin '{plugin_path.name}' contains dot-directory "
+                    f"'{d}' which is excluded from signature verification. Remove it."
+                )
+        for f in files:
+            if f.startswith('.'):
+                raise RuntimeError(
+                    f"Security violation: Plugin '{plugin_path.name}' contains dotfile "
+                    f"'{f}' which is excluded from signature verification. Remove it."
+                )
+
     # 1. Try to verify the plugin's cryptographic signature first if signature file is present
     sig_path = plugin_path / "signature.sig"
     if sig_path.exists():
@@ -26,6 +43,7 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
         with open(py_file, "r", encoding="utf-8", errors="replace") as f:
             code = f.read()
         verify_ast_safety(code, str(py_file))
+
 
 class PluginState(str, Enum):
     DISCOVERED = "DISCOVERED"
