@@ -157,9 +157,8 @@ def test_ollama_chat_endpoint_invalid():
 
 def test_ollama_bearer_token_authentication():
     # Temporarily disable the test bypass sentinel so bearer auth is actually exercised
-    import agent.api.router as router_mod
-    original_bypass = router_mod._test_bypass_enabled
-    router_mod._test_bypass_enabled = False
+    from agent.api.router import _ADA_TEST_BYPASS_SENTINEL, disable_test_bypass, enable_test_bypass
+    disable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
     
     old_testing = os.environ.get("TESTING")
     if "TESTING" in os.environ:
@@ -182,7 +181,7 @@ def test_ollama_bearer_token_authentication():
                 assert resp.status_code == 200
                 assert resp.json()["response"] == "Token Success"
     finally:
-        router_mod._test_bypass_enabled = original_bypass
+        enable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
         if old_testing is not None:
             os.environ["TESTING"] = old_testing
 

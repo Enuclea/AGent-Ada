@@ -537,6 +537,96 @@ def extract_json_block(text: str) -> Optional[dict]:
             pass
     return None
 
+
+async def review_plugin_for_approval(plugin_name: str) -> str:
+    """Phase 1 of the two-phase plugin trust model: review a plugin for human approval.
+    
+    Scans the named plugin through the full verification chain WITHOUT loading it:
+    - Binary artifact rejection (.so, .pyc, .pyd, ELF binaries)
+    - Dotfile/dot-directory rejection
+    - AST safety scan on all Python files
+    - Cryptographic signature verification
+    - SHA-256 checksum computation
+    
+    Returns a formatted report with scan results and a ready-to-paste .env line
+    that the human operator can add to enable the plugin.
+    
+    This tool NEVER loads or executes the plugin. It only scans and reports.
+    
+    Args:
+        plugin_name: Name of the plugin directory to review (e.g., 'dnd').
+    """
+    from agent.core.plugins import plugin_manager
+    
+    # Discover plugins if not already done
+    if not plugin_manager.plugins:
+        plugin_manager.discover_plugins()
+    
+    # Find the plugin
+    if plugin_name not in plugin_manager.plugins:
+        # Try to find it in the plugins directory directly
+        try:
+            import agent.plugins
+            plugin_paths = list(agent.plugins.__path__)
+        except ImportError:
+            return f"Error: Could not locate plugin directory for '{plugin_name}'."
+        
+        found = None
+        for path_str in plugin_paths:
+            candidate = Path(path_str) / plugin_name
+            if candidate.is_dir() and (candidate / "__init__.py").exists():
+                found = candidate
+                break
+        
+        if not found:
+            return f"Error: Plugin '{plugin_name}' not found in any plugin directory."
+        plugin_path = found
+    else:
+        plugin_path = plugin_manager.plugins[plugin_name].path
+    
+    # Run the review
+    results = plugin_manager.review_plugin(plugin_path)
+    
+    # Format the report
+    lines = []
+    lines.append(f"# Plugin Review: {results['name']}")
+    lines.append(f"Files scanned: {results['files_scanned']}")
+    lines.append(f"Has signature: {'Yes' if results['has_signature'] else 'No'}")
+    if results['has_signature']:
+        lines.append(f"Signature valid: {'Yes' if results['signature_valid'] else 'No'}")
+    lines.append("")
+    lines.append("## Scan Results")
+    for finding in results['scan_results']:
+        lines.append(f"  - {finding}")
+    lines.append("")
+    
+    if results['passed']:
+        lines.append("## ✅ APPROVED FOR HUMAN REVIEW")
+        lines.append("")
+        lines.append("All automated checks passed. To enable this plugin, add the following")
+        lines.append("to your .env file (read-only to containers):")
+        lines.append("")
+        lines.append("```")
+        lines.append(f'ADA_APPROVED_PLUGIN_CHECKSUMS="{results["env_line"]}"')
+        lines.append("```")
+        lines.append("")
+        lines.append(f"Checksum: `{results['checksum']}`")
+        lines.append("")
+        lines.append("If you have other plugins already pinned, append with a comma:")
+        lines.append("```")
+        lines.append(f'ADA_APPROVED_PLUGIN_CHECKSUMS="existing:hash,{results["env_line"]}"')
+        lines.append("```")
+        lines.append("")
+        lines.append("Remember: also set ADA_ENABLE_PLUGINS=1 in .env to enable the plugin system.")
+    else:
+        lines.append("## ❌ REVIEW FAILED")
+        lines.append("")
+        lines.append("This plugin did NOT pass automated security checks.")
+        lines.append("Do NOT add it to your .env until the issues above are resolved.")
+    
+    return "\n".join(lines)
+
+
 async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = None, confirm: bool = False) -> str:
     """Downloads/copies a skill from the external repositories to the local active skills directory.
     
@@ -583,10 +673,11 @@ async def install_repository_skill(skill_name: str, paranoid: Optional[bool] = N
         
     info = repo_skills[clean_name]
     
-    # Test bypass: only if the in-process sentinel is enabled AND pytest is running.
+    # Test bypass: only if the in-process closure-protected sentinel is enabled AND pytest is running.
     # Never gate on os.environ["TESTING"] alone — env vars can leak across processes.
+    # Uses is_test_bypass_enabled() which cannot be tampered with via direct attribute assignment.
     from agent.api import router
-    if getattr(router, "_test_bypass_enabled", False) and "pytest" in sys.modules and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "0":
+    if router.is_test_bypass_enabled() and "pytest" in sys.modules and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") != "0":
         pass
     elif sys.stdin.isatty():
         ans = input(f"Explicit human confirmation required to install skill '{clean_name}'. Proceed? [y/N]: ")
@@ -839,7 +930,7 @@ You MUST end your response with a JSON block in the following format:
                 
             if not is_sandboxed:
                 from agent.api import router
-                if getattr(router, "_test_bypass_enabled", False) and os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
+                if router.is_test_bypass_enabled() and os.environ.get("TESTING") == "1" and os.environ.get("ADA_SKILL_INSTALL_CONFIRMED") == "1":
                     hil_approved = True
             
             # Require interactive TTY input if not approved

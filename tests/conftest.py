@@ -1,6 +1,7 @@
 import os
 os.environ["ADA_DISABLE_SANDBOX"] = "1"
 os.environ["TESTING"] = "1"
+os.environ["ADA_ENABLE_PLUGINS"] = "1"  # Plugins are disabled by default; enable for plugin tests
 # Enable test auth bypass using in-process sentinel (env vars alone are insufficient)
 from agent.api.router import enable_test_bypass, _ADA_TEST_BYPASS_SENTINEL
 enable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)

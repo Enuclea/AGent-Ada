@@ -27,15 +27,34 @@ shared_secret_str = os.environ.get("INTERNAL_API_SECRET", "")
 dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "")
 is_testing = os.environ.get("TESTING") == "1"
 
-# In-process sentinel that can only be set by pytest fixtures, never by env vars alone
+# In-process sentinel that can only be set by pytest fixtures, never by env vars alone.
+# The flag is protected by a closure so direct assignment to _test_bypass_enabled has no effect.
 _ADA_TEST_BYPASS_SENTINEL = object()
-_test_bypass_enabled = False
 
-def enable_test_bypass(sentinel):
-    """Called by pytest fixtures to enable test auth bypass. Requires the in-process sentinel."""
-    global _test_bypass_enabled
-    if sentinel is _ADA_TEST_BYPASS_SENTINEL:
-        _test_bypass_enabled = True
+def _make_test_bypass():
+    """Create a closure-protected test bypass flag that cannot be tampered with
+    via direct attribute assignment (e.g., router._test_bypass_enabled = True)."""
+    _state = {"enabled": False}
+
+    def enable(sentinel):
+        """Called by pytest fixtures to enable test auth bypass. Requires the in-process sentinel."""
+        if sentinel is _ADA_TEST_BYPASS_SENTINEL:
+            _state["enabled"] = True
+
+    def disable(sentinel):
+        """Called by tests to temporarily disable test auth bypass. Requires the in-process sentinel."""
+        if sentinel is _ADA_TEST_BYPASS_SENTINEL:
+            _state["enabled"] = False
+
+    def is_enabled():
+        return _state["enabled"]
+
+    return enable, disable, is_enabled
+
+enable_test_bypass, disable_test_bypass, is_test_bypass_enabled = _make_test_bypass()
+# Keep a dummy attribute for backward compatibility with getattr() checks,
+# but it has NO effect on the actual security check.
+_test_bypass_enabled = False
 
 if not is_testing:
     if not dashboard_password or dashboard_password == "admin":
@@ -174,7 +193,8 @@ async def authenticate(request: Request, credentials: Optional[HTTPBasicCredenti
 
     # Unit testing context: allow testclient loopback bypass ONLY if the in-process sentinel was activated
     # by a pytest fixture. Environment variables alone are insufficient to enable this bypass.
-    if _test_bypass_enabled and is_testing and "pytest" in sys.modules and (
+    # Uses closure-protected is_test_bypass_enabled() — direct assignment to _test_bypass_enabled has no effect.
+    if is_test_bypass_enabled() and is_testing and "pytest" in sys.modules and (
         not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")
     ):
         return credentials

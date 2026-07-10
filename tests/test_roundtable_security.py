@@ -120,7 +120,7 @@ async def test_direct_api_sanitization():
 # 4. Test Loopback Authentication Bypass Prevention
 @pytest.mark.asyncio
 async def test_auth_bypass_prevention():
-    from agent.api.router import authenticate
+    from agent.api.router import authenticate, _ADA_TEST_BYPASS_SENTINEL, disable_test_bypass, enable_test_bypass
     from fastapi import Request, HTTPException
     
     # Mock FastAPI Request
@@ -135,37 +135,42 @@ async def test_auth_bypass_prevention():
     
     # 1. When TESTING is "1" but sentinel is NOT enabled, the bypass must NOT work
     #    (This is the key security improvement: env vars alone are insufficient)
-    from agent.api.router import _test_bypass_enabled
-    original_bypass = _test_bypass_enabled
     try:
-        import agent.api.router as router_mod
-        router_mod._test_bypass_enabled = False
+        disable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
         with patch.dict(os.environ, {"TESTING": "1", "DASHBOARD_PASSWORD": "password"}):
             with pytest.raises(HTTPException) as excinfo:
                 await authenticate(mock_request, credentials=None)
             assert excinfo.value.status_code == 401
     finally:
-        router_mod._test_bypass_enabled = original_bypass
+        enable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
         
     # 2. When TESTING is NOT "1", the bypass MUST NOT work (should raise HTTPException)
-    #    Note: is_testing is frozen at import time, so we must also disable the sentinel
     try:
-        router_mod._test_bypass_enabled = False
+        disable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
         with patch.dict(os.environ, {"TESTING": "0", "DASHBOARD_USERNAME": "admin", "DASHBOARD_PASSWORD": "password"}):
             with pytest.raises(HTTPException) as excinfo:
                 await authenticate(mock_request, credentials=None)
             assert excinfo.value.status_code == 401
     finally:
-        router_mod._test_bypass_enabled = original_bypass
+        enable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
     
     # 3. When sentinel IS enabled AND TESTING=1, bypass should work (conftest.py activates this)
+    with patch.dict(os.environ, {"TESTING": "1"}):
+        res = await authenticate(mock_request, credentials=None)
+        assert res is None
+    
+    # 4. Verify that direct attribute assignment does NOT enable the bypass (closure protection)
+    import agent.api.router as router_mod
     try:
-        router_mod._test_bypass_enabled = True
-        with patch.dict(os.environ, {"TESTING": "1"}):
-            res = await authenticate(mock_request, credentials=None)
-            assert res is None
+        disable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
+        router_mod._test_bypass_enabled = True  # Should have NO effect
+        with patch.dict(os.environ, {"TESTING": "1", "DASHBOARD_PASSWORD": "password"}):
+            with pytest.raises(HTTPException) as excinfo:
+                await authenticate(mock_request, credentials=None)
+            assert excinfo.value.status_code == 401
     finally:
-        router_mod._test_bypass_enabled = original_bypass
+        router_mod._test_bypass_enabled = False
+        enable_test_bypass(_ADA_TEST_BYPASS_SENTINEL)
 
 # 5. Test Hardened AST Safety scan (sys.modules and vars check)
 def test_verify_plugin_ast_safety_sys_modules():

@@ -15,6 +15,35 @@ class Settings(BaseSettings):
     ada_skill_public_key: str = "4f8ea93fc321099ce3d5f57c4ed2588cec782ae28d2e70f81b39e31377a247f8"
     additional_sensitive_keys: Optional[str] = None
     
+    # Plugin system: disabled by default. Controlled exclusively via ADA_ENABLE_PLUGINS
+    # env var in the host .env file, which is read-only to containers.
+    # Enabling plugins accepts that outside code will execute in-process. While reasonable
+    # precautions are taken (AST scanning, cryptographic signatures, artifact rejection),
+    # accepting use accepts potential risk. Security-in-depth should extend to host-level
+    # and network-level monitoring.
+    ada_enable_plugins: bool = False
+    
+    # Pinned plugin checksums: operator-approved SHA-256 hashes per plugin.
+    # Format: "pluginname:sha256hex,pluginname:sha256hex"
+    # Both the developer public key (ADA_SKILL_PUBLIC_KEY) and these pinned checksums
+    # live in the read-only .env. Even if a plugin has a valid signature, it must also
+    # match the checksum pinned here. On mismatch, the plugin MUST NOT load.
+    ada_approved_plugin_checksums: str = ""
+    
+    @property
+    def parsed_plugin_checksums(self) -> dict:
+        """Parse 'name:hexhash,name:hexhash' into {name: hexhash} dict."""
+        result = {}
+        raw = self.ada_approved_plugin_checksums.strip()
+        if not raw:
+            return result
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if ":" in entry:
+                name, hexhash = entry.split(":", 1)
+                result[name.strip()] = hexhash.strip()
+        return result
+    
     # Platform-specific lists (loaded from platform_config.json)
     disabled_plugins: List[str] = []
     disabled_skills: List[str] = []
@@ -38,6 +67,9 @@ class Settings(BaseSettings):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     config_data = json.load(f)
+                # Note: enable_plugins is NOT loaded from platform_config.json.
+                # It is controlled exclusively via ADA_ENABLE_PLUGINS env var
+                # in the host .env file, which is read-only to containers.
                 self.disabled_plugins = config_data.get("disabled_plugins", [])
                 self.disabled_skills = config_data.get("disabled_skills", [])
                 self.lazy_plugins = config_data.get("lazy_plugins", ["playwright"])

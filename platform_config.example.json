@@ -1,0 +1,7 @@
+{
+    "// NOTE": "Plugin enablement is NOT controlled here. It is exclusively set via ADA_ENABLE_PLUGINS in the host .env file, which is read-only to containers. This prevents the agent process from self-enabling plugin loading.",
+
+    "disabled_plugins": [],
+    "disabled_skills": [],
+    "lazy_plugins": ["playwright"]
+}

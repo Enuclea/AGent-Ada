@@ -11,10 +11,15 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
     """Statically scans all Python files in the plugin package for unsafe calls,
     unless the plugin has a valid cryptographic signature.
     """
-    # 0. Reject any plugin directory that contains dotfiles or dot-directories.
-    #    These are excluded from the signature hash, so they could contain
-    #    unsigned, unreviewed code that executes in-process.
+    # 0a. Reject any plugin directory that contains forbidden binary artifacts
+    #     (.so, .pyc, .pyd, ELF binaries, etc.) that cannot be AST-scanned.
+    #     This prevents native code injection via files that bypass the AST scanner.
+    from agent.security.ast_safety import verify_artifact_safety
+    plugin_files = {}
     for root, dirs, files in os.walk(plugin_path):
+        # Skip __pycache__ (auto-generated .pyc files, not attacker-planted)
+        dirs[:] = [d for d in dirs if d != '__pycache__']
+        # Also reject dotfiles/dot-directories (excluded from signature hash)
         for d in dirs:
             if d.startswith('.') and d not in ('__pycache__',):
                 raise RuntimeError(
@@ -27,6 +32,18 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
                     f"Security violation: Plugin '{plugin_path.name}' contains dotfile "
                     f"'{f}' which is excluded from signature verification. Remove it."
                 )
+            fpath = Path(root) / f
+            rel = fpath.relative_to(plugin_path)
+            try:
+                plugin_files[str(rel)] = fpath.read_bytes()
+            except Exception:
+                pass
+
+    artifact_errors = verify_artifact_safety(plugin_files, base_description=f"plugin '{plugin_path.name}'")
+    if artifact_errors:
+        raise RuntimeError(
+            f"Security violation in plugin '{plugin_path.name}': " + "; ".join(artifact_errors)
+        )
 
     # 1. Try to verify the plugin's cryptographic signature first if signature file is present
     sig_path = plugin_path / "signature.sig"
@@ -117,9 +134,28 @@ class PluginManager:
         return self.plugins
 
     def load_plugins(self, app) -> None:
-        """Dynamically loads core integrations and web routes from the plugins directories."""
+        """Dynamically loads core integrations and web routes from the plugins directories.
+        
+        Plugin loading is disabled by default. Set enable_plugins=true in platform_config.json
+        or ADA_ENABLE_PLUGINS=1 in the environment to opt in. Enabling plugins accepts that
+        outside code will execute in-process with the host user's privileges.
+        """
         from agent import tools
         from agent import memory
+
+        # Plugin loading requires explicit opt-in via ADA_ENABLE_PLUGINS=1 in the host .env.
+        # The .env file is read-only to containers, so the agent process cannot self-enable plugins.
+        from agent.core.config import settings
+        if not settings.ada_enable_plugins:
+            print(
+                "[PLUGINS] Plugin loading is DISABLED (default). "
+                "To enable, set ADA_ENABLE_PLUGINS=1 in the host .env file. "
+                "WARNING: Enabling plugins allows outside code to execute in-process. "
+                "While reasonable precautions are taken (AST scanning, cryptographic signatures, "
+                "binary artifact rejection), accepting use accepts potential risk. "
+                "Security-in-depth should extend to host-level and network-level monitoring."
+            )
+            return
 
         # Save app reference for dynamic lazy loading
         self._app = app
@@ -128,9 +164,11 @@ class PluginManager:
         self.discover_plugins()
 
         # Load dynamic platform configuration from unified settings
-        from agent.core.config import settings
         disabled_plugins = settings.disabled_plugins
         lazy_plugins = getattr(settings, "lazy_plugins", ["playwright"])
+
+        # Load pinned checksums from the read-only .env
+        pinned_checksums = settings.parsed_plugin_checksums
 
         for name, plugin in self.plugins.items():
             if plugin.state == PluginState.ACTIVE:
@@ -140,6 +178,34 @@ class PluginManager:
             if name in disabled_plugins:
                 print(f"[PLUGINS] Plugin '{name}' is disabled in configuration. Skipping.")
                 continue
+
+            # Verify pinned checksum from .env (if checksums are configured).
+            # The operator pins approved checksums in the read-only .env file.
+            # Even with a valid cryptographic signature, the plugin must match
+            # the operator-approved checksum or it MUST NOT load.
+            if pinned_checksums:
+                expected_hex = pinned_checksums.get(name)
+                if expected_hex is None:
+                    print(
+                        f"[PLUGINS] REFUSED plugin '{name}': no pinned checksum in "
+                        f"ADA_APPROVED_PLUGIN_CHECKSUMS. Add '{name}:<sha256hex>' to .env."
+                    )
+                    plugin.state = PluginState.FAILED
+                    plugin.error_message = "No pinned checksum in .env"
+                    continue
+
+                from agent.execution.tools.security import _calculate_skill_hash
+                actual_hash = _calculate_skill_hash(plugin.path).hex()
+                if actual_hash != expected_hex:
+                    print(
+                        f"[PLUGINS] REFUSED plugin '{name}': checksum mismatch. "
+                        f"Expected {expected_hex}, got {actual_hash}. "
+                        f"Update ADA_APPROVED_PLUGIN_CHECKSUMS in .env if this change is intentional."
+                    )
+                    plugin.state = PluginState.FAILED
+                    plugin.error_message = f"Checksum mismatch: expected {expected_hex}, got {actual_hash}"
+                    continue
+                print(f"[PLUGINS] Plugin '{name}' checksum verified: {actual_hash[:16]}...")
 
             # Check if this plugin is lazy
             is_lazy = name in lazy_plugins or plugin.metadata.get("lazy") is True
@@ -272,5 +338,137 @@ class PluginManager:
             print(f"[PLUGINS] Failed to dynamically load plugin package '{name}': {e}")
             traceback.print_exc()
             raise e
+
+    def review_plugin(self, plugin_path: Path) -> dict:
+        """Phase 1 of the two-phase plugin trust model: review a plugin without loading it.
+        
+        Runs the full verification chain in read-only mode:
+        1. Binary artifact rejection (.so, .pyc, .pyd, ELF, PE, Mach-O)
+        2. Dotfile/dot-directory rejection
+        3. AST safety scan on all .py files
+        4. Cryptographic signature verification (if signature.sig present)
+        5. Computes SHA-256 checksum
+        
+        Returns a dict with:
+        - 'name': plugin name
+        - 'passed': True if all checks passed
+        - 'checksum': SHA-256 hex digest of the plugin contents
+        - 'has_signature': whether a signature.sig is present
+        - 'signature_valid': whether the signature verified against trusted keys
+        - 'scan_results': list of findings/issues
+        - 'env_line': ready-to-paste .env line for ADA_APPROVED_PLUGIN_CHECKSUMS
+        - 'files_scanned': number of files examined
+        
+        This method NEVER loads or executes the plugin. It only scans and reports.
+        """
+        results = {
+            'name': plugin_path.name,
+            'passed': False,
+            'checksum': None,
+            'has_signature': False,
+            'signature_valid': False,
+            'scan_results': [],
+            'env_line': None,
+            'files_scanned': 0,
+        }
+        
+        # Step 1: Collect all files and check for binary artifacts and dotfiles
+        from agent.security.ast_safety import verify_artifact_safety
+        plugin_files = {}
+        try:
+            for root, dirs, files in os.walk(plugin_path):
+                dirs[:] = [d for d in dirs if d != '__pycache__']
+                for d in dirs:
+                    if d.startswith('.') and d not in ('__pycache__',):
+                        results['scan_results'].append(
+                            f"FAIL: Dot-directory '{d}' found (excluded from signature hash)"
+                        )
+                        return results
+                for f in files:
+                    if f.startswith('.'):
+                        results['scan_results'].append(
+                            f"FAIL: Dotfile '{f}' found (excluded from signature hash)"
+                        )
+                        return results
+                    fpath = Path(root) / f
+                    rel = fpath.relative_to(plugin_path)
+                    try:
+                        plugin_files[str(rel)] = fpath.read_bytes()
+                    except Exception:
+                        pass
+        except Exception as e:
+            results['scan_results'].append(f"FAIL: Error walking plugin directory: {e}")
+            return results
+        
+        results['files_scanned'] = len(plugin_files)
+        
+        # Step 2: Binary artifact check
+        artifact_errors = verify_artifact_safety(
+            plugin_files, base_description=f"plugin '{plugin_path.name}'"
+        )
+        if artifact_errors:
+            for err in artifact_errors:
+                results['scan_results'].append(f"FAIL: {err}")
+            return results
+        results['scan_results'].append("PASS: No forbidden binary artifacts detected")
+        
+        # Step 3: AST safety scan on all Python files
+        from agent.security.ast_safety import verify_ast_safety
+        ast_issues = []
+        py_count = 0
+        for rel_path, content in plugin_files.items():
+            if rel_path.endswith('.py'):
+                py_count += 1
+                try:
+                    code = content.decode('utf-8', errors='replace')
+                    verify_ast_safety(code, rel_path)
+                except Exception as e:
+                    ast_issues.append(f"{rel_path}: {e}")
+        
+        if ast_issues:
+            for issue in ast_issues:
+                results['scan_results'].append(f"AST WARNING: {issue}")
+            results['scan_results'].append(
+                f"AST scan flagged {len(ast_issues)} issue(s) across {py_count} Python file(s). "
+                "Review these carefully — the AST scanner is advisory, not exhaustive."
+            )
+        else:
+            results['scan_results'].append(
+                f"PASS: AST safety scan clean across {py_count} Python file(s)"
+            )
+        
+        # Step 4: Cryptographic signature verification
+        sig_path = plugin_path / "signature.sig"
+        results['has_signature'] = sig_path.exists()
+        if results['has_signature']:
+            try:
+                from agent.execution.tools.security import _verify_skill_signature
+                _verify_skill_signature(plugin_path)
+                results['signature_valid'] = True
+                results['scan_results'].append("PASS: Cryptographic signature verified")
+            except Exception as e:
+                results['scan_results'].append(f"FAIL: Signature verification failed: {e}")
+                return results
+        else:
+            results['scan_results'].append(
+                "INFO: No signature.sig present. Plugin will require AST scan on every load."
+            )
+        
+        # Step 5: Compute checksum (same algorithm as _calculate_skill_hash)
+        from agent.execution.tools.security import _calculate_skill_hash
+        checksum = _calculate_skill_hash(plugin_path).hex()
+        results['checksum'] = checksum
+        
+        # Generate the .env-ready line
+        results['env_line'] = f'{plugin_path.name}:{checksum}'
+        
+        # All checks passed
+        results['passed'] = True
+        results['scan_results'].append(
+            f"PASS: Plugin '{plugin_path.name}' review complete. "
+            f"Checksum: {checksum}"
+        )
+        
+        return results
 
 plugin_manager = PluginManager()
