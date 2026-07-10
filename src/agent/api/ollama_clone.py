@@ -95,7 +95,15 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
         timeout=60.0,
     )
     response = await agent.chat(prompt)
-    if not response or not response.text.strip():
+    if not response:
+        raise RuntimeError("Keyless execution returned empty response.")
+
+    # The agy harness returns a subprocess — consume its stdout stream
+    # so that response.text is populated with the full output.
+    if response.proc is not None:
+        await response._consume_stream()
+
+    if not response.text.strip():
         raise RuntimeError("Keyless execution returned empty response.")
         
     return response.text
