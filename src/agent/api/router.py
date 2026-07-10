@@ -96,6 +96,12 @@ def _canonicalize_query(raw_query: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Strict check: reject TESTING=1 in production environments
+    if os.environ.get("TESTING") == "1":
+        import sys
+        if "pytest" not in sys.modules:
+            raise RuntimeError("Security Exception: TESTING=1 is set, but the process is not running under pytest. Halting startup.")
+            
     # Clear any stale active tasks on startup
     memory.clear_active_tasks()
     
