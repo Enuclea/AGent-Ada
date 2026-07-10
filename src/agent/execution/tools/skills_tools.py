@@ -857,7 +857,18 @@ You MUST end your response with a JSON block in the following format:
                 file_dest = (dest_folder / rel_path).resolve()
                 if not file_dest.is_relative_to(dest_folder):
                     return "Error: Path traversal attempt detected during installation."
+                
+                # Check for symlink at target destination to block TOCTOU
+                if os.path.islink(file_dest):
+                    return "Error: Symlink detected in skill destination path. Aborting."
+                    
                 file_dest.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Verify resolved parent is still relative to dest_folder to block symlink directory swaps
+                resolved_parent = file_dest.parent.resolve()
+                if not resolved_parent.is_relative_to(dest_folder):
+                    return "Error: Path traversal attempt detected during installation."
+                
                 with open(file_dest, "wb") as f:
                     f.write(content_bytes)
             

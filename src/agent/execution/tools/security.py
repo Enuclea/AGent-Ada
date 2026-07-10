@@ -51,7 +51,10 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     skill_hash = _calculate_skill_hash(src_folder)
     
     from cryptography.hazmat.primitives.asymmetric import ed25519
-    trusted_keys = list(_additional_trusted_keys)
+    import sys
+    trusted_keys = []
+    if os.environ.get("TESTING") == "1" and "pytest" in sys.modules:
+        trusted_keys.extend(_additional_trusted_keys)
     from agent.core.config import DEVELOPER_PUBLIC_KEY
     trusted_keys.append(DEVELOPER_PUBLIC_KEY)
     
@@ -84,7 +87,10 @@ def _verify_in_memory_signature(files_dict: dict) -> bool:
     skill_hash = _calculate_in_memory_hash(files_dict)
     
     from cryptography.hazmat.primitives.asymmetric import ed25519
-    trusted_keys = list(_additional_trusted_keys)
+    import sys
+    trusted_keys = []
+    if os.environ.get("TESTING") == "1" and "pytest" in sys.modules:
+        trusted_keys.extend(_additional_trusted_keys)
     from agent.core.config import DEVELOPER_PUBLIC_KEY
     trusted_keys.append(DEVELOPER_PUBLIC_KEY)
     
@@ -114,6 +120,11 @@ def _sandbox_command_if_possible(command: str, require_network_isolation: bool =
 
     # Check if running on Windows OS
     if sys.platform == "win32":
+        if require_network_isolation:
+            raise PermissionError(
+                "Security Exception: Sandbox environment could not be enforced with network isolation on Windows. "
+                "Windows does not support Bubblewrap network namespace isolation."
+            )
         if _ALLOW_UNSANDBOXED_EXECUTION_FROZEN:
             print("[Security] Warning: Running on Windows without filesystem sandboxing. Sandbox restrictions are disabled.", file=sys.stderr)
             return ["cmd.exe", "/c", command]

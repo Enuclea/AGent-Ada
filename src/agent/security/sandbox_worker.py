@@ -8,14 +8,17 @@ from pathlib import Path
 
 # 1. Immediately extract and validate the transient IPC Token
 IPC_TOKEN = None
-if "--token" in sys.argv:
-    try:
-        idx = sys.argv.index("--token")
-        IPC_TOKEN = sys.argv[idx + 1]
-        sys.argv.pop(idx)
-        sys.argv.pop(idx)
-    except (ValueError, IndexError):
-        pass
+filtered_args = []
+i = 1
+while i < len(sys.argv):
+    if sys.argv[i] == "--token":
+        if i + 1 < len(sys.argv):
+            IPC_TOKEN = sys.argv[i + 1]
+            i += 2
+            continue
+    filtered_args.append(sys.argv[i])
+    i += 1
+sys.argv = [sys.argv[0]] + filtered_args
 
 if not IPC_TOKEN or len(IPC_TOKEN) < 16:
     print("Sandbox security violation: Invalid or missing IPC token.", file=sys.stderr)
