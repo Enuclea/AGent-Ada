@@ -148,10 +148,15 @@ async def test_auth_bypass_prevention():
         router_mod._test_bypass_enabled = original_bypass
         
     # 2. When TESTING is NOT "1", the bypass MUST NOT work (should raise HTTPException)
-    with patch.dict(os.environ, {"TESTING": "0", "DASHBOARD_USERNAME": "admin", "DASHBOARD_PASSWORD": "password"}):
-        with pytest.raises(HTTPException) as excinfo:
-            await authenticate(mock_request, credentials=None)
-        assert excinfo.value.status_code == 401
+    #    Note: is_testing is frozen at import time, so we must also disable the sentinel
+    try:
+        router_mod._test_bypass_enabled = False
+        with patch.dict(os.environ, {"TESTING": "0", "DASHBOARD_USERNAME": "admin", "DASHBOARD_PASSWORD": "password"}):
+            with pytest.raises(HTTPException) as excinfo:
+                await authenticate(mock_request, credentials=None)
+            assert excinfo.value.status_code == 401
+    finally:
+        router_mod._test_bypass_enabled = original_bypass
     
     # 3. When sentinel IS enabled AND TESTING=1, bypass should work (conftest.py activates this)
     try:

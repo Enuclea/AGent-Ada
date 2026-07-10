@@ -115,28 +115,35 @@ def test_ollama_chat_endpoint_invalid():
     assert resp.status_code == 400
 
 def test_ollama_bearer_token_authentication():
+    # Temporarily disable the test bypass sentinel so bearer auth is actually exercised
+    import agent.api.router as router_mod
+    original_bypass = router_mod._test_bypass_enabled
+    router_mod._test_bypass_enabled = False
+    
     old_testing = os.environ.get("TESTING")
     if "TESTING" in os.environ:
         os.environ.pop("TESTING")
     
-    with mock.patch.dict(os.environ, {"DASHBOARD_PASSWORD": "secret-token"}):
-        payload = {
-            "model": "llama3",
-            "prompt": "Test Prompt",
-            "stream": False
-        }
-        headers_invalid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer bad-token"}
-        resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_invalid)
-        assert resp.status_code == 401
-        
-        headers_valid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer secret-token"}
-        with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Token Success"):
-            resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_valid)
-            assert resp.status_code == 200
-            assert resp.json()["response"] == "Token Success"
-
-    if old_testing is not None:
-        os.environ["TESTING"] = old_testing
+    try:
+        with mock.patch.dict(os.environ, {"DASHBOARD_PASSWORD": "secret-token"}):
+            payload = {
+                "model": "llama3",
+                "prompt": "Test Prompt",
+                "stream": False
+            }
+            headers_invalid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer bad-token"}
+            resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_invalid)
+            assert resp.status_code == 401
+            
+            headers_valid = {"X-Ada-Mode": "sandbox-review", "Authorization": "Bearer secret-token"}
+            with mock.patch("agent.api.ollama_clone.execute_keyless_gemini", return_value="Token Success"):
+                resp = client.post("/api/ollama/api/generate", json=payload, headers=headers_valid)
+                assert resp.status_code == 200
+                assert resp.json()["response"] == "Token Success"
+    finally:
+        router_mod._test_bypass_enabled = original_bypass
+        if old_testing is not None:
+            os.environ["TESTING"] = old_testing
 
 def test_ollama_generate_stream():
     payload = {
