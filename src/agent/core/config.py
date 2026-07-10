@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # Platform-specific lists (loaded from platform_config.json)
     disabled_plugins: List[str] = []
     disabled_skills: List[str] = []
+    lazy_plugins: List[str] = ["playwright"]
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
                     config_data = json.load(f)
                 self.disabled_plugins = config_data.get("disabled_plugins", [])
                 self.disabled_skills = config_data.get("disabled_skills", [])
+                self.lazy_plugins = config_data.get("lazy_plugins", ["playwright"])
             except Exception as e:
                 print(f"[CONFIG] Failed to parse platform_config.json: {e}")
 

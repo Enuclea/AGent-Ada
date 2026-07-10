@@ -295,3 +295,30 @@ def load_plugins(app: FastAPI) -> None:
     plugin_manager.load_plugins(app)
 
 load_plugins(app)
+
+@app.api_route("/api/playwright/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "HEAD"])
+async def lazy_playwright_route_fallback(request: Request, path: str):
+    """Dynamic fallback route for Playwright endpoints.
+    
+    If a request for a Playwright route is received before the plugin is loaded,
+    this endpoint loads the Playwright plugin on-demand (which registers its routes)
+    and forwards the request to the correct handler.
+    """
+    from agent.core.plugins import plugin_manager, PluginState
+    if "playwright" in plugin_manager.plugins:
+        plugin = plugin_manager.plugins["playwright"]
+        if plugin.state != PluginState.ACTIVE:
+            plugin_manager.load_single_plugin("playwright")
+            
+    # Now that the plugin has been loaded, locate the registered handler
+    for route in app.routes:
+        match, child_scope = route.matches(request.scope)
+        if match:
+            # Skip ourselves to avoid infinite recursion
+            if route.endpoint == lazy_playwright_route_fallback:
+                continue
+            # Execute the matched handler
+            response = await route.handle(request.scope, request.receive, request.send)
+            return response
+            
+    raise HTTPException(status_code=404, detail="Playwright route not found.")

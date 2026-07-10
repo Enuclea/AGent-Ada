@@ -2,7 +2,6 @@ import uuid
 import asyncio
 from pathlib import Path
 from typing import Optional
-from playwright.async_api import async_playwright
 from agent.plugins.playwright.routes import SCREENSHOTS_DIR
 
 async def playwright_browse_url(url: str, selector: Optional[str] = None, wait_time: int = 0) -> str:
@@ -16,6 +15,7 @@ async def playwright_browse_url(url: str, selector: Optional[str] = None, wait_t
         selector: Optional CSS selector of a specific element to wait for or capture a screenshot of.
         wait_time: Optional seconds to wait after navigation (useful for animations or lazy-loaded components).
     """
+    from playwright.async_api import async_playwright
     if not url.startswith(("http://", "https://")):
         return "Error: Invalid URL. It must start with http:// or https://"
 

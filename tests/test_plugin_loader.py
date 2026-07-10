@@ -29,6 +29,26 @@ def test_plugin_loader_empty_or_invalid_paths():
         # Should execute successfully without throwing errors
         load_plugins(app)
 
+def sign_mock_plugin(plugin_path: Path):
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.hazmat.primitives import serialization
+    from agent.execution.tools.security import _calculate_skill_hash
+    import os
+    
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    pub_key = private_key.public_key()
+    pub_bytes = pub_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+    pub_key_hex = pub_bytes.hex()
+    os.environ["TESTING"] = "1"
+    os.environ["ADA_SKILL_PUBLIC_KEY"] = pub_key_hex
+    
+    plugin_hash = _calculate_skill_hash(plugin_path)
+    signature = private_key.sign(plugin_hash)
+    (plugin_path / "signature.sig").write_bytes(signature)
+
 def test_plugin_loader_mock_plugin_loading():
     app = FastAPI()
     
@@ -43,6 +63,7 @@ def test_plugin_loader_mock_plugin_loading():
 def setup_plugin(app, register_tools, register_scheduled_task):
     app.state.mock_plugin_loaded = True
 """)
+        sign_mock_plugin(plugin_dir)
         
         # Mock agent.plugins.__path__ to point to our temp directory
         with patch("agent.plugins.__path__", [str(tmp_path)]), \
@@ -69,6 +90,7 @@ def setup_plugin(app, register_tools, register_scheduled_task):
     app.state.mock_lifecycle_loaded = True
     app.state.state_during_setup = plugin_manager.plugins["mock_lifecycle_plugin"].state
 """)
+        sign_mock_plugin(plugin_dir)
         
         with patch("agent.plugins.__path__", [str(tmp_path)]), \
              patch("agent.tools.register_plugin_tools", MagicMock()), \
@@ -99,6 +121,7 @@ def test_plugin_failed_lifecycle_state():
 def setup_plugin(app, register_tools, register_scheduled_task):
     raise ValueError("Mock setup failure")
 """)
+        sign_mock_plugin(plugin_dir)
         
         with patch("agent.plugins.__path__", [str(tmp_path)]), \
              patch("agent.tools.register_plugin_tools", MagicMock()), \
