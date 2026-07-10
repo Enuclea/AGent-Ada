@@ -15,26 +15,46 @@ def _is_safe_path(base_dir, path) -> bool:
     from agent.security.path_utils import is_safe_path
     return is_safe_path(Path(base_dir), Path(path))
 
+def _canonical_rel_path(rel_path) -> str:
+    """Normalize a relative path to a canonical POSIX string for hash computation.
+    
+    This ensures on-disk (Path objects) and in-memory (string keys) hashing
+    produce identical results for identical file trees, regardless of OS path
+    separators or Unicode normalization form.
+    """
+    import unicodedata
+    # Convert Path to string using forward slashes (POSIX), then NFC-normalize
+    s = str(rel_path).replace("\\", "/")
+    return unicodedata.normalize("NFC", s)
+
+
 def _calculate_skill_hash(src_folder: Path) -> bytes:
+    """Compute SHA-256 hash of a skill/plugin directory on disk.
+    
+    Uses canonical POSIX path normalization to ensure identical results
+    with _calculate_in_memory_hash for the same file tree.
+    """
     import hashlib
     hasher = hashlib.sha256()
-    file_paths = []
+    entries = []  # list of (canonical_rel_path_str, absolute_path)
     for root, dirs, files in os.walk(src_folder):
         dirs[:] = [d for d in dirs if not d.startswith('.')]
         for f in files:
             if f != "signature.sig" and not f.startswith('.'):
-                file_paths.append(Path(root) / f)
+                abs_path = Path(root) / f
+                rel = _canonical_rel_path(abs_path.relative_to(src_folder))
+                entries.append((rel, abs_path))
                 
-    file_paths.sort(key=lambda p: p.relative_to(src_folder))
+    entries.sort(key=lambda e: e[0])
     
-    for p in file_paths:
-        hasher.update(str(p.relative_to(src_folder)).encode('utf-8'))
+    for rel_str, abs_path in entries:
+        hasher.update(rel_str.encode('utf-8'))
         try:
-            with open(p, "rb") as f:
+            with open(abs_path, "rb") as f:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
         except Exception as e:
-            raise IOError(f"Failed to read file {p} during hash calculation: {e}")
+            raise IOError(f"Failed to read file {abs_path} during hash calculation: {e}")
             
     return hasher.digest()
 
@@ -84,13 +104,23 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     raise ValueError(f"Signature verification failed: {last_err}")
 
 def _calculate_in_memory_hash(files_dict: dict) -> bytes:
+    """Compute SHA-256 hash of in-memory file contents.
+    
+    Uses canonical POSIX path normalization to ensure identical results
+    with _calculate_skill_hash for the same file tree.
+    """
     import hashlib
     hasher = hashlib.sha256()
-    sorted_keys = sorted(files_dict.keys())
-    for rel_path in sorted_keys:
-        if rel_path != "signature.sig" and not Path(rel_path).name.startswith('.'):
-            hasher.update(rel_path.encode('utf-8'))
-            hasher.update(files_dict[rel_path])
+    # Canonicalize all keys, then sort by the canonical form
+    canonical_entries = []
+    for rel_path, content in files_dict.items():
+        canon = _canonical_rel_path(rel_path)
+        if canon != "signature.sig" and not Path(canon).name.startswith('.'):
+            canonical_entries.append((canon, content))
+    canonical_entries.sort(key=lambda e: e[0])
+    for rel_str, content in canonical_entries:
+        hasher.update(rel_str.encode('utf-8'))
+        hasher.update(content)
     return hasher.digest()
 
 def _verify_in_memory_signature(files_dict: dict) -> bool:

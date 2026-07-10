@@ -248,14 +248,21 @@ class PluginManager:
 
                 # TOCTOU-safe checksum verification: compute hash from the same
                 # in-memory bytes that were just scanned, not a second disk read.
+                # Uses the same canonical path normalization as _calculate_skill_hash
+                # and _calculate_in_memory_hash to ensure consistent digests.
                 if pinned_checksums and name in pinned_checksums:
                     import hashlib
+                    from agent.execution.tools.security import _canonical_rel_path
                     hasher = hashlib.sha256()
-                    sorted_keys = sorted(verified_files.keys())
-                    for rel_path in sorted_keys:
-                        if rel_path != "signature.sig" and not Path(rel_path).name.startswith('.'):
-                            hasher.update(rel_path.encode('utf-8'))
-                            hasher.update(verified_files[rel_path])
+                    canonical_entries = []
+                    for rel_path, content in verified_files.items():
+                        canon = _canonical_rel_path(rel_path)
+                        if canon != "signature.sig" and not Path(canon).name.startswith('.'):
+                            canonical_entries.append((canon, content))
+                    canonical_entries.sort(key=lambda e: e[0])
+                    for rel_str, content in canonical_entries:
+                        hasher.update(rel_str.encode('utf-8'))
+                        hasher.update(content)
                     actual_hash = hasher.hexdigest()
                     expected_hex = pinned_checksums[name]
                     if actual_hash != expected_hex:
