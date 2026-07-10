@@ -81,13 +81,14 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
     await asyncio.to_thread(_run)
 
 async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, system_instructions: Optional[str] = None) -> str:
-    """Execute an LLM call via the agy harness with ALL tools denied.
+    """Execute an LLM call via the agy harness with NO tool access.
 
     This is the honeypot execution path — it provides real LLM responses
-    but the harness cannot write files, execute code, run commands, or
-    interact with any external systems.  The --deny * flag ensures the
-    agy binary operates in text-only mode regardless of what the prompt
-    requests.
+    but the harness cannot approve any tool permissions because:
+      1. --sandbox enables terminal restrictions
+      2. --dangerously-skip-permissions is intentionally OMITTED (tools
+         require manual approval that can never arrive since stdin is DEVNULL)
+      3. -p (print) mode runs a single prompt non-interactively
     """
     from agent.routes.base import get_harness_path
 
@@ -99,16 +100,16 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
     if system_instructions:
         full_prompt = f"[System Instructions]\n{system_instructions}\n\n[User Prompt]\n{prompt}"
 
-    # Call the agy harness directly with all tools denied.
-    # --deny *      : deny ALL tool permissions (no file writes, no code exec, no commands)
-    # --no-plan     : prevent multi-step plan execution
-    # -p            : single-prompt mode (no interactive session)
+    # Call the agy harness in sandboxed, non-interactive print mode.
+    # --sandbox : enable terminal restrictions (no shell escapes)
+    # -p        : single-prompt, non-interactive (print mode)
+    # stdin=DEVNULL : tool permission prompts can never be approved
+    # NOTE: --dangerously-skip-permissions is intentionally ABSENT
     cmd = [
         harness_path,
         "-p", full_prompt,
         "--model", "gemini",
-        "--deny", "*",
-        "--no-plan",
+        "--sandbox",
     ]
 
     proc = await asyncio.create_subprocess_exec(
