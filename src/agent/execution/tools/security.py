@@ -139,6 +139,7 @@ def _sandbox_command_if_possible(command: str, require_network_isolation: bool =
     # 1. Try Bubblewrap (bwrap)
     bwrap_path = shutil.which("bwrap")
     if bwrap_path:
+        workspace_bind_flag = "--ro-bind" if require_network_isolation else "--bind"
         bwrap_args = [
             bwrap_path,
             "--ro-bind", "/usr", "/usr",
@@ -151,7 +152,7 @@ def _sandbox_command_if_possible(command: str, require_network_isolation: bool =
             "--dir", "/var",
             "--proc", "/proc",
             "--dev", "/dev",
-            "--bind", str(workspace_dir), str(workspace_dir),
+            workspace_bind_flag, str(workspace_dir), str(workspace_dir),
             "--chdir", str(workspace_dir),
             "--unshare-all",
             "--die-with-parent"
