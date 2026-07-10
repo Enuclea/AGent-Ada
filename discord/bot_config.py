@@ -1,6 +1,7 @@
 import json
 import urllib.request
 import urllib.error
+import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -15,6 +16,9 @@ def load_config() -> Dict[str, Any]:
                 api_base = json.load(f).get("agent_api_base", api_base)
         except Exception:
             pass
+    api_base = os.environ.get("AGENT_API_BASE") or api_base
+
+    config_data = None
     try:
         path = "/api/discord/config"
         headers = get_auth_headers("GET", path)
@@ -27,24 +31,104 @@ def load_config() -> Dict[str, Any]:
             if response.status == 200:
                 data = json.loads(response.read().decode("utf-8"))
                 if isinstance(data, dict):
-                    return data
+                    config_data = data
     except Exception:
         pass
 
-    # Reliable local fallback
-    if not CONFIG_FILE_PATH.exists():
-        return {
+    if config_data is None:
+        if CONFIG_FILE_PATH.exists():
+            try:
+                with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except Exception:
+                pass
+
+    if config_data is None:
+        config_data = {
             "default_model": "gemini-3.5-flash",
             "channels": {}
         }
-    try:
-        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {
-            "default_model": "gemini-3.5-flash",
-            "channels": {}
-        }
+
+    # Apply environment overrides to consolidate configs in .env
+    def parse_int_list(env_val: str) -> List[int]:
+        if not env_val:
+            return []
+        res = []
+        for x in env_val.split(","):
+            x = x.strip()
+            if x:
+                try:
+                    res.append(int(x))
+                except ValueError:
+                    pass
+        return res
+
+    def parse_str_list(env_val: str) -> List[str]:
+        if not env_val:
+            return []
+        return [x.strip() for x in env_val.split(",") if x.strip()]
+
+    env_default_model = os.environ.get("DEFAULT_MODEL") or os.environ.get("DISCORD_DEFAULT_MODEL")
+    if env_default_model:
+        config_data["default_model"] = env_default_model
+
+    config_data["agent_api_base"] = os.environ.get("AGENT_API_BASE") or config_data.get("agent_api_base", "http://127.0.0.1:8000")
+
+    env_roleplay_guilds = os.environ.get("ROLEPLAY_GUILD_IDS")
+    if env_roleplay_guilds is not None:
+        config_data["roleplay_guild_ids"] = parse_int_list(env_roleplay_guilds)
+
+    env_boss_users = os.environ.get("BOSS_USER_IDS")
+    if env_boss_users is not None:
+        config_data["boss_user_ids"] = parse_int_list(env_boss_users)
+
+    env_mod_channel = os.environ.get("MODERATION_CHANNEL_ID")
+    if env_mod_channel:
+        try:
+            config_data["moderation_channel_id"] = int(env_mod_channel)
+        except ValueError:
+            pass
+
+    env_thumbtack_channel = os.environ.get("THUMBTACK_CHANNEL_ID")
+    if env_thumbtack_channel:
+        try:
+            config_data["thumbtack_channel_id"] = int(env_thumbtack_channel)
+        except ValueError:
+            pass
+
+    env_bar_channel = os.environ.get("BAR_CHANNEL_ID")
+    if env_bar_channel:
+        try:
+            config_data["bar_channel_id"] = int(env_bar_channel)
+        except ValueError:
+            pass
+
+    env_linkshell_channel = os.environ.get("LINKSHELL_CHANNEL_ID")
+    if env_linkshell_channel:
+        try:
+            config_data["linkshell_channel_id"] = int(env_linkshell_channel)
+        except ValueError:
+            pass
+
+    env_around_house_channel = os.environ.get("AROUND_HOUSE_CHANNEL_ID")
+    if env_around_house_channel:
+        try:
+            config_data["around_house_channel_id"] = int(env_around_house_channel)
+        except ValueError:
+            pass
+
+    env_admin_users = os.environ.get("ADMIN_USER_IDS")
+    if env_admin_users is not None:
+        config_data["admin_user_ids"] = parse_str_list(env_admin_users)
+
+    env_channels_config = os.environ.get("DISCORD_CHANNELS_CONFIG")
+    if env_channels_config:
+        try:
+            config_data["channels"] = json.loads(env_channels_config)
+        except Exception as e:
+            print(f"Error parsing DISCORD_CHANNELS_CONFIG: {e}")
+
+    return config_data
 
 def save_config(config: Dict[str, Any]) -> None:
     """Saves the configuration to config.json and pushes to the central AGent server."""

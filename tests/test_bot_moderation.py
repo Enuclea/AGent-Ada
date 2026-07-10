@@ -143,3 +143,24 @@ async def test_inspect_message_local_rules_link_protection_enabled():
         result = await discord_bot.inspect_message_local_rules(mock_message)
         assert result is True  # Should flag since link protection is enabled and domain untrusted
         mock_alert.assert_called_once()
+
+def test_load_config_env_overrides():
+    env_vars = {
+        "DEFAULT_MODEL": "gemini-test",
+        "ROLEPLAY_GUILD_IDS": "123,456",
+        "BOSS_USER_IDS": "789",
+        "MODERATION_CHANNEL_ID": "999",
+        "ADMIN_USER_IDS": "admin1,admin2",
+        "DISCORD_CHANNELS_CONFIG": '{"111": {"channel_name": "test-chan"}}'
+    }
+    mock_path = MagicMock()
+    mock_path.exists.return_value = False
+    with patch.dict(os.environ, env_vars), \
+         patch("bot_config.CONFIG_FILE_PATH", mock_path):
+        cfg = bot_config.load_config()
+        assert cfg["default_model"] == "gemini-test"
+        assert cfg["roleplay_guild_ids"] == [123, 456]
+        assert cfg["boss_user_ids"] == [789]
+        assert cfg["moderation_channel_id"] == 999
+        assert cfg["admin_user_ids"] == ["admin1", "admin2"]
+        assert cfg["channels"]["111"]["channel_name"] == "test-chan"
