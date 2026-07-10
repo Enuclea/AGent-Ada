@@ -38,6 +38,17 @@ class SecurityPipeline:
             return ""
             
         if depth > 2:
+            has_more_b64 = False
+            for match in re.finditer(r'[a-zA-Z0-9+/]{16,}={0,2}', prompt):
+                try:
+                    decoded = base64.b64decode(match.group(0)).decode('utf-8')
+                    if decoded.strip():
+                        has_more_b64 = True
+                        break
+                except Exception:
+                    pass
+            if has_more_b64:
+                raise InjectionDetectedError("Prompt injection attempt detected and blocked (maximum recursion depth exceeded).")
             return prompt
             
         # Translate common Cyrillic/Greek lookalikes to Latin equivalents to prevent homoglyph bypasses

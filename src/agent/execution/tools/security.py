@@ -38,7 +38,20 @@ def _calculate_skill_hash(src_folder: Path) -> bytes:
             
     return hasher.digest()
 
-_additional_trusted_keys = []
+class TrustedKeysList(list):
+    def append(self, item):
+        import sys
+        if not (os.environ.get("TESTING") == "1" and "pytest" in sys.modules):
+            raise PermissionError("Security Exception: Cannot modify trusted keys outside of test environment.")
+        super().append(item)
+        
+    def extend(self, items):
+        import sys
+        if not (os.environ.get("TESTING") == "1" and "pytest" in sys.modules):
+            raise PermissionError("Security Exception: Cannot modify trusted keys outside of test environment.")
+        super().extend(items)
+        
+_additional_trusted_keys = TrustedKeysList()
 
 def _verify_skill_signature(src_folder: Path) -> bool:
     sig_path = src_folder / "signature.sig"
@@ -108,7 +121,12 @@ def _verify_in_memory_signature(files_dict: dict) -> bool:
 
 from typing import List
 
-def _sandbox_command_if_possible(command: str, require_network_isolation: bool = False) -> List[str]:
+def _sandbox_command_if_possible(
+    command: str, 
+    require_network_isolation: bool = False,
+    read_only_workspace: bool = False,
+    bind_paths: List[str] = None
+) -> List[str]:
     """Wraps a shell command in bubblewrap or Landlock sandbox if available on Linux.
     
     Isolates file write access to the workspace and /tmp directories, and restricts
@@ -139,7 +157,7 @@ def _sandbox_command_if_possible(command: str, require_network_isolation: bool =
     # 1. Try Bubblewrap (bwrap)
     bwrap_path = shutil.which("bwrap")
     if bwrap_path:
-        workspace_bind_flag = "--ro-bind" if require_network_isolation else "--bind"
+        workspace_bind_flag = "--ro-bind" if (require_network_isolation or read_only_workspace) else "--bind"
         bwrap_args = [
             bwrap_path,
             "--ro-bind", "/usr", "/usr",
@@ -154,9 +172,37 @@ def _sandbox_command_if_possible(command: str, require_network_isolation: bool =
             "--dev", "/dev",
             workspace_bind_flag, str(workspace_dir), str(workspace_dir),
             "--chdir", str(workspace_dir),
-            "--unshare-all",
             "--die-with-parent"
         ]
+        
+        if require_network_isolation:
+            bwrap_args.append("--unshare-all")
+        else:
+            bwrap_args += [
+                "--unshare-ipc",
+                "--unshare-pid",
+                "--unshare-uts",
+                "--unshare-cgroup"
+            ]
+            if os.path.exists("/etc/resolv.conf"):
+                bwrap_args += ["--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf"]
+            if os.path.exists("/etc/hosts"):
+                bwrap_args += ["--ro-bind", "/etc/hosts", "/etc/hosts"]
+            for cert_dir in ["/etc/ssl", "/etc/ca-certificates", "/etc/pki", "/usr/share/ca-certificates"]:
+                if os.path.exists(cert_dir):
+                    bwrap_args += ["--ro-bind", cert_dir, cert_dir]
+                
+        if bind_paths:
+            for bp in bind_paths:
+                if isinstance(bp, tuple):
+                    path_str, is_writable = bp
+                else:
+                    path_str, is_writable = bp, False
+                bp_path = Path(path_str).resolve()
+                if bp_path.exists():
+                    bind_flag = "--bind" if is_writable else "--ro-bind"
+                    bwrap_args += [bind_flag, str(bp_path), str(bp_path)]
+                    
         return bwrap_args + ["--", "bash", "-c", command]
         
     # If strict network isolation is required, we cannot fall back to Landlock (filesystem-only)

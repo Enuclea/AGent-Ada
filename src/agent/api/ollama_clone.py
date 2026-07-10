@@ -145,6 +145,7 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
          require manual approval that can never arrive since stdin is DEVNULL)
       3. -p (print) mode runs a single prompt non-interactively
     """
+    from pathlib import Path
     from agent.routes.base import get_harness_path
     from agent.execution.tools.security import _sandbox_command_if_possible
     import shlex
@@ -172,9 +173,25 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
         "--sandbox",
     ]
 
-    # Double-sandboxing: wrap the agy CLI execution in Bubblewrap/Landlock
+    # Double-sandboxing: wrap the agy CLI execution in Bubblewrap/Landlock.
+    # For the honeypot, we need network access to talk to Gemini API (require_network_isolation=False).
+    # However, we mount the workspace read-only, and we bind the required agy config files and log folders.
+    cli_dir = Path.home() / ".gemini" / "antigravity-cli"
+    bind_paths = [
+        harness_path,
+        str(cli_dir / "antigravity-oauth-token"),
+        str(cli_dir / "installation_id"),
+        str(cli_dir / "settings.json"),
+        (str(cli_dir / "log"), True),
+        (str(cli_dir / "crashes"), True)
+    ]
     raw_command = " ".join(shlex.quote(c) for c in cmd)
-    sandboxed_cmd = _sandbox_command_if_possible(raw_command, require_network_isolation=True)
+    sandboxed_cmd = _sandbox_command_if_possible(
+        raw_command,
+        require_network_isolation=False,
+        read_only_workspace=True,
+        bind_paths=bind_paths
+    )
 
     proc = await asyncio.create_subprocess_exec(
         *sandboxed_cmd,

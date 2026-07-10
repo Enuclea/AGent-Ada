@@ -11,14 +11,13 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
     """Statically scans all Python files in the plugin package for unsafe calls,
     unless the plugin has a valid cryptographic signature.
     """
-    # 1. Try to verify the plugin's cryptographic signature first
-    try:
+    # 1. Try to verify the plugin's cryptographic signature first if signature file is present
+    sig_path = plugin_path / "signature.sig"
+    if sig_path.exists():
         from agent.execution.tools.security import _verify_skill_signature
-        if _verify_skill_signature(plugin_path):
-            print(f"[PLUGINS] Plugin '{plugin_path.name}' verified cryptographically. Bypassing AST scan.")
-            return
-    except Exception as e:
-        print(f"[PLUGINS] Cryptographic signature verification failed or missing for plugin '{plugin_path.name}': {e}")
+        _verify_skill_signature(plugin_path)
+        print(f"[PLUGINS] Plugin '{plugin_path.name}' verified cryptographically. Bypassing AST scan.")
+        return
 
     # 2. Fall back to AST safety checks on all Python files in the plugin package
     print(f"[PLUGINS] AST scanning plugin '{plugin_path.name}'...")
