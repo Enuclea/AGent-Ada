@@ -32,8 +32,7 @@ def test_plugin_loader_empty_or_invalid_paths():
 def sign_mock_plugin(plugin_path: Path):
     from cryptography.hazmat.primitives.asymmetric import ed25519
     from cryptography.hazmat.primitives import serialization
-    from agent.execution.tools.security import _calculate_skill_hash
-    import os
+    from agent.execution.tools.security import _calculate_skill_hash, add_test_trusted_key, _TEST_KEY_SENTINEL
     
     private_key = ed25519.Ed25519PrivateKey.generate()
     pub_key = private_key.public_key()
@@ -42,8 +41,9 @@ def sign_mock_plugin(plugin_path: Path):
         format=serialization.PublicFormat.Raw
     )
     pub_key_hex = pub_bytes.hex()
-    os.environ["TESTING"] = "1"
-    os.environ["ADA_SKILL_PUBLIC_KEY"] = pub_key_hex
+    
+    # Register the public key securely in-process
+    add_test_trusted_key(_TEST_KEY_SENTINEL, pub_key_hex)
     
     plugin_hash = _calculate_skill_hash(plugin_path)
     signature = private_key.sign(plugin_hash)

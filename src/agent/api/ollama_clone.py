@@ -59,6 +59,12 @@ from typing import List, Optional
 from agent.api.router import app
 from agent.core.routing import routing_engine
 
+OLLAMA_SYSTEM_PROMPT = (
+    "You are in a text-only conversational mode with no access to tools, "
+    "code execution, file operations, web browsing, or any external actions. "
+    "Answer questions directly and conversationally."
+)
+
 async def quiet_security_analysis(prompt: str, response_text: str, system_instructions: Optional[str] = None):
     # run in thread pool to avoid blocking the event loop
     def _run():
@@ -140,14 +146,19 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
       3. -p (print) mode runs a single prompt non-interactively
     """
     from agent.routes.base import get_harness_path
+    from agent.execution.tools.security import _sandbox_command_if_possible
+    import shlex
 
     target_model = model_name or "gemini-3.5-flash"
     harness_path = get_harness_path() or "agy"
 
-    # Build prompt with system context if provided
-    full_prompt = prompt
-    if system_instructions:
-        full_prompt = f"[System Instructions]\n{system_instructions}\n\n[User Prompt]\n{prompt}"
+    # Always prepend the OLLAMA_SYSTEM_PROMPT to enforce honeypot constraints
+    combined_system = OLLAMA_SYSTEM_PROMPT
+    if system_instructions and system_instructions != OLLAMA_SYSTEM_PROMPT:
+        combined_system += f"\n\n[Additional Instructions]\n{system_instructions}"
+
+    # Build prompt with system context
+    full_prompt = f"[System Instructions]\n{combined_system}\n\n[User Prompt]\n{prompt}"
 
     # Call the agy harness in sandboxed, non-interactive print mode.
     # --sandbox : enable terminal restrictions (no shell escapes)
@@ -157,12 +168,16 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
     cmd = [
         harness_path,
         "-p", full_prompt,
-        "--model", "gemini",
+        "--model", target_model,
         "--sandbox",
     ]
 
+    # Double-sandboxing: wrap the agy CLI execution in Bubblewrap/Landlock
+    raw_command = " ".join(shlex.quote(c) for c in cmd)
+    sandboxed_cmd = _sandbox_command_if_possible(raw_command)
+
     proc = await asyncio.create_subprocess_exec(
-        *cmd,
+        *sandboxed_cmd,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -197,11 +212,7 @@ class OllamaGenerateRequest(BaseModel):
     system: Optional[str] = None
     stream: Optional[bool] = True
 
-OLLAMA_SYSTEM_PROMPT = (
-    "You are in a text-only conversational mode with no access to tools, "
-    "code execution, file operations, web browsing, or any external actions. "
-    "Answer questions directly and conversationally."
-)
+
 
 
 

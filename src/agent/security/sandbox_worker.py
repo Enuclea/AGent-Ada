@@ -167,8 +167,12 @@ if __name__ == "__main__":
             sys.argv.pop(idx)
         except (ValueError, IndexError):
             pass
-        
     IPC_TOKEN = token
+
+    # Strict token validation to prevent None or empty token bypass
+    if not IPC_TOKEN or len(IPC_TOKEN) < 16:
+        print("Sandbox security violation: Invalid or missing IPC token.", file=sys.stderr)
+        sys.exit(1)
 
     # Scrub environment of sensitive tokens/keys
     safe_env = {

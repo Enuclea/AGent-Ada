@@ -38,6 +38,15 @@ def _calculate_skill_hash(src_folder: Path) -> bytes:
             
     return hasher.digest()
 
+_TEST_KEY_SENTINEL = object()
+_additional_trusted_keys = []
+
+def add_test_trusted_key(sentinel, key_hex: str) -> None:
+    """Allows test suite to temporarily register additional trusted public keys for signature verification."""
+    if sentinel is _TEST_KEY_SENTINEL:
+        if key_hex not in _additional_trusted_keys:
+            _additional_trusted_keys.append(key_hex)
+
 def _verify_skill_signature(src_folder: Path) -> bool:
     sig_path = src_folder / "signature.sig"
     if not sig_path.exists():
@@ -49,11 +58,7 @@ def _verify_skill_signature(src_folder: Path) -> bool:
     skill_hash = _calculate_skill_hash(src_folder)
     
     from cryptography.hazmat.primitives.asymmetric import ed25519
-    trusted_keys = []
-    if os.environ.get("TESTING") == "1" and "pytest" in sys.modules:
-        env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
-        if env_key:
-            trusted_keys.append(env_key)
+    trusted_keys = list(_additional_trusted_keys)
     from agent.core.config import DEVELOPER_PUBLIC_KEY
     trusted_keys.append(DEVELOPER_PUBLIC_KEY)
     
@@ -86,11 +91,7 @@ def _verify_in_memory_signature(files_dict: dict) -> bool:
     skill_hash = _calculate_in_memory_hash(files_dict)
     
     from cryptography.hazmat.primitives.asymmetric import ed25519
-    trusted_keys = []
-    if os.environ.get("TESTING") == "1" and "pytest" in sys.modules:
-        env_key = os.environ.get("ADA_SKILL_PUBLIC_KEY")
-        if env_key:
-            trusted_keys.append(env_key)
+    trusted_keys = list(_additional_trusted_keys)
     from agent.core.config import DEVELOPER_PUBLIC_KEY
     trusted_keys.append(DEVELOPER_PUBLIC_KEY)
     

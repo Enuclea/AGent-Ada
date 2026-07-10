@@ -233,9 +233,9 @@ if __name__ == "__main__":
     # about what environment the child process inherits.)
     safe_env = {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-        "HOME": os.environ.get("HOME", "/tmp"),
-        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
-        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "HOME": "/tmp",
+        "TMPDIR": "/tmp",
+        "LANG": "C.UTF-8",
     }
     os.environ.clear()
     os.environ.update(safe_env)
