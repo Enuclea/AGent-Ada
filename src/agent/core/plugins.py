@@ -7,9 +7,15 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Callable
 from types import ModuleType
 
-def verify_plugin_ast_safety(plugin_path: Path) -> None:
-    """Statically scans all Python files in the plugin package for unsafe calls,
-    unless the plugin has a valid cryptographic signature.
+def verify_plugin_ast_safety(plugin_path: Path) -> dict:
+    """Statically scans all Python files in the plugin package for unsafe calls.
+    
+    For signed plugins, the AST scan still runs as advisory logging (warnings only)
+    rather than being skipped entirely. This provides operator visibility into what
+    signed code does, while the signature bypasses the rejection gate.
+    
+    Returns the in-memory plugin_files dict {rel_path: bytes} for TOCTOU-safe
+    checksum verification downstream.
     """
     # 0a. Reject any plugin directory that contains forbidden binary artifacts
     #     (.so, .pyc, .pyd, ELF binaries, etc.) that cannot be AST-scanned.
@@ -45,21 +51,35 @@ def verify_plugin_ast_safety(plugin_path: Path) -> None:
             f"Security violation in plugin '{plugin_path.name}': " + "; ".join(artifact_errors)
         )
 
-    # 1. Try to verify the plugin's cryptographic signature first if signature file is present
+    # 1. Check cryptographic signature
     sig_path = plugin_path / "signature.sig"
+    is_signed = False
     if sig_path.exists():
         from agent.execution.tools.security import _verify_skill_signature
         _verify_skill_signature(plugin_path)
-        print(f"[PLUGINS] Plugin '{plugin_path.name}' verified cryptographically. Bypassing AST scan.")
-        return
+        is_signed = True
+        print(f"[PLUGINS] Plugin '{plugin_path.name}' verified cryptographically.")
 
-    # 2. Fall back to AST safety checks on all Python files in the plugin package
-    print(f"[PLUGINS] AST scanning plugin '{plugin_path.name}'...")
+    # 2. AST safety scan on all Python files — always runs.
+    #    For signed plugins: advisory only (log warnings, don't reject).
+    #    For unsigned plugins: enforcement (raise on violation).
     from agent.security.ast_safety import verify_ast_safety
-    for py_file in plugin_path.rglob("*.py"):
-        with open(py_file, "r", encoding="utf-8", errors="replace") as f:
-            code = f.read()
-        verify_ast_safety(code, str(py_file))
+    scan_label = "advisory" if is_signed else "enforcement"
+    print(f"[PLUGINS] AST scanning plugin '{plugin_path.name}' (mode: {scan_label})...")
+    for rel_path, content in plugin_files.items():
+        if rel_path.endswith('.py'):
+            try:
+                code = content.decode('utf-8', errors='replace')
+                verify_ast_safety(code, rel_path)
+            except Exception as e:
+                if is_signed:
+                    # Advisory only for signed plugins — log but don't block
+                    print(f"[PLUGINS] AST advisory for signed plugin '{plugin_path.name}': {e}")
+                else:
+                    # Enforcement for unsigned plugins — reject
+                    raise
+
+    return plugin_files
 
 
 class PluginState(str, Enum):
@@ -194,18 +214,10 @@ class PluginManager:
                     plugin.error_message = "No pinned checksum in .env"
                     continue
 
-                from agent.execution.tools.security import _calculate_skill_hash
-                actual_hash = _calculate_skill_hash(plugin.path).hex()
-                if actual_hash != expected_hex:
-                    print(
-                        f"[PLUGINS] REFUSED plugin '{name}': checksum mismatch. "
-                        f"Expected {expected_hex}, got {actual_hash}. "
-                        f"Update ADA_APPROVED_PLUGIN_CHECKSUMS in .env if this change is intentional."
-                    )
-                    plugin.state = PluginState.FAILED
-                    plugin.error_message = f"Checksum mismatch: expected {expected_hex}, got {actual_hash}"
-                    continue
-                print(f"[PLUGINS] Plugin '{name}' checksum verified: {actual_hash[:16]}...")
+                # Checksum will be verified AFTER loading files into memory
+                # during AST safety verification (TOCTOU-safe: verify the same
+                # bytes that were scanned, not a second disk read).
+                pass  # Deferred to post-AST-scan verification below
 
             # Check if this plugin is lazy
             is_lazy = name in lazy_plugins or plugin.metadata.get("lazy") is True
@@ -230,8 +242,28 @@ class PluginManager:
 
             plugin.state = PluginState.LOADING
             try:
-                # Perform AST safety check first
-                verify_plugin_ast_safety(plugin.path)
+                # Perform AST safety check — returns in-memory file contents
+                # for TOCTOU-safe checksum verification
+                verified_files = verify_plugin_ast_safety(plugin.path)
+
+                # TOCTOU-safe checksum verification: compute hash from the same
+                # in-memory bytes that were just scanned, not a second disk read.
+                if pinned_checksums and name in pinned_checksums:
+                    import hashlib
+                    hasher = hashlib.sha256()
+                    sorted_keys = sorted(verified_files.keys())
+                    for rel_path in sorted_keys:
+                        if rel_path != "signature.sig" and not Path(rel_path).name.startswith('.'):
+                            hasher.update(rel_path.encode('utf-8'))
+                            hasher.update(verified_files[rel_path])
+                    actual_hash = hasher.hexdigest()
+                    expected_hex = pinned_checksums[name]
+                    if actual_hash != expected_hex:
+                        raise RuntimeError(
+                            f"Checksum mismatch: expected {expected_hex}, got {actual_hash}. "
+                            f"Update ADA_APPROVED_PLUGIN_CHECKSUMS in .env if this change is intentional."
+                        )
+                    print(f"[PLUGINS] Plugin '{name}' checksum verified (TOCTOU-safe): {actual_hash[:16]}...")
 
                 # Dynamic import package __init__.py
                 spec = importlib.util.spec_from_file_location(f"agent.plugins.{name}", plugin.path / "__init__.py")

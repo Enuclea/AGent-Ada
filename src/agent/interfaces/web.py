@@ -16,7 +16,15 @@ import agent.api.subagents
 import agent.api.skills
 import agent.api.plugins
 import agent.api.workers
-import agent.api.ollama_clone
+
+# Ollama-compatible endpoint: disabled by default. Opt-in via ADA_ENABLE_OLLAMA_ENDPOINT=1 in .env.
+# When disabled, the /api/ollama/* routes are never registered (404).
+# See SECURITY.md for the tradeoff: zero-cost inference vs. OAuth token in sandbox.
+if os.environ.get("ADA_ENABLE_OLLAMA_ENDPOINT", "0").strip().lower() in ("1", "true", "yes"):
+    import agent.api.ollama_clone
+    print("[SECURITY] Ollama-compatible endpoint ENABLED (ADA_ENABLE_OLLAMA_ENDPOINT=1)")
+else:
+    print("[SECURITY] Ollama-compatible endpoint DISABLED (default). Set ADA_ENABLE_OLLAMA_ENDPOINT=1 in .env to enable.")
 
 # Expose cron/scheduler utilities for backward compatibility
 from agent.core.scheduler import get_next_cron_run, ensure_default_scheduled_tasks, fetch_real_quotas_sync, discover_language_server

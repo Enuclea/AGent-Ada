@@ -125,12 +125,19 @@ def _sandbox_command_if_possible(
     command: str, 
     require_network_isolation: bool = False,
     read_only_workspace: bool = False,
-    bind_paths: List[str] = None
+    bind_paths: List[str] = None,
+    require_bwrap: bool = False
 ) -> List[str]:
     """Wraps a shell command in bubblewrap or Landlock sandbox if available on Linux.
     
     Isolates file write access to the workspace and /tmp directories, and restricts
     access to sensitive system files.
+    
+    Args:
+        require_bwrap: If True, refuses to fall back to Landlock. Fails closed
+            if bwrap is not available. Use this for untrusted code execution paths
+            (e.g., honeypot, external plugins) where filesystem-only isolation is
+            insufficient.
     """
     # Allow explicit bypass via env var (useful for testing/host dev control)
     if _ADA_DISABLE_SANDBOX_FROZEN:
@@ -204,6 +211,14 @@ def _sandbox_command_if_possible(
                     bwrap_args += [bind_flag, str(bp_path), str(bp_path)]
                     
         return bwrap_args + ["--", "bash", "-c", command]
+    
+    # Fail closed if bwrap is required but not available
+    if require_bwrap:
+        raise PermissionError(
+            "Security Exception: Bubblewrap (bwrap) is required for this execution path "
+            "but is not available. Landlock fallback is insufficient for untrusted code "
+            "(filesystem-only isolation, no network restriction). Install bwrap."
+        )
         
     # If strict network isolation is required, we cannot fall back to Landlock (filesystem-only)
     if require_network_isolation:

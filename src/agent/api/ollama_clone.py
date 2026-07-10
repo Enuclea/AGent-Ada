@@ -173,13 +173,23 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
         "--sandbox",
     ]
 
-    # Double-sandboxing: wrap the agy CLI execution in Bubblewrap/Landlock.
-    # For the honeypot, we need network access to talk to Gemini API (require_network_isolation=False).
-    # However, we mount the workspace read-only, and we bind the required agy config files and log folders.
+    # Double-sandboxing: wrap the agy CLI execution in Bubblewrap.
+    # ACCEPTED RISK: The OAuth token must be bound for agy to authenticate with Gemini.
+    # Without it, the entire keyless inference feature is non-functional (500 errors).
+    # Mitigations constraining the sandboxed agy process:
+    #   1. bwrap with --unshare-ipc/pid/uts/cgroup (required — no Landlock fallback)
+    #   2. --sandbox flag on agy (terminal restrictions, no shell escapes)
+    #   3. stdin=DEVNULL (tool permission prompts can never be approved)
+    #   4. --dangerously-skip-permissions intentionally ABSENT
+    #   5. -p print mode (single prompt, non-interactive, exit after response)
+    #   6. read_only_workspace=True (no writes to host filesystem)
+    #   7. OAuth token bound read-only (cannot be modified by the sandboxed process)
+    # Net: agy can ONLY send the prompt to Gemini and return text. It cannot approve
+    # tools, write files, or interact. The token enables API auth, not code execution.
     cli_dir = Path.home() / ".gemini" / "antigravity-cli"
     bind_paths = [
         harness_path,
-        str(cli_dir / "antigravity-oauth-token"),
+        str(cli_dir / "antigravity-oauth-token"),  # Required for Gemini auth — see risk notes above
         str(cli_dir / "installation_id"),
         str(cli_dir / "settings.json"),
         (str(cli_dir / "log"), True),
@@ -190,7 +200,8 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
         raw_command,
         require_network_isolation=False,
         read_only_workspace=True,
-        bind_paths=bind_paths
+        bind_paths=bind_paths,
+        require_bwrap=True  # Fail closed if bwrap absent — no Landlock fallback for honeypot
     )
 
     proc = await asyncio.create_subprocess_exec(

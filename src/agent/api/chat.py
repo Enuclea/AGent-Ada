@@ -104,6 +104,11 @@ async def chat_endpoint(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON")
     
     if "messages" in payload:
+        if os.environ.get("ADA_ENABLE_OLLAMA_ENDPOINT", "0").strip().lower() not in ("1", "true", "yes"):
+            raise HTTPException(
+                status_code=403,
+                detail="Ollama-compatible endpoint is disabled. Set ADA_ENABLE_OLLAMA_ENDPOINT=1 in .env to enable."
+            )
         from agent.api.ollama_clone import ollama_chat_endpoint, OllamaChatRequest
         try:
             req = OllamaChatRequest(**payload)

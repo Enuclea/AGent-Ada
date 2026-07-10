@@ -43,6 +43,34 @@ Even with strong protections, certain risks remain — especially with third-par
 5. **Monitor** — Regularly review telemetry logs and set up alerts for anomalous behavior.
 6. **Least privilege** — Grant only the permissions needed for specific tasks.
 
+## Ollama-Compatible Endpoint (Honeypot / Keyless Inference)
+
+The `/api/chat` and `/api/generate` endpoints provide Ollama-compatible LLM inference by wrapping the `agy` CLI inside a Bubblewrap sandbox. This enables **zero-cost inference** via Google's OAuth flow without API key billing.
+
+### Security Model
+
+The sandboxed `agy` process is constrained by seven layers:
+
+1. **Bubblewrap** with namespace isolation (`--unshare-ipc/pid/uts/cgroup`), required — no Landlock fallback
+2. **`--sandbox`** flag on `agy` (terminal restrictions, no shell escapes)
+3. **`stdin=DEVNULL`** (tool permission prompts can never be approved)
+4. **`--dangerously-skip-permissions` intentionally absent**
+5. **`-p` print mode** (single prompt, non-interactive, exit after response)
+6. **`read_only_workspace=True`** (no writes to host filesystem)
+7. **OAuth token bound read-only** (cannot be modified by the sandboxed process)
+
+### Accepted Risk: OAuth Token in Sandbox
+
+The `agy` process requires the OAuth token to authenticate with the Gemini API. Without it, the endpoint is non-functional. The token is bound read-only into the Bubblewrap namespace. While `agy` has network access (required to reach Gemini), the constraints above limit its behavior to: **send prompt → receive text → exit**.
+
+### Recommendation for Unmonitored Environments
+
+> **If your deployment does not include host-level network monitoring or you cannot guarantee Bubblewrap availability**, we recommend leaving the Ollama-compatible endpoint disabled (the default). LLM requests can be routed through the API-backed routing engine instead, which uses paid API credits but ensures the OAuth token never enters a sandboxed process. The endpoint is controlled by `ADA_ENABLE_OLLAMA_ENDPOINT` in your `.env` (default: `0`).
+
+The tradeoff is explicit:
+- **Monitored host + bwrap enforced**: OAuth token in sandbox is an accepted risk with zero API cost.
+- **Unmonitored host**: Use routing engine with API credits; OAuth token stays in the trusted parent process.
+
 ## Reporting Vulnerabilities
 
 We take security seriously. Please report potential issues privately to Enuclea Support [support@enuclea.com] or GitHub Security Advisories].

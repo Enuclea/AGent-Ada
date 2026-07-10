@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # match the checksum pinned here. On mismatch, the plugin MUST NOT load.
     ada_approved_plugin_checksums: str = ""
     
+    # Ollama-compatible endpoint (keyless inference via agy): disabled by default.
+    # This endpoint binds an OAuth token into a Bubblewrap-sandboxed agy process
+    # with network access. While constrained by 7 layers of isolation (see SECURITY.md),
+    # enabling it accepts that a live credential exists inside the sandbox namespace.
+    # Recommended only for monitored hosts with bwrap available.
+    ada_enable_ollama_endpoint: bool = False
+    
     @property
     def parsed_plugin_checksums(self) -> dict:
         """Parse 'name:hexhash,name:hexhash' into {name: hexhash} dict."""
