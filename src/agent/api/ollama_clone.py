@@ -342,12 +342,15 @@ async def ollama_chat_endpoint(
     
     try:
         from agent.security.pipeline import SecurityPipeline
-        sanitized_prompt = SecurityPipeline().sanitize_input(prompt)
+        pipeline = SecurityPipeline()
+        sanitized_prompt = pipeline.sanitize_input(prompt)
         response_text = await execute_keyless_gemini(
             prompt=sanitized_prompt,
             model_name=model_name,
             system_instructions=system_instructions
         )
+        # Redact any credential material from the response before returning to caller
+        response_text = pipeline.sanitize_output(response_text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Keyless Gemini execution failed: {e}")
             
@@ -422,12 +425,15 @@ async def ollama_generate_endpoint(
         
     try:
         from agent.security.pipeline import SecurityPipeline
-        sanitized_prompt = SecurityPipeline().sanitize_input(req.prompt)
+        pipeline = SecurityPipeline()
+        sanitized_prompt = pipeline.sanitize_input(req.prompt)
         response_text = await execute_keyless_gemini(
             prompt=sanitized_prompt,
             model_name=model_name,
             system_instructions=system_instructions
         )
+        # Redact any credential material from the response before returning to caller
+        response_text = pipeline.sanitize_output(response_text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Keyless Gemini execution failed: {e}")
             

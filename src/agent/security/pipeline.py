@@ -1,6 +1,7 @@
 import os
 import re
 import base64
+from pathlib import Path
 from typing import Optional, List
 
 class InjectionDetectedError(ValueError):
@@ -19,7 +20,14 @@ INJECTION_PATTERNS = [
 class SecurityPipeline:
     """Security pipeline class to sanitize inputs and redact outputs for keyless agents."""
 
-    def __init__(self, sensitive_keys: Optional[List[str]] = None) -> None:
+    # Credential files whose contents should be redacted from any output.
+    # Paths are resolved once at init time; contents are cached for fast redaction.
+    _DEFAULT_SENSITIVE_FILES = [
+        Path.home() / ".gemini" / "antigravity-cli" / "antigravity-oauth-token",
+    ]
+
+    def __init__(self, sensitive_keys: Optional[List[str]] = None,
+                 sensitive_files: Optional[List[Path]] = None) -> None:
         """Initialize the security pipeline with default and environment-derived sensitive keys."""
         self.sensitive_keys = sensitive_keys or [
             "DISCORD_BOT_TOKEN",
@@ -31,6 +39,17 @@ class SecurityPipeline:
         extra_keys = os.environ.get("ADDITIONAL_SENSITIVE_KEYS")
         if extra_keys:
             self.sensitive_keys.extend([k.strip() for k in extra_keys.split(",") if k.strip()])
+
+        # Load contents of sensitive credential files for output redaction.
+        self._sensitive_file_contents: list[tuple[str, str]] = []
+        for fpath in (sensitive_files or self._DEFAULT_SENSITIVE_FILES):
+            try:
+                if fpath.exists() and fpath.is_file():
+                    content = fpath.read_text(encoding="utf-8").strip()
+                    if len(content) > 6:  # Only redact non-trivial secrets
+                        self._sensitive_file_contents.append((fpath.name, content))
+            except Exception:
+                pass  # Fail-open on read errors; file may not exist in all environments
 
     def sanitize_input(self, prompt: str, depth: int = 0) -> str:
         """Scans and cleans input prompts to prevent prompt injection attempts."""
@@ -160,6 +179,15 @@ class SecurityPipeline:
                     b64_regex_parts = [re.escape(c) for c in val_b64]
                     b64_pattern_str = char_pattern.join(b64_regex_parts)
                     redacted = re.sub(b64_pattern_str, f"[REDACTED_{key}]", redacted)
+
+        # 3. Redact contents of sensitive credential files (e.g., OAuth tokens)
+        for fname, content in self._sensitive_file_contents:
+            if content in redacted:
+                redacted = redacted.replace(content, f"[REDACTED_FILE_{fname}]")
+            # Also check base64 encoded representation
+            content_b64 = base64.b64encode(content.encode()).decode().strip("=")
+            if len(content_b64) > 6 and content_b64 in redacted:
+                redacted = redacted.replace(content_b64, f"[REDACTED_FILE_{fname}]")
                 
         return redacted
 

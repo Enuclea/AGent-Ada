@@ -17,7 +17,7 @@ def is_safe_relative_path(base_path: Path, rel_str: str) -> bool:
             
         target = base_path / normalized_rel
         from agent.security.path_utils import is_safe_path
-        return is_safe_path(base_path, target, strict=False)
+        return is_safe_path(base_path, target, strict=True)
     except Exception:
         return False
 
@@ -51,7 +51,7 @@ def setup_sandbox_sync(
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     if src.is_dir():
-                        shutil.copytree(src, dest, symlinks=True)
+                        shutil.copytree(src, dest, symlinks=False)
                     else:
                         shutil.copy2(src, dest)
                 except Exception:
@@ -86,7 +86,7 @@ def setup_sandbox_sync(
                 continue
             try:
                 if item.is_dir():
-                    shutil.copytree(item, sandbox_dir / item.name, symlinks=True)
+                    shutil.copytree(item, sandbox_dir / item.name, symlinks=False)
                 else:
                     shutil.copy2(item, sandbox_dir / item.name)
             except Exception:
