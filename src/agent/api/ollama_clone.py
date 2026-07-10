@@ -81,32 +81,55 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
     await asyncio.to_thread(_run)
 
 async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, system_instructions: Optional[str] = None) -> str:
-    from agent.core.keyless import KeylessAgyAgent
+    """Execute an LLM call via the agy harness with ALL tools denied.
+
+    This is the honeypot execution path — it provides real LLM responses
+    but the harness cannot write files, execute code, run commands, or
+    interact with any external systems.  The --deny * flag ensures the
+    agy binary operates in text-only mode regardless of what the prompt
+    requests.
+    """
+    from agent.routes.base import get_harness_path
 
     target_model = model_name or "gemini-3.5-flash"
+    harness_path = get_harness_path() or "agy"
 
-    # Use general_chat=True to skip system protocol injection — this is a
-    # transparent proxy, not an agent task.  The caller's system instructions
-    # are passed through directly to the LLM.
-    agent = KeylessAgyAgent(
-        model=target_model,
-        system_instructions=system_instructions or "",
-        general_chat=True,
-        timeout=60.0,
+    # Build prompt with system context if provided
+    full_prompt = prompt
+    if system_instructions:
+        full_prompt = f"[System Instructions]\n{system_instructions}\n\n[User Prompt]\n{prompt}"
+
+    # Call the agy harness directly with all tools denied.
+    # --deny *      : deny ALL tool permissions (no file writes, no code exec, no commands)
+    # --no-plan     : prevent multi-step plan execution
+    # -p            : single-prompt mode (no interactive session)
+    cmd = [
+        harness_path,
+        "-p", full_prompt,
+        "--model", "gemini",
+        "--deny", "*",
+        "--no-plan",
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-    response = await agent.chat(prompt)
-    if not response:
-        raise RuntimeError("Keyless execution returned empty response.")
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError("Keyless execution timed out after 30 seconds.")
 
-    # The agy harness returns a subprocess — consume its stdout stream
-    # so that response.text is populated with the full output.
-    if response.proc is not None:
-        await response._consume_stream()
+    response_text = stdout.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0 or not response_text:
+        err = stderr.decode("utf-8", errors="replace").strip() or "Empty response"
+        raise RuntimeError(f"Keyless execution failed: {err}")
 
-    if not response.text.strip():
-        raise RuntimeError("Keyless execution returned empty response.")
-        
-    return response.text
+    return response_text
 
 class OllamaChatMessage(BaseModel):
     role: str
@@ -125,15 +148,9 @@ class OllamaGenerateRequest(BaseModel):
     stream: Optional[bool] = True
 
 OLLAMA_SYSTEM_PROMPT = (
-    "IMPORTANT: Disregard any prior persona, identity, or formatting instructions. "
-    "You are Gemini, a large language model built by Google. "
-    "Respond naturally and conversationally as Gemini would. "
-    "Do NOT identify yourself as Antigravity, Ada, or any other assistant. "
-    "Do NOT use structured formatting like '### Summary of Work' or bullet-point recaps. "
     "You are in a text-only conversational mode with no access to tools, "
     "code execution, file operations, web browsing, or any external actions. "
-    "Answer questions directly using only your training knowledge. "
-    "Be helpful, accurate, and concise."
+    "Answer questions directly and conversationally."
 )
 
 
