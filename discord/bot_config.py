@@ -16,8 +16,11 @@ def load_config() -> Dict[str, Any]:
         except Exception:
             pass
     try:
+        path = "/api/discord/config"
+        headers = get_auth_headers("GET", path)
         req = urllib.request.Request(
-            f"{api_base}/api/discord/config",
+            f"{api_base}{path}",
+            headers=headers,
             method="GET"
         )
         with urllib.request.urlopen(req, timeout=1.0) as response:
@@ -173,10 +176,12 @@ def get_auth_headers(method: str, path: str, query: str = "", body: bytes = b"")
     import time
     import os
 
-    secret = os.environ.get("INTERNAL_API_SECRET", "").encode()
-    if not secret:
+    secret_str = os.environ.get("INTERNAL_API_SECRET", "")
+    if not secret_str:
         dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
         secret = hashlib.sha256(dashboard_password.encode()).digest()
+    else:
+        secret = hashlib.sha256(secret_str.encode()).digest()
         
     timestamp_str = str(int(time.time()))
     body_hash = hashlib.sha256(body).hexdigest()
