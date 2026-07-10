@@ -4,7 +4,7 @@ async function loadDndCharacters() {
     if (!container) return;
 
     try {
-        const response = await fetch('/dnd_characters.json?t=' + Date.now());
+        const response = await fetch('/api/dnd/characters?t=' + Date.now());
         if (!response.ok) {
             throw new Error(`Failed to fetch D&D characters: ${response.statusText}`);
         }

@@ -34,8 +34,11 @@ The honeypot is sealed through three independent layers:
 
 1. **Harness-level denial**: ``--sandbox`` flag + no permission auto-approve.
 2. **Process isolation**: ``stdin=DEVNULL`` prevents any interactive approval.
-3. **Payload analysis**: Prompts and responses are scanned for AST violations,
-   suspicious system call patterns, and sandbox escape language.
+3. **Reactive enforcement (circuit breaker)**: Prompts and responses are scanned
+   for AST violations, suspicious system call patterns, and sandbox escape language.
+   Detections accumulate a threat score. When the threshold is exceeded, the
+   endpoint is **paused** and the operator is notified via HIL to decide:
+   continue with understood risk, or terminate the endpoint entirely.
 
 Endpoints
 ---------
@@ -65,11 +68,218 @@ OLLAMA_SYSTEM_PROMPT = (
     "Answer questions directly and conversationally."
 )
 
+# ---------------------------------------------------------------------------
+# Circuit Breaker — Reactive enforcement for the Ollama endpoint
+# ---------------------------------------------------------------------------
+# When quiet_security_analysis detects aggressive patterns, the threat score
+# accumulates. Once the threshold is exceeded, the endpoint is PAUSED and an
+# operator notification is sent. The endpoint stays paused until the operator
+# makes a HIL decision:
+#   - RESUME: reset breaker, continue serving (understood risk)
+#   - TERMINATE: disable endpoint until process restart
+#
+# This is NOT auto-recovery. The human decides.
+# ---------------------------------------------------------------------------
+import threading
+import logging
+
+_circuit_lock = threading.Lock()
+_circuit_state = {
+    "threat_score": 0.0,
+    "window_start": time.time(),
+    "is_tripped": False,
+    "is_terminated": False,       # Permanent kill until restart
+    "trip_reason": "",
+    "findings": [],               # Accumulated findings for HIL report
+    "hil_notified": False,        # Whether operator has been notified
+}
+
+# Configuration
+CIRCUIT_WINDOW_SECONDS = 300      # 5-minute sliding window
+CIRCUIT_TRIP_THRESHOLD = 5        # Points to trip
+THREAT_SCORES = {
+    "ast_violation": 3,
+    "sandbox_escape": 2,
+    "suspicious_pattern": 1,
+}
+
+
+def _check_circuit_breaker() -> tuple:
+    """Check if the circuit breaker allows requests.
+    
+    Returns (allowed: bool, reason: str).
+    """
+    with _circuit_lock:
+        if _circuit_state["is_terminated"]:
+            return False, (
+                "Ollama endpoint has been terminated by operator decision. "
+                "Restart the service to re-enable."
+            )
+        if _circuit_state["is_tripped"]:
+            return False, (
+                f"Ollama endpoint is PAUSED pending operator review. "
+                f"Reason: {_circuit_state['trip_reason']}. "
+                f"Use POST /api/ollama/circuit-breaker/resume or /terminate to decide."
+            )
+        return True, ""
+
+
+def _record_threat(category: str, detail: str):
+    """Record a threat detection and trip the breaker if threshold exceeded."""
+    score = THREAT_SCORES.get(category, 1)
+    now = time.time()
+    
+    with _circuit_lock:
+        # Reset window if expired
+        if now - _circuit_state["window_start"] > CIRCUIT_WINDOW_SECONDS:
+            _circuit_state["threat_score"] = 0.0
+            _circuit_state["window_start"] = now
+            _circuit_state["findings"] = []
+        
+        _circuit_state["threat_score"] += score
+        _circuit_state["findings"].append({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "category": category,
+            "score": score,
+            "detail": detail[:500],
+        })
+        
+        current_score = _circuit_state["threat_score"]
+        
+        if current_score >= CIRCUIT_TRIP_THRESHOLD and not _circuit_state["is_tripped"]:
+            _circuit_state["is_tripped"] = True
+            _circuit_state["trip_reason"] = (
+                f"Threat score {current_score:.0f}/{CIRCUIT_TRIP_THRESHOLD} exceeded. "
+                f"{len(_circuit_state['findings'])} findings in {CIRCUIT_WINDOW_SECONDS}s window."
+            )
+            _circuit_state["hil_notified"] = False
+            logger = logging.getLogger("ollama_clone")
+            logger.critical(
+                f"[CIRCUIT BREAKER] TRIPPED — Ollama endpoint PAUSED. "
+                f"Score: {current_score:.0f}. Awaiting operator decision."
+            )
+            # Fire async notification (best-effort)
+            try:
+                asyncio.get_event_loop().call_soon_threadsafe(
+                    lambda: asyncio.ensure_future(_notify_operator_hil())
+                )
+            except Exception:
+                pass
+
+
+async def _notify_operator_hil():
+    """Send HIL notification to operator about the tripped breaker."""
+    with _circuit_lock:
+        if _circuit_state["hil_notified"]:
+            return
+        _circuit_state["hil_notified"] = True
+        findings = list(_circuit_state["findings"])
+        reason = _circuit_state["trip_reason"]
+
+    logger = logging.getLogger("ollama_clone")
+    logger.critical(
+        f"[CIRCUIT BREAKER HIL] Aggressive content detected on Ollama endpoint.\n"
+        f"Reason: {reason}\n"
+        f"Findings ({len(findings)}):\n" +
+        "\n".join(f"  [{f['category']}] +{f['score']}pts: {f['detail'][:200]}" for f in findings) +
+        f"\n\nEndpoint is PAUSED. Operator must decide:\n"
+        f"  POST /api/ollama/circuit-breaker/resume   — Continue with understood risk\n"
+        f"  POST /api/ollama/circuit-breaker/terminate — Disable endpoint until restart"
+    )
+    # Also log to telemetry
+    try:
+        from agent.observability.telemetry import log_telemetry_event
+        log_telemetry_event(
+            session_id="ollama-circuit-breaker",
+            event_type="CIRCUIT_BREAKER_TRIPPED",
+            event_details=json.dumps({"reason": reason, "findings": findings}),
+            latency=0.0,
+        )
+    except Exception:
+        pass
+
+
+# --- HIL Decision Endpoints ---
+
+@app.post("/api/ollama/circuit-breaker/status")
+async def circuit_breaker_status():
+    """Return current circuit breaker state."""
+    with _circuit_lock:
+        return {
+            "is_tripped": _circuit_state["is_tripped"],
+            "is_terminated": _circuit_state["is_terminated"],
+            "threat_score": _circuit_state["threat_score"],
+            "threshold": CIRCUIT_TRIP_THRESHOLD,
+            "findings": _circuit_state["findings"][-10:],  # Last 10
+            "trip_reason": _circuit_state["trip_reason"],
+        }
+
+
+@app.post("/api/ollama/circuit-breaker/resume")
+async def circuit_breaker_resume():
+    """Operator HIL decision: resume endpoint with understood risk."""
+    with _circuit_lock:
+        if not _circuit_state["is_tripped"] and not _circuit_state["is_terminated"]:
+            return {"status": "not_tripped", "message": "Circuit breaker is not active."}
+        if _circuit_state["is_terminated"]:
+            return {"status": "terminated", "message": "Endpoint was permanently terminated. Restart service to re-enable."}
+        _circuit_state["is_tripped"] = False
+        _circuit_state["threat_score"] = 0.0
+        _circuit_state["window_start"] = time.time()
+        _circuit_state["findings"] = []
+        _circuit_state["hil_notified"] = False
+    
+    logger = logging.getLogger("ollama_clone")
+    logger.warning("[CIRCUIT BREAKER] Operator RESUMED endpoint. Risk acknowledged.")
+    try:
+        from agent.observability.telemetry import log_telemetry_event
+        log_telemetry_event(
+            session_id="ollama-circuit-breaker",
+            event_type="CIRCUIT_BREAKER_RESUMED",
+            event_details="Operator acknowledged risk and resumed endpoint.",
+            latency=0.0,
+        )
+    except Exception:
+        pass
+    return {"status": "resumed", "message": "Endpoint resumed. Threat score reset."}
+
+
+@app.post("/api/ollama/circuit-breaker/terminate")
+async def circuit_breaker_terminate():
+    """Operator HIL decision: permanently disable endpoint until restart."""
+    with _circuit_lock:
+        _circuit_state["is_terminated"] = True
+        _circuit_state["is_tripped"] = True
+    
+    logger = logging.getLogger("ollama_clone")
+    logger.critical("[CIRCUIT BREAKER] Operator TERMINATED endpoint. Disabled until service restart.")
+    try:
+        from agent.observability.telemetry import log_telemetry_event
+        log_telemetry_event(
+            session_id="ollama-circuit-breaker",
+            event_type="CIRCUIT_BREAKER_TERMINATED",
+            event_details="Operator terminated endpoint permanently.",
+            latency=0.0,
+        )
+    except Exception:
+        pass
+    return {"status": "terminated", "message": "Endpoint disabled until service restart."}
+
+
+# ---------------------------------------------------------------------------
+# Security Analysis — Reactive enforcement (not just telemetry)
+# ---------------------------------------------------------------------------
+
 async def quiet_security_analysis(prompt: str, response_text: str, system_instructions: Optional[str] = None):
-    # run in thread pool to avoid blocking the event loop
+    """Scan payloads for aggressive content and feed threat scores to the circuit breaker.
+    
+    This runs async AFTER the response is returned. It cannot block the current
+    request, but it can trip the circuit breaker to block FUTURE requests.
+    When tripped, the endpoint pauses and the operator is notified via HIL
+    to decide: continue with understood risk, or terminate.
+    """
     def _run():
         import re
-        import logging
         from agent.security.ast_safety import verify_ast_safety
         from agent.observability.telemetry import log_telemetry_event
 
@@ -80,7 +290,7 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
         if system_instructions:
             all_texts.append(system_instructions)
             
-        # 1. AST Safety Check
+        # 1. AST Safety Check — feeds circuit breaker
         code_blocks = []
         for text in all_texts:
             code_blocks.extend(re.findall(r"```python\n(.*?)```", text, re.DOTALL))
@@ -93,36 +303,38 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
             except Exception as e:
                 err_msg = str(e)
                 logger.warning(f"[SECURITY ALERT] AST violation detected in Ollama API payload: {err_msg}")
+                _record_threat("ast_violation", f"Code block {i}: {err_msg}")
                 try:
                     log_telemetry_event(
                         session_id="ollama-api-session",
                         event_type="SECURITY_AST_VIOLATION",
-                        event_details=f"Code: {code}\nError: {err_msg}",
+                        event_details=f"Code: {code[:300]}\nError: {err_msg}",
                         latency=0.0
                     )
                 except Exception:
                     pass
                     
-        # 2. Suspicious Pattern/Keyword Scanner
+        # 2. Suspicious Pattern/Keyword Scanner — feeds circuit breaker
         suspicious_keywords = [
-            r"\b(subprocess|pty|shutil|socket)\b",
-            r"\b(eval|exec|__import__|compile)\b",
-            r"\b(bash|powershell|curl|wget|nc|netcat|telnet|ssh|sudo)\b",
-            r"\b(run|execute|call|system|spawn)\s+(command|code|script|shell|program|binary|process|file|tool|cmd|utility|payload)\b",
-            r"/bin/(sh|bash|zsh|csh|tcsh)",
-            r"(/etc/passwd|/etc/shadow|/etc/hosts)",
-            r"\b(rm\s+-rf|chmod\s+\+x|chown|kill\s+-9|killall)\b",
-            r"\bbypass\s+(sandbox|restriction|security|safeguard|limit)\b",
-            r"\bescape\s+(sandbox|container|jail)\b",
-            r"\binstruction\s+override\b",
+            (r"\b(subprocess|pty|shutil|socket)\b", "suspicious_pattern"),
+            (r"\b(eval|exec|__import__|compile)\b", "suspicious_pattern"),
+            (r"\b(bash|powershell|curl|wget|nc|netcat|telnet|ssh|sudo)\b", "suspicious_pattern"),
+            (r"\b(run|execute|call|system|spawn)\s+(command|code|script|shell|program|binary|process|file|tool|cmd|utility|payload)\b", "suspicious_pattern"),
+            (r"/bin/(sh|bash|zsh|csh|tcsh)", "suspicious_pattern"),
+            (r"(/etc/passwd|/etc/shadow|/etc/hosts)", "suspicious_pattern"),
+            (r"\b(rm\s+-rf|chmod\s+\+x|chown|kill\s+-9|killall)\b", "suspicious_pattern"),
+            (r"\bbypass\s+(sandbox|restriction|security|safeguard|limit)\b", "sandbox_escape"),
+            (r"\bescape\s+(sandbox|container|jail)\b", "sandbox_escape"),
+            (r"\binstruction\s+override\b", "sandbox_escape"),
         ]
         
         for text in all_texts:
-            for pattern in suspicious_keywords:
+            for pattern, category in suspicious_keywords:
                 match = re.search(pattern, text, re.IGNORECASE)
                 if match:
                     matched_str = match.group(0)
                     logger.warning(f"[SECURITY ALERT] Suspicious pattern '{matched_str}' detected in Ollama API payload")
+                    _record_threat(category, f"Matched: '{matched_str}' in: {text[:200]}")
                     try:
                         log_telemetry_event(
                             session_id="ollama-api-session",
@@ -132,7 +344,7 @@ async def quiet_security_analysis(prompt: str, response_text: str, system_instru
                         )
                     except Exception:
                         pass
-                    break # log once per text block
+                    break  # log once per text block
     await asyncio.to_thread(_run)
 
 async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, system_instructions: Optional[str] = None) -> str:
@@ -307,6 +519,11 @@ async def head_root_compatibility():
 async def ollama_chat_endpoint(
     req: OllamaChatRequest,
 ):
+    # Circuit breaker check — endpoint paused/terminated?
+    allowed, reason = _check_circuit_breaker()
+    if not allowed:
+        raise HTTPException(status_code=503, detail=reason)
+    
     # Enforce maximum prompt payload size to prevent memory exhaustion DoS
     MAX_PROMPT_SIZE = 1_000_000 # 1MB
     try:
@@ -392,6 +609,11 @@ async def ollama_chat_endpoint(
 async def ollama_generate_endpoint(
     req: OllamaGenerateRequest,
 ):
+    # Circuit breaker check — endpoint paused/terminated?
+    allowed, reason = _check_circuit_breaker()
+    if not allowed:
+        raise HTTPException(status_code=503, detail=reason)
+    
     # Enforce maximum prompt payload size to prevent memory exhaustion DoS
     MAX_PROMPT_SIZE = 1_000_000 # 1MB
     try:

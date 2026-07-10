@@ -38,7 +38,7 @@ def _calculate_skill_hash(src_folder: Path) -> bytes:
     hasher = hashlib.sha256()
     entries = []  # list of (canonical_rel_path_str, absolute_path)
     for root, dirs, files in os.walk(src_folder):
-        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
         for f in files:
             if f != "signature.sig" and not f.startswith('.'):
                 abs_path = Path(root) / f
