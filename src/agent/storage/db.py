@@ -371,11 +371,63 @@ def init_db() -> None:
             embedding TEXT
         )
         """)
+        # Outbound API call logs (for APIBroker auditing)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS api_call_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            service TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            method TEXT NOT NULL,
+            params_json TEXT,
+            success INTEGER NOT NULL,
+            duration REAL NOT NULL,
+            outcome_tags TEXT,
+            error TEXT,
+            context TEXT
+        )
+        """)
         conn.commit()
     except Exception:
         pass
     finally:
         conn.close()
+
+def log_api_call(
+    service: str,
+    endpoint: str,
+    method: str,
+    params_json: Optional[str],
+    success: bool,
+    duration: float,
+    outcome_tags: Optional[str] = None,
+    error: Optional[str] = None,
+    context: Optional[str] = None,
+    db_path: Optional[Union[str, Path]] = None,
+) -> None:
+    """Logs an API call outcome to the database."""
+    now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
+    query = """
+        INSERT INTO api_call_logs (
+            timestamp, service, endpoint, method, params_json, success, duration, outcome_tags, error, context
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    params = (
+        now_str,
+        service,
+        endpoint,
+        method,
+        params_json,
+        1 if success else 0,
+        duration,
+        outcome_tags,
+        error,
+        context
+    )
+    try:
+        execute_write(query, params, db_path=db_path)
+    except Exception as e:
+        logger.error("Failed to log API call to database: %s", e)
 
 # Initialize database on module load
 try:

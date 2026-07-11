@@ -45,11 +45,13 @@ from agent.core import orchestrator as orchestrator
 from agent.core import task_manager as task_manager
 from agent.core import agent_types as agent_types
 from agent.core import registry as registry
+from agent.core import api_broker as api_broker
 sys.modules['agent.agent_loop'] = agent_loop
 sys.modules['agent.orchestrator'] = orchestrator
 sys.modules['agent.task_manager'] = task_manager
 sys.modules['agent.agent_types'] = agent_types
 sys.modules['agent.registry'] = registry
+sys.modules['agent.api_broker'] = api_broker
 
 # 7. Evaluation
 from agent.evaluation import meta_evaluation as meta_evaluation

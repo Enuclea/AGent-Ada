@@ -65,12 +65,13 @@ AGent-Ada features a modular execution routing engine that decouples model invoc
 
 ### 3. Centralized API Broker (`APIBroker`)
 
-All outgoing communications can be funneled through a thread-safe, centralized API Broker:
+All outbound communications (e.g. custom route calls or third-party webhooks) can be routed through a thread-safe, centralized API Broker. This allows developer integrations to benefit from core middleware services:
 
-* **Automatic Rate Limiting**: Enforces API bucket limits to prevent credentials throttling.
-* **Transient Retry & Exponential Backoff**: Automatically catches network failures, timeouts, and HTTP 429 rate limit statuses, applying exponential sleep backoffs to ensure robust request execution.
-* **GET Cache Manager**: Caches standard GET queries with a customizable TTL to prevent redundant calls and minimize API resource consumption.
-* **API Execution Auditing**: Logs details of every outgoing API call to a local SQLite table `api_call_logs`.
+* **Automatic Rate Limiting**: Features a token-bucket rate limiter that enforces burst capacity and token fill rates to prevent credentials throttling.
+* **Dynamic API Registration**: Allows code to dynamically register custom services and rate limits at runtime (e.g., `agent.api_broker.get_shared_broker().register_service("my_api", capacity=5.0, fill_rate=1.0)`).
+* **Transient Retry & Exponential Backoff**: Automatically intercepts rate-limiting HTTP statuses (429), timeouts, and connection exceptions, applying exponential backoffs to ensure robust request delivery.
+* **GET Cache Manager**: Integrates local FIFO memory caching or SQLite persistent cache backends with custom Time-To-Live (TTL) ranges to optimize latency and minimize API costs.
+* **API Execution Auditing**: Automatically logs latency, status codes, endpoints, and retry statistics to the local SQLite table `api_call_logs`.
 
 ### 4. Input & Output Security Pipeline
 
@@ -195,7 +196,7 @@ You can easily inject custom LLM wrappers, third-party API clients, or custom lo
 
 Here is an example showing how to implement a custom route targeting a specific Ollama model.
 
-> [!IMPORTANT]
+> [Safe Integration Tip]
 > Make sure `httpx` is included in your project dependencies. Alternatively, you can use the centralized HTTP client managed by the core API Broker.
 
 ```python
