@@ -17,9 +17,9 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_PATH = "/home/dan/AGent-Ada"
+REPO_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_URL = "https://github.com/Enuclea/AGent-Ada"
-REPORTS_DIR = "/home/dan/AGent/reports"
+REPORTS_DIR = os.path.join(REPO_PATH, "reports")
 ARCHIVE_DIR = os.path.join(REPORTS_DIR, "archive")
 
 CRITICAL_FILES = [
@@ -60,7 +60,7 @@ def get_magica_key():
     key = os.environ.get("MAGICA_API")
     if key:
         return key
-    env_path = "/home/dan/.env"
+    env_path = os.path.join(Path.home(), ".env")
     if os.path.exists(env_path):
         with open(env_path, "r") as f:
             for line in f:

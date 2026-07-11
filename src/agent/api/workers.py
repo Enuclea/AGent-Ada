@@ -89,11 +89,11 @@ async def remove_worker_endpoint(worker_id: str):
 
 @app.get("/api/config/tenants")
 async def get_tenant_instances():
-    ports_path = Path("/home/ada/public_ada_bot/ports.json")
-    if not ports_path.exists():
+    ports_env = os.getenv("TENANT_PORTS_JSON_PATH")
+    if ports_env:
+        ports_path = Path(ports_env)
+    else:
         ports_path = Path.home() / "AGent" / "scratch" / "public_ada_bot" / "ports.json"
-    if not ports_path.exists():
-        ports_path = Path("/home/dan/AGent/scratch/public_ada_bot/ports.json")
         
     tenants = []
     if ports_path.exists():

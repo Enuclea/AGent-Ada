@@ -169,16 +169,16 @@ Because the core server is run inside Docker, it operates inside a separate file
 
    [Service]
    Type=simple
-   WorkingDirectory=/home/dan/AGent/workers
+   WorkingDirectory=/home/<username>/AGent/workers
    Environment="WORKER_ID=host-worker-control"
    Environment="HUB_URL=http://127.0.0.1:8000"
    Environment="WORKER_PORT=8051"
    Environment="WORKER_CAPABILITIES=host_control,heavy_compute,docker"
    Environment="WORKER_MAX_CONCURRENT=3"
-   ExecStart=/home/dan/AGent/.venv/bin/python worker.py
+   ExecStart=/home/<username>/AGent/.venv/bin/python worker.py
    Restart=always
    RestartSec=5
-   Environment="PATH=/home/dan/.local/bin:/usr/local/bin:/usr/bin:/bin"
+   Environment="PATH=/home/<username>/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
    [Install]
    WantedBy=default.target

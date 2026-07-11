@@ -172,7 +172,7 @@ def test_youtube_to_mp3():
     mock_ydl = mock.MagicMock()
     mock_info = {"title": "Test Song Title"}
     mock_ydl.extract_info.return_value = mock_info
-    mock_ydl.prepare_filename.return_value = "/home/dan/AGent/share/data/mp3/Test Song Title.webm"
+    mock_ydl.prepare_filename.return_value = "/home/user/AGent/share/data/mp3/Test Song Title.webm"
 
     with mock.patch("yt_dlp.YoutubeDL") as mock_ytdl_class, \
          mock.patch("pathlib.Path.mkdir") as mock_mkdir, \

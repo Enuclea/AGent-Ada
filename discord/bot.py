@@ -779,11 +779,12 @@ def is_safe_attachment_path(file_path: str) -> bool:
     try:
         path = Path(file_path).resolve()
         allowed_bases = [
-            Path("/home/dan/AGent"),
-            Path("/home/dan/AGent-Ada"),
+            Path.cwd(),
+            Path.home() / "AGent",
+            Path.home() / "AGent-Ada",
+            Path.home() / ".gemini" / "antigravity-ide",
             Path("/tmp"),
-            Path("/app"),
-            Path("/home/dan/.gemini/antigravity-ide")
+            Path("/app")
         ]
         for base in allowed_bases:
             try:
@@ -2019,17 +2020,17 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                         if file_path.exists() and file_path.is_file():
                             try_add_path(str(file_path))
 
-                    # 2. Match markdown image links: ![alt](path) where path starts with /app/, /home/dan/, or file:///
-                    for match in re.findall(r'!\[.*?\]\(((?:file:///|/app/|/home/dan/)[^)]+)\)', chunk):
+                    # 2. Match markdown image links: ![alt](path) where path starts with /app/, /home/home_user/, or file:///
+                    for match in re.findall(r'!\[.*?\]\(((?:file:///|/app/|/home/[^/]+/)[^)]+)\)', chunk):
                         try_add_path(match)
 
                     # 3. Match standard file/image links: [label](path)
-                    for match in re.findall(r'\[.*?\]\(((?:file:///|/app/|/home/dan/)[^)]+)\)', chunk):
+                    for match in re.findall(r'\[.*?\]\(((?:file:///|/app/|/home/[^/]+/)[^)]+)\)', chunk):
                         try_add_path(match)
 
-                    # 4. Match raw absolute paths starting with /app/, /home/dan/, or file:///
+                    # 4. Match raw absolute paths starting with /app/, /home/home_user/, or file:///
                     # and ending in common file extensions (.png, .jpg, .jpeg, .gif, .pdf, .txt)
-                    raw_path_pattern = r'(?:file:///|/app/|/home/dan/)[^\s)]+?\.(?:png|jpg|jpeg|gif|pdf|txt)\b'
+                    raw_path_pattern = r'(?:file:///|/app/|/home/[^/]+/)[^\s)]+?\.(?:png|jpg|jpeg|gif|pdf|txt)\b'
                     for match in re.findall(raw_path_pattern, chunk, re.IGNORECASE):
                         try_add_path(match)
 
