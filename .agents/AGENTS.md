@@ -61,7 +61,7 @@ These guidelines are active for all sessions in this workspace.
 * When you notice bugs, configuration errors, or environment-specific inconsistencies (such as broken symlinks, container/host path conflicts, or deprecated tools), you must immediately report them to the user and fix them.
 * Always prioritize permanent, non-temporary architectural fixes (e.g., cross-compatible shell wrapper scripts, path mapping resolutions, or clean config updates) that maintain host-to-container parity and prevent future regression.
 
+---
 
-
-
-
+## 8. Sudo Docker Command Environment Preservation
+* **Protocol:** When running `docker` or `docker compose` commands with root privileges via `sudo` on the host, you **must** include the `-E` flag (i.e. `sudo -E docker compose ...`). This preserves the operator's `HOME` environment variable and prevents Docker from mounting paths relative to `/root/` instead of the user's home directory.
