@@ -43,38 +43,61 @@
 
         <!-- Main Layout -->
         <main class="app-layout">
-            <!-- Left Area: Permanent Chat & Execution Window -->
-            <section class="chat-section">
-                <div id="status-banner" class="status-banner" style="display: none;">
-                    <i class="fa-solid fa-circle-notch fa-spin"></i>
-                    <span class="status-banner-text">Ada is currently running...</span>
-                </div>
-                <div class="chat-messages-container" id="chat-messages" style="flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
-                    <!-- Default greeting message -->
-                    <div class="message system-message">
-                        <div class="message-avatar">🌸</div>
-                        <div class="message-content">
-                            <p>Hello! I am <strong>Ada</strong>, your autonomous developer assistant. Ask me to write, test, debug, or manage code in your workspace, or teach me new skills to automate your workflow. What are we working on today?</p>
+            <!-- Left Area: Tabbed Main Content -->
+            <section class="chat-section" style="display: flex; flex-direction: column;">
+                <!-- Main Content Tabs -->
+                <nav class="main-content-tabs" style="display: flex; gap: 0.35rem; padding: 0.75rem 1.25rem 0; border-bottom: 1px solid var(--card-border);">
+                    <button class="main-tab-btn active" data-main-tab="main-chat-panel" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; border-radius: 6px 6px 0 0; border: 1px solid transparent; border-bottom: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; gap: 0.35rem; font-weight: 500; transition: all 0.2s;">
+                        <i class="fa-solid fa-comments"></i> Chat
+                    </button>
+                    <button class="main-tab-btn" data-main-tab="main-modules-panel" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; border-radius: 6px 6px 0 0; border: 1px solid transparent; border-bottom: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; gap: 0.35rem; font-weight: 500; transition: all 0.2s;">
+                        <i class="fa-solid fa-dice-d20"></i> User Modules
+                    </button>
+                </nav>
+
+                <!-- Tab Panel: Chat -->
+                <div id="main-chat-panel" class="main-tab-panel active" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+                    <div id="status-banner" class="status-banner" style="display: none;">
+                        <i class="fa-solid fa-circle-notch fa-spin"></i>
+                        <span class="status-banner-text">Ada is currently running...</span>
+                    </div>
+                    <div class="chat-messages-container" id="chat-messages" style="flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+                        <!-- Default greeting message -->
+                        <div class="message system-message">
+                            <div class="message-avatar">🌸</div>
+                            <div class="message-content">
+                                <p>Hello! I am <strong>Ada</strong>, your autonomous developer assistant. Ask me to write, test, debug, or manage code in your workspace, or teach me new skills to automate your workflow. What are we working on today?</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="chat-input-area" style="padding: 1.25rem; border-top: 1px solid var(--card-border); background: rgba(0,0,0,0.15);">
+                        <form id="chat-form" class="chat-form">
+                            <div class="input-wrapper">
+                                <textarea id="prompt-input" placeholder="Type your message here... (Press Shift+Enter for new line, Ctrl+Enter to send)" rows="1" required></textarea>
+                                <button type="button" id="interrupt-btn" class="interrupt-btn" title="Interrupt Execution" style="display: none;">
+                                    <i class="fa-solid fa-stop"></i>
+                                </button>
+                                <button type="submit" id="send-btn" class="send-btn" title="Send Message">
+                                    <i class="fa-solid fa-paper-plane"></i>
+                                </button>
+                            </div>
+                        </form>
+                        <div class="chat-input-footer">
+                            <div class="input-tips">Ctrl+Enter to send</div>
+                            <div class="settings-trigger" id="settings-toggle">
+                                <i class="fa-solid fa-sliders"></i> Session Settings
+                            </div>
                         </div>
                     </div>
                 </div>
-                
-                <div class="chat-input-area" style="padding: 1.25rem; border-top: 1px solid var(--card-border); background: rgba(0,0,0,0.15);">
-                    <form id="chat-form" class="chat-form">
-                        <div class="input-wrapper">
-                            <textarea id="prompt-input" placeholder="Type your message here... (Press Shift+Enter for new line, Ctrl+Enter to send)" rows="1" required></textarea>
-                            <button type="button" id="interrupt-btn" class="interrupt-btn" title="Interrupt Execution" style="display: none;">
-                                <i class="fa-solid fa-stop"></i>
-                            </button>
-                            <button type="submit" id="send-btn" class="send-btn" title="Send Message">
-                                <i class="fa-solid fa-paper-plane"></i>
-                            </button>
-                        </div>
-                    </form>
-                    <div class="chat-input-footer">
-                        <div class="input-tips">Ctrl+Enter to send</div>
-                        <div class="settings-trigger" id="settings-toggle">
-                            <i class="fa-solid fa-sliders"></i> Session Settings
+
+                <!-- Tab Panel: User Modules / Plugin Cards -->
+                <div id="main-modules-panel" class="main-tab-panel" style="flex: 1; overflow-y: auto; padding: 1.5rem; display: none;">
+                    <h2 style="color: var(--accent-orchid); margin-bottom: 1rem;"><i class="fa-solid fa-dice-d20"></i> User Modules</h2>
+                    <div id="dynamic-modules-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem;">
+                        <div id="modules-load-status" class="widget-card glass-card" style="padding: 2rem; text-align: center; color: var(--text-muted);">
+                            <i class="fa-solid fa-circle-notch fa-spin" style="margin-right: 0.5rem;"></i> Loading user modules...
                         </div>
                     </div>
                 </div>
@@ -93,6 +116,7 @@
                     <button class="nav-tab-btn" data-tab="sidebar-marketplace-panel" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; gap: 0.35rem; font-weight: 500; transition: all 0.2s;">
                         <i class="fa-solid fa-puzzle-piece"></i> Modules
                     </button>
+
                 </nav>
 
                 <!-- Sidebar Tab Panel 1: Dashboard Widgets -->
@@ -492,6 +516,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=3.0"></script>
+    <script src="app.js?v=3.2"></script>
 </body>
 </html>

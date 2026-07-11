@@ -1468,14 +1468,37 @@ function setupCollapsibleWidgets() {
 
 // Dynamic Module/Widget Loader System
 async function loadDynamicModules() {
+    const statusEl = document.getElementById('modules-load-status');
+    const setStatus = (msg) => { if (statusEl) statusEl.innerHTML = msg; console.log('[Modules]', msg); };
+    
     try {
+        setStatus('<i class="fa-solid fa-circle-notch fa-spin"></i> Fetching modules from API...');
         const response = await fetch('/api/modules');
-        if (!response.ok) return;
+        
+        if (!response.ok) {
+            setStatus(`<i class="fa-solid fa-triangle-exclamation" style="color: var(--status-failed);"></i> API returned ${response.status} ${response.statusText}`);
+            return;
+        }
+        
         const data = await response.json();
         const modules = data.modules || [];
+        
+        if (modules.length === 0) {
+            setStatus('<i class="fa-solid fa-inbox"></i> No user modules installed.');
+            return;
+        }
+
+        const cardsContainer = document.getElementById('dynamic-modules-container');
+        if (!cardsContainer) {
+            setStatus('<i class="fa-solid fa-triangle-exclamation" style="color: var(--status-failed);"></i> Container element not found');
+            return;
+        }
+
+        // Remove status placeholder
+        if (statusEl) statusEl.remove();
 
         for (let mod of modules) {
-            // 1. Inject CSS if present
+            // 1. Inject CSS
             if (mod.widgetCss) {
                 const link = document.createElement('link');
                 link.rel = 'stylesheet';
@@ -1483,16 +1506,10 @@ async function loadDynamicModules() {
                 document.head.appendChild(link);
             }
 
-            // 2. Inject HTML container
-            let parentContainer = document.querySelector('.sidebar-content') || document.querySelector('.sidebar') || document.body;
-            if (mod.position === 'main') {
-                parentContainer = document.querySelector('.main-content') || document.body;
-            }
-
+            // 2. Create widget card
             const widgetCard = document.createElement('div');
             widgetCard.className = 'widget-card glass-card dynamic-module-card';
             widgetCard.id = `module-${mod.id}-card`;
-            
             widgetCard.innerHTML = `
                 <div class="card-header collapsible-header">
                     <h2><i class="${mod.iconClass || 'fa-solid fa-puzzle-piece'}" style="color: var(--accent-orchid);"></i> ${mod.name}</h2>
@@ -1507,27 +1524,22 @@ async function loadDynamicModules() {
                     </div>
                 </div>
             `;
-            
-            const skillsCard = document.getElementById('skills-card');
-            if (skillsCard && mod.position === 'sidebar') {
-                skillsCard.parentNode.insertBefore(widgetCard, skillsCard);
-            } else {
-                parentContainer.appendChild(widgetCard);
-            }
+            cardsContainer.appendChild(widgetCard);
 
-            // 3. Inject JS script
+            // 3. Inject widget JS
             if (mod.widgetJs) {
                 const script = document.createElement('script');
-                script.type = 'module';
                 script.src = mod.widgetJs + '?v=' + Date.now();
+                script.onerror = () => console.error('[Modules] Failed to load:', mod.widgetJs);
                 document.body.appendChild(script);
             }
         }
         
-        // Re-bind collapsible events to dynamically added cards
         setupCollapsibleWidgets();
+        console.log('[Modules] Loaded', modules.length, 'modules successfully');
     } catch (err) {
-        console.error('Failed to load dynamic modules:', err);
+        console.error('[Modules] Error:', err);
+        if (statusEl) statusEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: var(--status-failed);"></i> Error: ${err.message}`;
     }
 }
 
@@ -2071,7 +2083,7 @@ window.showSubagentDetails = showSubagentDetails;
 window.showTaskDetails = showTaskDetails;
 window.getSubagentEmoji = getSubagentEmoji;
 
-// Tab Navigation Logic
+// Tab Navigation Logic (Sidebar)
 document.querySelectorAll('.nav-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('.nav-tab-btn').forEach(b => b.classList.remove('active'));
@@ -2090,6 +2102,33 @@ document.querySelectorAll('.nav-tab-btn').forEach(btn => {
             } else if (panelId.includes('marketplace')) {
                 loadMarketplaceUI();
             }
+        }
+    });
+});
+
+// Tab Navigation Logic (Main Content: Chat / User Modules)
+document.querySelectorAll('.main-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const panelId = btn.getAttribute('data-main-tab');
+        console.log('[MainTabs] Switching to:', panelId);
+        
+        // Toggle active button styling
+        document.querySelectorAll('.main-tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        // Hide all main panels
+        document.querySelectorAll('.main-tab-panel').forEach(p => {
+            p.style.display = 'none';
+            p.classList.remove('active');
+        });
+        
+        // Show the selected panel
+        const panel = document.getElementById(panelId);
+        if (panel) {
+            panel.classList.add('active');
+            // Chat panel needs flex layout, modules panel uses block
+            panel.style.display = panelId === 'main-chat-panel' ? 'flex' : 'block';
+            console.log('[MainTabs] Panel visible:', panelId, panel.style.display);
         }
     });
 });
