@@ -127,6 +127,11 @@ def load_custom_modules(bot):
     for item in custom_dir.iterdir():
         if item.is_file() and item.name.endswith(".py") and not item.name.startswith("_"):
             try:
+                # Read content and perform AST security check
+                code = item.read_text(encoding="utf-8", errors="replace")
+                from agent.security.ast_safety import verify_ast_safety
+                verify_ast_safety(code, item.name)
+
                 module_name = f"discord.custom_modules.{item.stem}"
                 spec = importlib.util.spec_from_file_location(module_name, item)
                 module = importlib.util.module_from_spec(spec)
@@ -689,10 +694,108 @@ async def recover_tasks():
             print(f"[QUEUE RECOVERY ERROR] Failed to recover task {task_id}: {e}")
             bot_queue.update_task_status(task_id, 'failed')
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
+import collections
+import threading
+import time
+import hashlib
+import hmac
 
-bot_api_app = FastAPI(title="Ada Discord Bot API")
+_REPLAY_CACHE_MAX = 10000
+_REPLAY_CACHE_TTL = 310
+_replay_cache = collections.OrderedDict()
+_replay_lock = threading.Lock()
+
+def _check_and_record_nonce(sig: str, timestamp_str: str) -> bool:
+    key = (sig, timestamp_str)
+    now = time.time()
+    with _replay_lock:
+        while _replay_cache:
+            oldest_key, oldest_time = next(iter(_replay_cache.items()))
+            if now - oldest_time > _REPLAY_CACHE_TTL:
+                _replay_cache.pop(oldest_key)
+            else:
+                break
+        if key in _replay_cache:
+            return False
+        _replay_cache[key] = now
+        if len(_replay_cache) > _REPLAY_CACHE_MAX:
+            _replay_cache.popitem(last=False)
+    return True
+
+async def authenticate_bot_api(request: Request):
+    # Bypass for pytest unit tests on loopback
+    import sys
+    if os.environ.get("TESTING") == "1" and "pytest" in sys.modules and (
+        not request.client or request.client.host in ("testclient", "127.0.0.1", "localhost", "::1")
+    ):
+        return
+
+    sig = request.headers.get("X-Signature")
+    timestamp_str = request.headers.get("X-Timestamp")
+    if not sig or not timestamp_str:
+        raise HTTPException(status_code=401, detail="Authentication credentials missing")
+        
+    try:
+        timestamp = int(timestamp_str)
+        if abs(time.time() - timestamp) > 300:
+            raise HTTPException(status_code=401, detail="Request signature expired")
+            
+        body = await request.body()
+        body_hash = hashlib.sha256(body).hexdigest()
+        
+        secret_str = os.environ.get("INTERNAL_API_SECRET", "")
+        if not secret_str:
+            dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+            secret = hashlib.sha256(dashboard_password.encode()).digest()
+        else:
+            secret = hashlib.sha256(secret_str.encode()).digest()
+            
+        import posixpath
+        normalized_path = posixpath.normpath(request.url.path) or "/"
+        
+        from urllib.parse import parse_qsl, urlencode
+        raw_query = request.url.query or ""
+        params = parse_qsl(raw_query, keep_blank_values=True)
+        params.sort(key=lambda x: x[0])
+        canon_query = urlencode(params)
+        
+        secure_message = f"{request.method}:{normalized_path}:{canon_query}:{timestamp_str}:{body_hash}".encode()
+        expected_secure_sig = hmac.new(secret, secure_message, hashlib.sha256).hexdigest()
+        
+        if not hmac.compare_digest(sig, expected_secure_sig):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+            
+        if not _check_and_record_nonce(sig, timestamp_str):
+            raise HTTPException(status_code=401, detail="Replayed request detected")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Authentication error: {e}")
+
+def is_safe_attachment_path(file_path: str) -> bool:
+    try:
+        path = Path(file_path).resolve()
+        allowed_bases = [
+            Path("/home/dan/AGent"),
+            Path("/home/dan/AGent-Ada"),
+            Path("/tmp"),
+            Path("/app"),
+            Path("/home/dan/.gemini/antigravity-ide")
+        ]
+        for base in allowed_bases:
+            try:
+                if path.is_relative_to(base.resolve()):
+                    return True
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return False
+
+bot_api_app = FastAPI(title="Ada Discord Bot API", dependencies=[Depends(authenticate_bot_api)])
 
 class PostMessageRequest(BaseModel):
     channel: str
@@ -717,11 +820,14 @@ async def api_post_message(req: PostMessageRequest):
         raise HTTPException(status_code=404, detail=f"Channel '{req.channel}' not found")
         
     try:
-        if req.file_path and os.path.exists(req.file_path):
-            file = discord.File(req.file_path)
-            sent = await channel.send(req.message, file=file)
-        else:
-            sent = await channel.send(req.message)
+        if req.file_path:
+            if not is_safe_attachment_path(req.file_path):
+                raise HTTPException(status_code=400, detail="Forbidden file path for attachment")
+            if os.path.exists(req.file_path):
+                file = discord.File(req.file_path)
+                sent = await channel.send(req.message, file=file)
+            else:
+                sent = await channel.send(req.message)
         return {"status": "success", "message_id": sent.id, "channel": channel.name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -38,6 +38,7 @@ services:
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - ADA_DISABLE_SANDBOX=1
+      - ADA_ENABLE_PLUGINS=1
     cap_add:
       - SYS_ADMIN
     healthcheck:
@@ -201,6 +202,7 @@ services:
       - WORKER_ID=ada-sandbox-worker
       - WORKER_PORT=8051
       - OLLAMA_HOST=http://host.docker.internal:8000/api/ollama
+      - ALLOW_UNSECURE_WORKER=true
     healthcheck:
       test: "curl -f -u admin:$$DASHBOARD_PASSWORD -X POST -H 'Content-Type: application/json' -d '{\"model\":\"llama3\",\"prompt\":\"healthcheck\"}' http://host.docker.internal:8000/api/ollama/generate"
       interval: 30s

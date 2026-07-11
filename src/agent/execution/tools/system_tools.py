@@ -319,9 +319,34 @@ async def create_expert_profile(
         system_instructions: Detailed rules, guidelines, and context defining the expert's role.
         supporting_code: Optional Python source code to write to `.agents/agents/<profile_name>/runner.py` to support the expert.
     """
-    agent_dir = Path(os.getcwd()) / ".agents" / "agents" / profile_name
+    import re
+    # 1. Restrict profile_name to a strict alphanumeric/underscore/dash regex
+    if not re.match(r"^[a-zA-Z0-9_-]+$", profile_name):
+        return "Error: Invalid profile_name. Must contain only alphanumeric characters, underscores, or dashes."
+        
+    # 2. Resolve target directories and assert containment
+    base_agents_dir = Path(os.getcwd()).resolve() / ".agents" / "agents"
+    agent_dir = (base_agents_dir / profile_name).resolve()
+    
+    if not agent_dir.is_relative_to(base_agents_dir):
+        return "Error: Directory traversal attempt detected."
+        
     agent_dir.mkdir(parents=True, exist_ok=True)
     
+    # 3. Perform AST scan on supporting_code if provided
+    if supporting_code:
+        try:
+            import ast
+            from agent.security.ast_safety import verify_ast_safety
+            
+            # Syntax check first
+            ast.parse(supporting_code)
+            
+            # AST security scan
+            verify_ast_safety(supporting_code, "runner.py")
+        except Exception as e:
+            return f"Error: Supporting code has syntax errors or violated AST safety: {e}"
+            
     inst_file = agent_dir / "system_instructions.txt"
     with open(inst_file, "w", encoding="utf-8") as f:
         f.write(system_instructions.strip())
@@ -379,7 +404,7 @@ async def run_boardroom(
                 if src.exists():
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     if src.is_dir():
-                        shutil.copytree(src, dest, symlinks=True)
+                        shutil.copytree(src, dest, symlinks=False)
                     else:
                         shutil.copy2(src, dest)
         else:
@@ -389,7 +414,7 @@ async def run_boardroom(
                     continue
                 try:
                     if item.is_dir():
-                        shutil.copytree(item, sandbox_dir / item.name, symlinks=True)
+                        shutil.copytree(item, sandbox_dir / item.name, symlinks=False)
                     else:
                         shutil.copy2(item, sandbox_dir / item.name)
                 except Exception:

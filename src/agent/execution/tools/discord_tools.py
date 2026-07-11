@@ -7,6 +7,36 @@ from typing import Optional
 import discord
 from dotenv import load_dotenv
 
+def get_bot_api_headers(method: str, path: str, query: str = "", json_data: Optional[dict] = None) -> dict:
+    import hmac
+    import hashlib
+    import time
+    
+    secret_str = os.environ.get("INTERNAL_API_SECRET", "")
+    if not secret_str:
+        dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "admin")
+        secret = hashlib.sha256(dashboard_password.encode()).digest()
+    else:
+        secret = hashlib.sha256(secret_str.encode()).digest()
+        
+    timestamp_str = str(int(time.time()))
+    body = b""
+    if json_data is not None:
+        body = json.dumps(json_data).encode("utf-8")
+    body_hash = hashlib.sha256(body).hexdigest()
+    
+    # Message binds method, path, query, timestamp, and body hash
+    message = f"{method.upper()}:{path}:{query}:{timestamp_str}:{body_hash}".encode()
+    sig = hmac.new(secret, message, hashlib.sha256).hexdigest()
+    
+    headers = {
+        "X-Signature": sig,
+        "X-Timestamp": timestamp_str
+    }
+    if json_data is not None:
+        headers["Content-Type"] = "application/json"
+    return headers
+
 async def post_to_discord(channel: str, message: str, file_path: Optional[str] = None) -> str:
     """Posts a text message and an optional file attachment to a Discord channel.
     
@@ -26,9 +56,10 @@ async def post_to_discord(channel: str, message: str, file_path: Optional[str] =
         "message": message,
         "file_path": file_path
     }
+    headers = get_bot_api_headers("POST", "/api/discord/post", json_data=payload)
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
-            async with session.post(url, json=payload) as resp:
+            async with session.post(url, json=payload, headers=headers) as resp:
                 if resp.status == 200:
                     res_json = await resp.json()
                     return json.dumps(res_json)
@@ -51,9 +82,11 @@ async def read_discord_channel(channel: str, limit: int = 10) -> str:
     import aiohttp
     
     url = f"http://127.0.0.1:8090/api/discord/messages?channel={channel}&limit={limit}"
+    canon_query = f"channel={channel}&limit={limit}"
+    headers = get_bot_api_headers("GET", "/api/discord/messages", query=canon_query)
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
-            async with session.get(url) as resp:
+            async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     res_json = await resp.json()
                     return json.dumps(res_json)
@@ -72,9 +105,10 @@ async def list_discord_channels() -> str:
     import aiohttp
     
     url = "http://127.0.0.1:8090/api/discord/channels"
+    headers = get_bot_api_headers("GET", "/api/discord/channels")
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
-            async with session.get(url) as resp:
+            async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     res_json = await resp.json()
                     return json.dumps(res_json)

@@ -21,6 +21,26 @@ class WorkerRegistrationRequest(BaseModel):
 
 @app.post("/api/workers/register")
 async def register_worker_endpoint(req: WorkerRegistrationRequest):
+    # Validate worker registration host to prevent SSRF or metadata traversal
+    import urllib.parse
+    raw_host = req.host
+    if not raw_host.startswith(("http://", "https://")):
+        raw_host = f"http://{raw_host}"
+    try:
+        parsed = urllib.parse.urlparse(raw_host)
+        hostname = parsed.hostname
+        port = parsed.port
+        if not hostname:
+            raise HTTPException(status_code=400, detail="Invalid host format")
+        if hostname == "169.254.169.254":
+            raise HTTPException(status_code=400, detail="Metadata IP registration is forbidden")
+        if port is not None and not (1 <= port <= 65535):
+            raise HTTPException(status_code=400, detail="Invalid port number")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid worker host URL: {e}")
+
     metadata = {}
     if req.python_version:
         metadata["python_version"] = req.python_version
@@ -94,8 +114,11 @@ async def get_tenant_instances():
 @app.post("/api/config/tenants/{owner_id}/{action}")
 async def control_tenant_instance(owner_id: str, action: str):
     import asyncio
+    import re
     if action not in ("up", "down"):
         raise HTTPException(status_code=400, detail="Invalid action")
+    if not re.match(r"^[a-zA-Z0-9_-]+$", owner_id):
+        raise HTTPException(status_code=400, detail="Invalid owner_id format")
         
     try:
         host_ip = os.environ.get("HOST_COMMAND_CHANNEL_IP", "127.0.0.1")

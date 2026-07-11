@@ -359,11 +359,12 @@ def check_tasks(inactivity_threshold_mins=10):
             "report": report_md
         }, indent=2))
         
-    except Exception as e:
-        print(json.dumps({"error": f"Error checking tasks: {e}"}))
-        sys.exit(1)
     finally:
         conn.close()
 
 if __name__ == "__main__":
-    check_tasks()
+    try:
+        check_tasks()
+    except Exception as e:
+        print(json.dumps({"error": f"Error checking tasks: {e}"}))
+        sys.exit(1)

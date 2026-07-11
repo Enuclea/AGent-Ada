@@ -60,6 +60,13 @@ def verify_plugin_ast_safety(plugin_path: Path) -> dict:
         is_signed = True
         print(f"[PLUGINS] Plugin '{plugin_path.name}' verified cryptographically.")
 
+    from agent.execution.tools.security import _ADA_DISABLE_SANDBOX_FROZEN
+    if _ADA_DISABLE_SANDBOX_FROZEN and not is_signed:
+        raise RuntimeError(
+            f"Security violation: Sandbox is disabled (ADA_DISABLE_SANDBOX=1), "
+            f"so loading unsigned plugin '{plugin_path.name}' is strictly forbidden."
+        )
+
     # 2. AST safety scan on all Python files — always runs.
     #    For signed plugins: advisory only (log warnings, don't reject).
     #    For unsigned plugins: enforcement (raise on violation).

@@ -38,6 +38,13 @@ from fastapi.responses import StreamingResponse, JSONResponse
 WORKER_ID = os.environ.get("WORKER_ID", f"worker-{socket.gethostname()}")
 HUB_URL = os.environ.get("HUB_URL", "http://localhost:8050").rstrip("/")
 API_KEY = os.environ.get("WORKER_API_KEY", "")
+ALLOW_UNSECURE = os.environ.get("ALLOW_UNSECURE_WORKER", "").lower() == "true"
+if not API_KEY and not ALLOW_UNSECURE:
+    raise RuntimeError(
+        "CRITICAL SECURITY EXCEPTION: Secure execution requires WORKER_API_KEY to be configured. "
+        "Please specify a high-entropy key, or set ALLOW_UNSECURE_WORKER=true to opt-in to unsecure mode."
+    )
+
 WORKER_PORT = int(os.environ.get("WORKER_PORT", "8051"))
 CAPABILITIES = [c.strip() for c in os.environ.get("WORKER_CAPABILITIES", "heavy_compute").split(",") if c.strip()]
 MAX_CONCURRENT = int(os.environ.get("WORKER_MAX_CONCURRENT", "3"))
@@ -55,9 +62,10 @@ _tasks_failed = 0
 async def verify_api_key(request: Request):
     """Validates the shared API key from the X-Worker-Key header."""
     if not API_KEY:
-        return  # No key configured = open (LAN-only deployments)
+        return  # Open mode (only when ALLOW_UNSECURE_WORKER=true)
     key = request.headers.get("X-Worker-Key", "")
-    if key != API_KEY:
+    import hmac
+    if not hmac.compare_digest(key.encode("utf-8"), API_KEY.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 # ---------------------------------------------------------------------------

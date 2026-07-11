@@ -5,7 +5,7 @@ import shlex
 from pathlib import Path
 
 # Freeze sandboxing bypass flag once at import time to prevent runtime manipulation
-_ADA_DISABLE_SANDBOX_FROZEN = (os.environ.get("ADA_DISABLE_SANDBOX") == "1")
+_ADA_DISABLE_SANDBOX_FROZEN = (os.environ.get("ADA_DISABLE_SANDBOX", "").strip().lower() in ("1", "true", "yes"))
 _ALLOW_UNSANDBOXED_EXECUTION_FROZEN = (os.environ.get("ALLOW_UNSANDBOXED_EXECUTION") == "true")
 
 def _is_safe_path(base_dir, path) -> bool:

@@ -269,7 +269,7 @@ def main() -> None:
         session_id = session_id[:-3]
 
     # Apply Landlock sandboxing on startup if not disabled
-    if os.environ.get("ADA_DISABLE_SANDBOX", "false").lower() != "true":
+    if os.environ.get("ADA_DISABLE_SANDBOX", "").strip().lower() not in ("1", "true", "yes"):
         try:
             from agent.core.landlock import apply_landlock
             # Use specified workspace or default to current working directory
