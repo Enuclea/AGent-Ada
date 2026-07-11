@@ -33,11 +33,11 @@ services:
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - ADA_DISABLE_SANDBOX=0
-      - ADA_ENABLE_PLUGINS=1
+      - ADA_ENABLE_PLUGINS=0
     cap_add:
       - SYS_ADMIN
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
     network_mode: "host"
     pid: "host"
-    command: ["python", "-m", "agent.cli", "ui", "--port", "8050", "--host", "0.0.0.0"]
+    command: [ "python", "-m", "agent.cli", "ui", "--port", "8050", "--host", "0.0.0.0" ]
     env_file:
       - .env
     volumes:
@@ -92,7 +92,7 @@ services:
     restart: unless-stopped
     network_mode: "host"
     pid: "host"
-    command: ["python", "discord/bot.py"]
+    command: [ "python", "discord/bot.py" ]
     env_file:
       - .env
     volumes:
@@ -131,7 +131,7 @@ services:
     restart: unless-stopped
     network_mode: "host"
     pid: "host"
-    command: ["python", "src/agent/observability/pubsub_listener.py"]
+    command: [ "python", "src/agent/observability/pubsub_listener.py" ]
     env_file:
       - .env
     volumes:
@@ -166,7 +166,7 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    command: ["python", "workers/worker.py"]
+    command: [ "python", "workers/worker.py" ]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     read_only: true
@@ -190,4 +190,3 @@ services:
       retries: 3
     depends_on:
       - ada-core
-
