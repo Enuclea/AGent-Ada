@@ -180,9 +180,61 @@ def check_tasks(inactivity_threshold_mins=10):
                 else:
                     running_subagents_list.append(sub_info)
 
+        # --- 2b. Check Stalled Plans ---
+        cursor.execute("SELECT id, session_id, title, created_at FROM session_plans WHERE status = 'running'")
+        running_plans = cursor.fetchall()
+        
+        stalled_plans = []
+        for p_id, p_sid, p_title, p_created_at in running_plans:
+            cursor.execute("SELECT timestamp FROM conversation_steps WHERE session_id = ? ORDER BY id DESC LIMIT 1", (p_sid,))
+            step_row = cursor.fetchone()
+            
+            last_activity = p_created_at
+            if step_row and step_row[0]:
+                last_activity = step_row[0]
+                
+            try:
+                activity_dt = datetime.fromisoformat(last_activity.replace("Z", "+00:00")).replace(tzinfo=None)
+                inactive = now - activity_dt
+                inactive_minutes = inactive.seconds // 60 + (inactive.days * 24 * 60)
+            except Exception:
+                inactive_minutes = 9999
+                
+            if inactive_minutes > inactivity_threshold_mins:
+                stalled_plans.append({
+                    "id": p_id,
+                    "session_id": p_sid,
+                    "title": p_title,
+                    "inactive_minutes": inactive_minutes
+                })
+
+        # --- 2c. Check Stalled Discord Tasks ---
+        stalled_discord_tasks = []
+        import time
+        discord_db_path = DB_PATH.parent / "discord_queue.db"
+        if discord_db_path.exists():
+            try:
+                discord_conn = sqlite3.connect(str(discord_db_path))
+                discord_cursor = discord_conn.cursor()
+                discord_cursor.execute("SELECT id, prompt_text, timestamp FROM discord_tasks WHERE status = 'processing'")
+                for d_id, d_prompt, d_ts in discord_cursor.fetchall():
+                    elapsed_sec = time.time() - d_ts
+                    inactive_minutes = int(elapsed_sec / 60)
+                    if inactive_minutes > inactivity_threshold_mins:
+                        stalled_discord_tasks.append({
+                            "id": d_id,
+                            "prompt": d_prompt or "No prompt",
+                            "inactive_minutes": inactive_minutes
+                        })
+                discord_conn.close()
+            except Exception as e:
+                print(f"[GRACE] Error reading Discord tasks: {e}", file=sys.stderr)
+
         # --- 3. Auto-termination / Cleanup ---
         cleaned_tasks = []
         cleaned_subagents = []
+        cleaned_plans = []
+        cleaned_discord_tasks = []
         
         if stalled_tasks:
             for task in stalled_tasks:
@@ -203,14 +255,38 @@ def check_tasks(inactivity_threshold_mins=10):
                     (sub["subagent_id"], "subagent", "Subagent failed: Terminated automatically by Grace Monitor due to inactivity timeout (stalled).", now.isoformat())
                 )
                 cleaned_subagents.append(sub)
+
+        if stalled_plans:
+            for plan in stalled_plans:
+                cursor.execute(
+                    "UPDATE session_plans SET status = 'failed' WHERE id = ?",
+                    (plan["id"],)
+                )
+                cursor.execute(
+                    "UPDATE plan_steps SET status = 'failed', error_message = ? WHERE plan_id = ? AND status NOT IN ('completed', 'failed')",
+                    ("Terminated automatically by Grace Monitor due to inactivity timeout.", plan["id"])
+                )
+                cleaned_plans.append(plan)
                 
-        if stalled_tasks or stalled_subagents:
+        if stalled_tasks or stalled_subagents or stalled_plans:
             conn.commit()
+
+        if stalled_discord_tasks:
+            try:
+                discord_conn = sqlite3.connect(str(discord_db_path))
+                discord_cursor = discord_conn.cursor()
+                for d_task in stalled_discord_tasks:
+                    discord_cursor.execute("UPDATE discord_tasks SET status = 'failed' WHERE id = ?", (d_task["id"],))
+                    cleaned_discord_tasks.append(d_task)
+                discord_conn.commit()
+                discord_conn.close()
+            except Exception as e:
+                print(f"[GRACE] Error updating Discord tasks: {e}", file=sys.stderr)
             
         # --- 4. Discord Alerts ---
-        if cleaned_tasks or cleaned_subagents:
+        if cleaned_tasks or cleaned_subagents or cleaned_plans or cleaned_discord_tasks:
             alert_lines = [
-                "🚨 **Ada Timekeeper: Auto-Cleaned Stalled Tasks/Subagents**",
+                "🚨 **Ada Timekeeper: Auto-Cleaned Stalled Tasks/Subagents/Plans**",
                 "The following items exceeded inactivity thresholds and were auto-terminated to prevent resource leaks:"
             ]
             for t in cleaned_tasks:
@@ -218,6 +294,11 @@ def check_tasks(inactivity_threshold_mins=10):
             for s in cleaned_subagents:
                 prompt_snippet = s['prompt'][:60] + "..." if len(s['prompt']) > 60 else s['prompt']
                 alert_lines.append(f"• **Subagent**: `{prompt_snippet}` (ID: `{s['subagent_id']}` - inactive for {s['inactive_minutes']}m)")
+            for p in cleaned_plans:
+                alert_lines.append(f"• **Plan**: `{p['title']}` (ID: `{p['id']}` - inactive for {p['inactive_minutes']}m)")
+            for d in cleaned_discord_tasks:
+                prompt_snippet = d['prompt'][:60] + "..." if len(d['prompt']) > 60 else d['prompt']
+                alert_lines.append(f"• **Discord Task**: `{prompt_snippet}` (ID: `{d['id']}` - inactive for {d['inactive_minutes']}m)")
             
             send_discord_alert("\n".join(alert_lines))
             
@@ -227,12 +308,16 @@ def check_tasks(inactivity_threshold_mins=10):
             f"Generated at: {now.isoformat()} UTC\n"
         ]
         
-        if cleaned_tasks or cleaned_subagents:
+        if cleaned_tasks or cleaned_subagents or cleaned_plans or cleaned_discord_tasks:
             markdown_lines.append("## ♻️ Auto-Cleaned Stalled Items (Terminated)")
             for t in cleaned_tasks:
                 markdown_lines.append(f"- **Task**: `{t['name']}` (ID: `{t['id']}`) - Inactivity: {t['inactive_minutes']}m")
             for s in cleaned_subagents:
                 markdown_lines.append(f"- **Subagent**: `{s['prompt']}` (ID: `{s['subagent_id']}`) - Inactivity: {s['inactive_minutes']}m")
+            for p in cleaned_plans:
+                markdown_lines.append(f"- **Plan**: `{p['title']}` (ID: `{p['id']}`) - Inactivity: {p['inactive_minutes']}m")
+            for d in cleaned_discord_tasks:
+                markdown_lines.append(f"- **Discord Task**: `{d['prompt']}` (ID: `{d['id']}`) - Inactivity: {d['inactive_minutes']}m")
             markdown_lines.append("")
             
         markdown_lines.append("## Active Running Tasks")
@@ -264,11 +349,13 @@ def check_tasks(inactivity_threshold_mins=10):
         
         # Output clean JSON
         print(json.dumps({
-            "status": "cleanup" if (cleaned_tasks or cleaned_subagents) else "ok",
+            "status": "cleanup" if (cleaned_tasks or cleaned_subagents or cleaned_plans or cleaned_discord_tasks) else "ok",
             "running_tasks_count": len(running_tasks_list),
             "cleaned_tasks_count": len(cleaned_tasks),
             "running_subagents_count": len(running_subagents_list),
             "cleaned_subagents_count": len(cleaned_subagents),
+            "cleaned_plans_count": len(cleaned_plans),
+            "cleaned_discord_tasks_count": len(cleaned_discord_tasks),
             "report": report_md
         }, indent=2))
         
