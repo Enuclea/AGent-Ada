@@ -37,8 +37,10 @@ def test_is_safe_relative_path():
 # 2. Test AST Plugin Safety Visitor
 def test_verify_plugin_ast_safety():
     from agent.core.plugins import verify_plugin_ast_safety
+    from unittest import mock
     
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with mock.patch("agent.execution.tools.security._ADA_DISABLE_SANDBOX_FROZEN", False), \
+         tempfile.TemporaryDirectory() as tmp_dir:
         plugin_path = Path(tmp_dir)
         
         # Safe code passes
@@ -175,8 +177,10 @@ async def test_auth_bypass_prevention():
 # 5. Test Hardened AST Safety scan (sys.modules and vars check)
 def test_verify_plugin_ast_safety_sys_modules():
     from agent.core.plugins import verify_plugin_ast_safety
+    from unittest import mock
     
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with mock.patch("agent.execution.tools.security._ADA_DISABLE_SANDBOX_FROZEN", False), \
+         tempfile.TemporaryDirectory() as tmp_dir:
         plugin_path = Path(tmp_dir)
         init_file = plugin_path / "__init__.py"
         
@@ -313,8 +317,10 @@ async def test_hmac_signature_validation():
 
 def test_ast_safety_gaps_blocked():
     from agent.core.plugins import verify_plugin_ast_safety
+    from unittest import mock
     
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with mock.patch("agent.execution.tools.security._ADA_DISABLE_SANDBOX_FROZEN", False), \
+         tempfile.TemporaryDirectory() as tmp_dir:
         plugin_path = Path(tmp_dir)
         init_file = plugin_path / "__init__.py"
         

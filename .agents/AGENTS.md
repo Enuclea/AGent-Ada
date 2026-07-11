@@ -2,6 +2,8 @@
 
 These guidelines are active for all sessions in this workspace.
 
+**Engineering constraints (paths, modularity, secrets):** see [PARTNER_ENGINEERING_RULES.md](PARTNER_ENGINEERING_RULES.md). Follow those rules on all implementation work.
+
 ---
 
 ## 1. Specialist Agents for Recurring Tasks
