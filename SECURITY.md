@@ -2,6 +2,8 @@
 
 **AGent-Ada** is designed as a secure, developer-focused AI agent orchestration harness. Security is a core priority, with multiple layers of protection including sandboxing, cryptographic verification, input/output sanitization, and rate limiting.
 
+For product posture, non-goals, trust rungs, and the opt-in philosophy (including “we do not protect admins from themselves”), see **[SECURITY-INTENT.md](SECURITY-INTENT.md)**. This file is the mechanisms and operational policy; that file is the lens.
+
 ## Our Philosophy
 
 - **Self-authored plugins are strongly preferred.**  
