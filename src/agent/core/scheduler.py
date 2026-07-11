@@ -197,6 +197,27 @@ async def execute_scheduled_task(name: str, prompt: str):
             memory.log_conversation_step(conversation_id, "assistant", err_msg)
             return
 
+    if name == "Gmail Email Check":
+        conversation_id = f"sched-gmail-email-check-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        memory.log_conversation_step(conversation_id, "user", f"[Scheduled Task: {name}] {prompt}")
+        try:
+            from enuclea.gmail_tool import sync_gmail_emails
+            has_enuclea = True
+        except ImportError:
+            has_enuclea = False
+
+        if has_enuclea:
+            try:
+                res = await sync_gmail_emails()
+                memory.log_conversation_step(conversation_id, "assistant", res)
+                print(f"[Scheduled Task: {name}] Executed directly. Result: {res}")
+                return
+            except Exception as e:
+                err_msg = f"Failed to execute Gmail sync: {e}"
+                print(f"[Scheduled Task: {name}] Error: {err_msg}")
+                memory.log_conversation_step(conversation_id, "assistant", err_msg)
+                return
+
     # Generic scheduled tasks: use a dedicated, isolated KeylessAgyAgent
     from agent.keyless import KeylessAgyAgent, TaskPriority
 
