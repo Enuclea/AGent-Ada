@@ -36,7 +36,6 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 
 # Copy the actual source code and other directories
 COPY src/ ./src/
-COPY enuclea/ ./enuclea/
 COPY discord/ ./discord/
 COPY workers/ ./workers/
 

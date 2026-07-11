@@ -20,24 +20,19 @@ services:
       - ./src/agent/routes/custom:/app/src/agent/routes/custom
       - ./src/agent/static:/app/src/agent/static
       - ./.agents:/app/.agents
-      - ./enuclea:/app/enuclea
       - ./scratch:/app/scratch
       - ${HOME}/.gemini:/app/.gemini
       - ${HOME}/.agent:/app/.agent
       # Note: Mounts the Google AntiGravity CLI binary from the host.
       # The agy CLI must be installed and configured on the host for the user running docker compose.
       - ${HOME}/.local/bin/agy:/app/.local/bin/agy
-      # Note: Local workspace directory mounts giving AI agents host filesystem access.
-      # Customize these local path decisions to match your installation.
-      - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
-      - ${HOME}/AGent:${HOME}/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
       - AGENT_DB_PATH=/data/history.db
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-      - ADA_DISABLE_SANDBOX=1
+      - ADA_DISABLE_SANDBOX=0
       - ADA_ENABLE_PLUGINS=1
     cap_add:
       - SYS_ADMIN
@@ -67,17 +62,12 @@ services:
       - ./src/agent/routes/custom:/app/src/agent/routes/custom
       - ./src/agent/static:/app/src/agent/static
       - ./.agents:/app/.agents
-      - ./enuclea:/app/enuclea
       - ./scratch:/app/scratch
       - ${HOME}/.gemini:/app/.gemini
       - ${HOME}/.agent:/app/.agent
       # Note: Mounts the Google AntiGravity CLI binary from the host.
       # The agy CLI must be installed and configured on the host for the user running docker compose.
       - ${HOME}/.local/bin/agy:/app/.local/bin/agy
-      # Note: Local workspace directory mounts giving AI agents host filesystem access.
-      # Customize these local path decisions to match your installation.
-      - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
-      - ${HOME}/AGent:${HOME}/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -86,7 +76,7 @@ services:
       - HOST_COMMAND_CHANNEL_IP=127.0.0.1
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-      - ADA_DISABLE_SANDBOX=1
+      - ADA_DISABLE_SANDBOX=0
     cap_add:
       - SYS_ADMIN
     depends_on:
@@ -111,17 +101,12 @@ services:
       - ./plugins:/app/plugins
       - ./discord:/app/discord
       - ./.agents:/app/.agents
-      - ./enuclea:/app/enuclea
       - ./scratch:/app/scratch
       - ${HOME}/.gemini:/app/.gemini
       - ${HOME}/.agent:/app/.agent
       # Note: Mounts the Google AntiGravity CLI binary from the host.
       # The agy CLI must be installed and configured on the host for the user running docker compose.
       - ${HOME}/.local/bin/agy:/app/.local/bin/agy
-      # Note: Local workspace directory mounts giving AI agents host filesystem access.
-      # Customize these local path decisions to match your installation.
-      - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
-      - ${HOME}/AGent:${HOME}/AGent:rw
     environment:
       - PYTHONUNBUFFERED=1
       - HOME=/app
@@ -130,7 +115,7 @@ services:
       - RUN_DISCORD_BOT=true
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-      - ADA_DISABLE_SANDBOX=1
+      - ADA_DISABLE_SANDBOX=0
     cap_add:
       - SYS_ADMIN
     depends_on:
@@ -154,17 +139,12 @@ services:
       - ./config:/app/config
       - ./plugins:/app/plugins
       - ./.agents:/app/.agents
-      - ./enuclea:/app/enuclea
       - ./scratch:/app/scratch
       - ${HOME}/.gemini:/app/.gemini
       - ${HOME}/.agent:/app/.agent
       # Note: Mounts the Google AntiGravity CLI binary from the host.
       # The agy CLI must be installed and configured on the host for the user running docker compose.
       - ${HOME}/.local/bin/agy:/app/.local/bin/agy
-      # Note: Local workspace directory mounts giving AI agents host filesystem access.
-      # Customize these local path decisions to match your installation.
-      - ${HOME}/AGent-Ada:${HOME}/AGent-Ada:rw
-      - ${HOME}/AGent:${HOME}/AGent:rw
       - ./src/agent/observability/pubsub_listener.py:/app/src/agent/observability/pubsub_listener.py:ro
     environment:
       - PYTHONUNBUFFERED=1
@@ -172,7 +152,7 @@ services:
       - AGENT_DB_PATH=/data/history.db
       - ANTIGRAVITY_HARNESS_PATH=/app/.local/bin/agy
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-      - ADA_DISABLE_SANDBOX=1
+      - ADA_DISABLE_SANDBOX=0
     cap_add:
       - SYS_ADMIN
     depends_on:

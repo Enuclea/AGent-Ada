@@ -363,7 +363,7 @@ AGent-Ada maintains application state in a local SQLite database file.
 
 ### Default Database
 
-By default, the engine connects to `agent.db` (configurable via `AGENT_DB_PATH` in `.env`). In custom production deployments (such as at Enuclea LLC), this may be configured to point to `enuclea.db`.
+By default, the engine connects to `agent.db` (configurable via `AGENT_DB_PATH` in `.env`). In custom production deployments, this may be configured to point to a custom database file.
 
 ### Core Database Tables
 
@@ -377,15 +377,6 @@ By default, the engine connects to `agent.db` (configurable via `AGENT_DB_PATH` 
 * **`api_call_logs`**: Logs endpoint execution latency, status codes, and error tracebacks.
 * **`scheduled_tasks`**: Holds metadata and run statistics for scheduled cron tasks.
 * **`workers`**: Tracks remote host endpoints, capabilities, and heartbeat health.
-
-### Enuclea Production Extensions & Custom Tables
-
-The following tables are created by Enuclea LLC extension plugins and are used for custom enterprise workflows:
-
-* **`morgen_tasks`**: Tracks calendar integration event statuses.
-* **`tracked_atera_items`**: Maps tasks to external IT tickets/alert resources.
-* **`availability_alert_checks`**: Manages offline alert check cycles.
-* **`daily_automation_rollups`**: Consolidates multi-step daily tasks.
 
 ---
 
