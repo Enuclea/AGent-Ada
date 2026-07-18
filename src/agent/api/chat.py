@@ -331,7 +331,7 @@ async def chat_endpoint(request: Request):
                 await lock.acquire(priority)
                 
                 # Direct Roleplay / General Chat Bypass: Skip planning, decomposition, and sequential driving steps
-                if req.roleplay or effective_general_chat:
+                if req.roleplay or effective_general_chat or effective_disable_tools:
                     await stream_agent_response(agent, req.prompt)
                     return
 

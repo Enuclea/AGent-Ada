@@ -410,7 +410,7 @@ async def run_scheduler():
                                                 })
                                         else:
                                             # Mapped discord channel, send direct resume prompt to Discord bot gateway
-                                            from agent.observability.quiet_observer import send_direct_discord_message
+                                            from agent.observability.notifications import send_direct_discord_message
                                             output_content = f"### [SYSTEM RESUME] Step completed successfully.\n**Subagent Output:**\n{msg}"
                                             send_direct_discord_message(channel_id, output_content)
                                     except Exception as re_err:
@@ -444,7 +444,7 @@ async def run_scheduler():
                                                     "session_id": sess_id
                                                 })
                                         else:
-                                            from agent.observability.quiet_observer import send_direct_discord_message
+                                            from agent.observability.notifications import send_direct_discord_message
                                             output_content = f"### [SYSTEM RESUME] Step execution failed.\n**Subagent Output:**\n{msg}"
                                             send_direct_discord_message(channel_id, output_content)
                                     except Exception as re_err:
@@ -509,7 +509,7 @@ async def run_scheduler():
                                                     "session_id": sess_id
                                                 })
                                         else:
-                                            from agent.observability.quiet_observer import send_direct_discord_message
+                                            from agent.observability.notifications import send_direct_discord_message
                                             output_content = f"### [SYSTEM RESUME] Subagent task finished.\n**Subagent Output:**\n{msg}"
                                             send_direct_discord_message(channel_id, output_content)
                                     except Exception as re_err:
