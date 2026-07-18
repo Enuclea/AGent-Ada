@@ -54,7 +54,7 @@ class ChatRequest(BaseModel):
     prompt: str = Field(..., max_length=10000)
     session_id: Optional[str] = Field(None, max_length=128)
     model: Optional[str] = Field(None, max_length=128)
-    system_instructions: Optional[str] = Field(None, max_length=4096)
+    system_instructions: Optional[str] = Field(None, max_length=32768)
     agent_profile: Optional[str] = Field(None, max_length=128)
     disable_tools: Optional[bool] = False
     roleplay: Optional[bool] = False
