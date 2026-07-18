@@ -177,7 +177,7 @@ class OrchestrationService:
             # Specialist work mode: personality prompt only, no heavy context injection.
             # Specialists respond instantly in character with full tool access.
             # Skip: memory summary, RAG, delegation rules, checkpoints, skills, workers.
-            full_instructions = common_protocol + custom_instructions
+            full_instructions = custom_instructions if disable_tools else common_protocol + custom_instructions
         else:
             # Coordinator mode: full context injection for PM-level situational awareness.
             memory_summary = memory.get_fact_summary()
@@ -185,7 +185,7 @@ class OrchestrationService:
             skills_summary = "Loaded Custom Skills:\n" + "\n".join([f"- {s.name}: {s.description}" for s in skills]) if skills else "No custom skills installed."
             rag_context = await memory.get_auto_rag_context(prompt)
 
-            full_instructions = common_protocol + base_instructions
+            full_instructions = base_instructions if disable_tools else common_protocol + base_instructions
             if memory_summary:
                 full_instructions += f"\n\n{memory_summary}"
             if rag_context:
@@ -546,7 +546,8 @@ class OrchestrationService:
                 conversation_id=resolved_conv_id,
                 timeout=600.0,
                 roleplay=roleplay,
-                general_chat=general_chat
+                general_chat=general_chat,
+                disable_tools=disable_tools
             )
             agent = await agent.__aenter__()
 

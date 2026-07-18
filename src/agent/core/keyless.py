@@ -505,6 +505,7 @@ class KeylessAgyAgent:
         cwd: Optional[str] = None,
         roleplay: bool = False,
         general_chat: bool = False,
+        disable_tools: bool = False,
     ) -> None:
         """Initialize KeylessAgyAgent.
 
@@ -519,11 +520,12 @@ class KeylessAgyAgent:
             cwd: Working directory context for the execution process.
             roleplay: Whether to activate local Ollama fallback for roleplay.
             general_chat: Whether to use casual conversational mode (no protocol).
+            disable_tools: Toggle to disable tool use capabilities.
         """
         self.model: Optional[str] = model
         from agent.core.constants import COMMON_PROTOCOL
         common_protocol = COMMON_PROTOCOL
-        if roleplay or general_chat:
+        if roleplay or general_chat or disable_tools:
             self.system_instructions = system_instructions or ""
         elif system_instructions:
             if "[SYSTEM PROTOCOL - TIMEOUT PREVENTION & YIELDING]" not in system_instructions:
