@@ -77,14 +77,23 @@ class AgyRoute(BaseRoute):
 
         # Determine candidate models to stay within agy route
         model_lower = model.lower()
+
+        def resolve_model_name(m: str) -> str:
+            m_lower = m.lower() if m else ""
+            if m_lower in ("gemini", "gemini-3.5-flash", "default", ""):
+                return "Gemini 3.5 Flash (Medium)"
+            if m_lower in ("claude", "claude-sonnet", "sonnet"):
+                return "Claude Sonnet 4.6 (Thinking)"
+            return m
+
         if "gemini" in model_lower:
-            candidates = ["gemini", "claude"]
+            candidates = [resolve_model_name(model), "Claude Sonnet 4.6 (Thinking)"]
         elif "claude" in model_lower:
-            candidates = ["claude", "gemini"]
+            candidates = [resolve_model_name(model), "Gemini 3.5 Flash (Medium)"]
         elif model_lower in ("", "*", "default"):
-            candidates = ["gemini", "claude"]
+            candidates = ["Gemini 3.5 Flash (Medium)", "Claude Sonnet 4.6 (Thinking)"]
         else:
-            candidates = [model, "gemini", "claude"]
+            candidates = [resolve_model_name(model), "Gemini 3.5 Flash (Medium)", "Claude Sonnet 4.6 (Thinking)"]
 
         primary_model = candidates[0]
 
