@@ -26,6 +26,11 @@ class AgyRoute(BaseRoute):
         # Supports Gemini, Claude, and general 3P models accessible via agy
         return ["gemini", "claude", "gpt-4o", "*"]
 
+    def supports_model(self, model: str) -> bool:
+        if "grok" in model.lower():
+            return False
+        return super().supports_model(model)
+
     async def execute(
         self,
         input_data: Union[RouteInput, str] = None,
