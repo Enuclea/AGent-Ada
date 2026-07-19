@@ -836,10 +836,30 @@ class KeylessAgyAgent:
 
             # --- Grok fallback (only for INTERACTIVE and SCHEDULED_CRITICAL priority) ---
             if not self.roleplay and self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
+                # 1. Try Grok OAuth fallback first if credentials exist
+                save_file = Path.home() / ".agent" / "xai_oauth.json"
+                if save_file.exists():
+                    print("[FAILOVER] All models failed. Pivoting to Grok OAuth fallback...")
+                    try:
+                        g_result = await routing_engine.execute(
+                            prompt=full_prompt,
+                            model="grok-build-0.1",
+                            timeout=self.timeout,
+                            conversation_id=self.conversation_id,
+                            task_priority=self.task_priority
+                        )
+                        if g_result is not None and not g_result.error:
+                            return KeylessAgyResponse(str(g_result), task_id=task_id)
+                        else:
+                            last_error = f"Grok OAuth fallback failed: {g_result.error if g_result else 'Unknown error'}"
+                    except Exception as e:
+                        last_error = f"Grok OAuth fallback failed: {e}"
+
+                # 2. Try Grok CLI binary fallback
                 grok_path: Optional[str] = get_grok_path()
                 if grok_path:
                     if check_and_record_grok_usage(db_path=self.db_path):
-                        print("[FAILOVER] All models failed. Pivoting to Grok fallback...")
+                        print("[FAILOVER] Pivoting to Grok CLI binary fallback...")
                         grok_cmd: List[str] = [grok_path, "-p", full_prompt, "--deny", "*", "--no-plan"]
                         try:
                             proc: Any = await asyncio.create_subprocess_exec(

@@ -94,6 +94,11 @@ class RoutingEngine:
             self.register_route(BYOKRoute())
         except ImportError:
             pass
+        try:
+            from agent.routes.grok_oauth import GrokOAuthRoute
+            self.register_route(GrokOAuthRoute())
+        except ImportError:
+            pass
 
     def _load_custom_routes(self) -> None:
         """Dynamically loads custom user routes from the custom routes directory."""
