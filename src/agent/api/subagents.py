@@ -90,9 +90,56 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
             memory.update_active_task_status(task_id, "failed")
         finally:
             active_subagents.pop(req.subagent_id, None)
+
+    async def watchdog_timer():
+        """Watchdog: log progress markers every 60s and kill hung subagents after 300s of silence."""
+        last_message_check = ""
+        silence_start = asyncio.get_event_loop().time()
+        
+        while req.subagent_id in active_subagents:
+            await asyncio.sleep(60)
+            if req.subagent_id not in active_subagents:
+                break
+            
+            # Check for latest message
+            try:
+                msgs = memory.get_subagent_messages(req.subagent_id)
+                latest_msg = msgs[-1]["message"] if msgs else ""
+                if latest_msg != last_message_check:
+                    last_message_check = latest_msg
+                    silence_start = asyncio.get_event_loop().time()
+                else:
+                    silence_duration = asyncio.get_event_loop().time() - silence_start
+                    if silence_duration > 300:
+                        print(f"[WATCHDOG] Subagent {req.subagent_id} has been silent for {silence_duration:.0f}s. Terminating.")
+                        sub_info = active_subagents.get(req.subagent_id)
+                        if sub_info:
+                            # Kill the subprocess if it exists
+                            resp = sub_info.get("response")
+                            if resp and hasattr(resp, 'proc') and resp.proc and resp.proc.returncode is None:
+                                try:
+                                    resp.proc.kill()
+                                    await resp.proc.wait()
+                                except Exception:
+                                    pass
+                            # Cancel the task
+                            if sub_info.get("task"):
+                                sub_info["task"].cancel()
+                        memory.log_subagent_message(req.subagent_id, "subagent", 
+                            f"Subagent failed: Watchdog terminated after {silence_duration:.0f}s of inactivity")
+                        memory.update_active_task_status(task_id, "failed")
+                        active_subagents.pop(req.subagent_id, None)
+                        break
+                    else:
+                        # Log a progress marker
+                        print(f"[WATCHDOG] Subagent {req.subagent_id} still running ({silence_duration:.0f}s since last update)")
+            except Exception as e:
+                print(f"[WATCHDOG] Error checking subagent {req.subagent_id}: {e}")
             
     task = asyncio.create_task(run_subagent_background())
     active_subagents[req.subagent_id]["task"] = task
+    # Start watchdog timer in background (fire-and-forget)
+    asyncio.create_task(watchdog_timer())
     return {"status": "success", "sandbox_dir": str(sandbox_dir)}
 
 @app.get("/api/subagents/{subagent_id}/messages")

@@ -254,7 +254,31 @@ class KeylessAgyResponse:
                     remaining: float = max_duration - elapsed
                     if remaining <= 0:
                         raise asyncio.TimeoutError(f"Overall session timeout of {max_duration} seconds exceeded")
-                        
+                    
+                    # Check if yield has been requested (e.g. subagent was spawned)
+                    # Give a short grace period for the subprocess to finish its current output
+                    try:
+                        from agent.execution.tools.constants import yield_requested
+                        if yield_requested.get():
+                            print(f"[YIELD] yield_requested detected in _stream_thoughts. Draining with 5s grace...")
+                            grace_end = asyncio.get_event_loop().time() + 5.0
+                            while asyncio.get_event_loop().time() < grace_end:
+                                try:
+                                    chunk_bytes = await asyncio.wait_for(self.proc.stdout.read(4096), timeout=1.0)
+                                    if not chunk_bytes:
+                                        break
+                                    decoded = chunk_bytes.decode("utf-8", errors="replace")
+                                    self.stdout_lines.append(decoded)
+                                    yield get_sanitized_chunk(decoded)
+                                except asyncio.TimeoutError:
+                                    if self.proc.returncode is not None:
+                                        break
+                                    continue
+                            print(f"[YIELD] Grace period complete. Breaking stream.")
+                            break
+                    except (LookupError, ImportError):
+                        pass
+
                     # Use a short timeout of 2.0 seconds to keep polling and check activity metrics
                     chunk_timeout: float = min(2.0, remaining)
                     try:

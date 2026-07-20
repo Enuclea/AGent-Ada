@@ -302,6 +302,44 @@ async def chat_endpoint(request: Request):
                     from agent.web import update_session_mapping
                     update_session_mapping(req.session_id, active_agent.conversation_id)
                     await queue.put({"type": "session_id", "content": active_agent.conversation_id})
+
+                # If yield was requested (e.g. subagent spawned), give the subprocess
+                # a short grace period to finish its output, then terminate it.
+                if yield_requested.get() and hasattr(response, 'proc') and response.proc and response.proc.returncode is None:
+                    print(f"[YIELD] yield_requested detected for session {active_agent.conversation_id}. Draining subprocess with 5s grace period...")
+                    grace_output = ""
+                    try:
+                        grace_deadline = asyncio.get_event_loop().time() + 5.0
+                        while asyncio.get_event_loop().time() < grace_deadline:
+                            try:
+                                chunk_bytes = await asyncio.wait_for(response.proc.stdout.read(4096), timeout=1.0)
+                                if not chunk_bytes:
+                                    break
+                                decoded = chunk_bytes.decode("utf-8", errors="replace")
+                                grace_output += decoded
+                            except asyncio.TimeoutError:
+                                if response.proc.returncode is not None:
+                                    break
+                                continue
+                    except Exception:
+                        pass
+                    # Kill the subprocess if it's still alive
+                    if response.proc.returncode is None:
+                        try:
+                            response.proc.kill()
+                            await response.proc.wait()
+                            print(f"[YIELD] Subprocess terminated after grace period for session {active_agent.conversation_id}")
+                        except Exception:
+                            pass
+                    # Emit any grace period output as final text
+                    if grace_output.strip():
+                        from agent.security.pipeline import sanitize_output
+                        sanitized_grace = sanitize_output(grace_output)
+                        if sanitized_grace.strip():
+                            text_chunks_emitted = True
+                            await queue.put({"type": "chunk", "content": sanitized_grace})
+                            memory.log_conversation_step(active_agent.conversation_id, "assistant", sanitized_grace)
+                    return
                     
                 # Stream response chunks ONLY if a yield has not been requested
                 output_content = ""

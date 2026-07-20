@@ -391,6 +391,21 @@ async def run_scheduler():
                                     if str(sess_id).startswith("benchmark-"):
                                         print(f"[SCHEDULER] Skipping resume for benchmark session {sess_id}")
                                         return
+                                    # Check if the parent session is currently locked (already processing)
+                                    try:
+                                        from agent.api.router import get_session_lock, session_locks
+                                        lock_key = sess_id
+                                        # Also check discord session mappings for the lookup key
+                                        mem = memory.load_memory()
+                                        session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+                                        if isinstance(session_mappings, dict):
+                                            reversed_map = {v: k for k, v in session_mappings.items()}
+                                            lock_key = reversed_map.get(sess_id, sess_id)
+                                        if lock_key in session_locks and session_locks[lock_key]._locked:
+                                            print(f"[SCHEDULER] Session {sess_id} is currently locked (active request). Skipping resume.")
+                                            return
+                                    except Exception:
+                                        pass
                                     try:
                                         channel_id = None
                                         mem = memory.load_memory()
@@ -449,6 +464,19 @@ async def run_scheduler():
                                     if str(sess_id).startswith("benchmark-"):
                                         print(f"[SCHEDULER] Skipping resume for benchmark session {sess_id}")
                                         return
+                                    try:
+                                        from agent.api.router import session_locks
+                                        mem = memory.load_memory()
+                                        session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+                                        lock_key = sess_id
+                                        if isinstance(session_mappings, dict):
+                                            reversed_map = {v: k for k, v in session_mappings.items()}
+                                            lock_key = reversed_map.get(sess_id, sess_id)
+                                        if lock_key in session_locks and session_locks[lock_key]._locked:
+                                            print(f"[SCHEDULER] Session {sess_id} is currently locked. Skipping fail resume.")
+                                            return
+                                    except Exception:
+                                        pass
                                     try:
                                         channel_id = None
                                         mem = memory.load_memory()
@@ -543,6 +571,19 @@ async def run_scheduler():
                                         print(f"[SCHEDULER] Skipping resume for benchmark session {sess_id}")
                                         return
                                     try:
+                                        from agent.api.router import session_locks
+                                        mem = memory.load_memory()
+                                        session_mappings = mem.get("key_value", {}).get("session_mappings", {})
+                                        lock_key = sess_id
+                                        if isinstance(session_mappings, dict):
+                                            reversed_map = {v: k for k, v in session_mappings.items()}
+                                            lock_key = reversed_map.get(sess_id, sess_id)
+                                        if lock_key in session_locks and session_locks[lock_key]._locked:
+                                            print(f"[SCHEDULER] Session {sess_id} is currently locked. Skipping non-plan resume.")
+                                            return
+                                    except Exception:
+                                        pass
+                                    try:
                                         channel_id = None
                                         mem = memory.load_memory()
                                         session_mappings = mem.get("key_value", {}).get("session_mappings", {})
@@ -587,6 +628,100 @@ async def run_scheduler():
                                         print(f"[SCHEDULER] Failed to resume non-plan parent session {sess_id}: {re_err}")
                                         
                                 asyncio.create_task(resume_parent_non_plan(parent_session_id, subagent_id, message))
+
+                # Stale subagent detection: mark delegated steps as failed if no messages for >10 minutes
+                try:
+                    stale_threshold_minutes = 10
+                    cursor.execute("""
+                        SELECT ps.id, ps.plan_id, ps.description, sp.session_id, ps.step_order
+                        FROM plan_steps ps
+                        JOIN session_plans sp ON ps.plan_id = sp.id
+                        WHERE ps.status = 'delegated'
+                    """)
+                    still_delegated = cursor.fetchall()
+                    for step_id, plan_id, step_desc, session_id, step_order in still_delegated:
+                        if session_id in resumed_sessions:
+                            continue
+                        # Check latest subagent message timestamp
+                        cursor.execute("""
+                            SELECT timestamp FROM subagent_messages
+                            WHERE parent_session_id = ? AND role = 'subagent'
+                            ORDER BY id DESC LIMIT 1
+                        """, (session_id,))
+                        msg_row = cursor.fetchone()
+                        if msg_row:
+                            try:
+                                last_ts = datetime.fromisoformat(msg_row[0])
+                                if last_ts.tzinfo is None:
+                                    last_ts = last_ts.replace(tzinfo=timezone.utc)
+                                age_minutes = (datetime.now(timezone.utc) - last_ts).total_seconds() / 60
+                                if age_minutes > stale_threshold_minutes:
+                                    print(f"[SCHEDULER] Stale subagent detected for session {session_id}: {age_minutes:.0f}m since last message. Marking failed.")
+                                    cursor.execute(
+                                        "UPDATE plan_steps SET status = 'failed', error_message = ? WHERE plan_id = ? AND status = 'delegated'",
+                                        (f"Stale subagent: no progress for {age_minutes:.0f} minutes", plan_id)
+                                    )
+                                    conn.commit()
+                                    resumed_sessions.add(session_id)
+                                    # Trigger a failure resume so Ada knows
+                                    stale_msg = f"Subagent stalled after {age_minutes:.0f} minutes with no progress. Step: {step_desc}"
+                                    async def resume_stale(sess_id, msg):
+                                        if str(sess_id).startswith("benchmark-"):
+                                            return
+                                        try:
+                                            from agent.api.router import session_locks
+                                            _mem = memory.load_memory()
+                                            _sm = _mem.get("key_value", {}).get("session_mappings", {})
+                                            _lk = sess_id
+                                            if isinstance(_sm, dict):
+                                                _rv = {v: k for k, v in _sm.items()}
+                                                _lk = _rv.get(sess_id, sess_id)
+                                            if _lk in session_locks and session_locks[_lk]._locked:
+                                                return
+                                        except Exception:
+                                            pass
+                                        try:
+                                            channel_id = None
+                                            _mem2 = memory.load_memory()
+                                            _sm2 = _mem2.get("key_value", {}).get("session_mappings", {})
+                                            if isinstance(_sm2, dict):
+                                                _rv2 = {v: k for k, v in _sm2.items()}
+                                                _did = _rv2.get(sess_id)
+                                                if _did:
+                                                    channel_id = _did.replace("discord-session-", "").replace("discord-roleplay-", "")
+                                            if not channel_id:
+                                                import httpx
+                                                port = int(os.environ.get("PORT", "8050"))
+                                                headers = {}
+                                                dp = os.environ.get("DASHBOARD_PASSWORD")
+                                                if dp:
+                                                    headers["Authorization"] = f"Bearer {dp}"
+                                                async with httpx.AsyncClient() as client:
+                                                    await client.post(f"http://localhost:{port}/api/chat", json={
+                                                        "prompt": f"[SYSTEM RESUME] Subagent stalled and was terminated.\n{msg}",
+                                                        "session_id": sess_id
+                                                    }, headers=headers)
+                                            else:
+                                                import httpx
+                                                from agent.execution.tools.discord_tools import get_bot_api_headers
+                                                bot_port = int(os.environ.get("DISCORD_BOT_PORT", "8090"))
+                                                path = "/api/discord/resume"
+                                                payload = {
+                                                    "channel_id": str(channel_id),
+                                                    "session_id": sess_id,
+                                                    "prompt": f"[SYSTEM RESUME] Subagent stalled and was terminated.\n{msg}"
+                                                }
+                                                headers = get_bot_api_headers("POST", path, json_data=payload)
+                                                async with httpx.AsyncClient() as client:
+                                                    await client.post(f"http://127.0.0.1:{bot_port}{path}", json=payload, headers=headers)
+                                        except Exception as stale_err:
+                                            print(f"[SCHEDULER] Failed to resume stale session {sess_id}: {stale_err}")
+                                    asyncio.create_task(resume_stale(session_id, stale_msg))
+                            except (ValueError, TypeError):
+                                pass
+                except Exception as stale_err:
+                    print(f"[SCHEDULER] Error checking stale subagents: {stale_err}")
+
             except Exception as e:
                 print(f"[SCHEDULER] Error checking subagent completion: {e}")
             finally:
