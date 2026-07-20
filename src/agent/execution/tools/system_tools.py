@@ -270,9 +270,14 @@ async def spawn_subagent(
         "agent_profile": agent_profile
     }
     
+    headers = {}
+    dashboard_password = os.getenv("DASHBOARD_PASSWORD")
+    if dashboard_password:
+        headers["Authorization"] = f"Bearer {dashboard_password}"
+
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30.0)) as session:
-            async with session.post("http://localhost:8050/api/subagents/spawn", json=payload) as resp:
+            async with session.post("http://localhost:8050/api/subagents/spawn", json=payload, headers=headers) as resp:
                 if resp.status != 200:
                     err_text = await resp.text()
                     err_msg = f"[FAILED] Subagent API returned HTTP {resp.status}: {err_text}"

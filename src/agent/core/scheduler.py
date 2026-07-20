@@ -403,11 +403,15 @@ async def run_scheduler():
                                             import httpx
                                             # Get loopback port
                                             port = int(os.environ.get("PORT", "8050"))
+                                            headers = {}
+                                            dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
+                                            if dashboard_password:
+                                                headers["Authorization"] = f"Bearer {dashboard_password}"
                                             async with httpx.AsyncClient() as client:
                                                 await client.post(f"http://localhost:{port}/api/chat", json={
                                                     "prompt": f"[SYSTEM RESUME] Step completed successfully. Output:\n{msg}",
                                                     "session_id": sess_id
-                                                })
+                                                }, headers=headers)
                                         else:
                                             # Mapped discord channel, send direct resume prompt to Discord bot gateway
                                             from agent.observability.notifications import send_direct_discord_message
@@ -438,11 +442,15 @@ async def run_scheduler():
                                         if not channel_id:
                                             import httpx
                                             port = int(os.environ.get("PORT", "8050"))
+                                            headers = {}
+                                            dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
+                                            if dashboard_password:
+                                                headers["Authorization"] = f"Bearer {dashboard_password}"
                                             async with httpx.AsyncClient() as client:
                                                 await client.post(f"http://localhost:{port}/api/chat", json={
                                                     "prompt": f"[SYSTEM RESUME] Step failed. Output:\n{msg}",
                                                     "session_id": sess_id
-                                                })
+                                                }, headers=headers)
                                         else:
                                             from agent.observability.notifications import send_direct_discord_message
                                             output_content = f"### [SYSTEM RESUME] Step execution failed.\n**Subagent Output:**\n{msg}"
@@ -509,11 +517,15 @@ async def run_scheduler():
                                         if not channel_id:
                                             import httpx
                                             port = int(os.environ.get("PORT", "8050"))
+                                            headers = {}
+                                            dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
+                                            if dashboard_password:
+                                                headers["Authorization"] = f"Bearer {dashboard_password}"
                                             async with httpx.AsyncClient() as client:
                                                 await client.post(f"http://localhost:{port}/api/chat", json={
                                                     "prompt": f"[SYSTEM RESUME] Subagent task finished. Output:\n{msg}",
                                                     "session_id": sess_id
-                                                })
+                                                }, headers=headers)
                                         else:
                                             from agent.observability.notifications import send_direct_discord_message
                                             output_content = f"### [SYSTEM RESUME] Subagent task finished.\n**Subagent Output:**\n{msg}"
