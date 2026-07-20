@@ -448,17 +448,16 @@ async def run_scheduler():
                                         if not channel_id:
                                             # Not from Discord, trigger standard local HTTP dashboard client reload/resume
                                             import httpx
+                                            from agent.core.internal_auth import get_internal_api_headers
                                             # Get loopback port
                                             port = int(os.environ.get("PORT", "8000"))
-                                            headers = {}
-                                            dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
-                                            if dashboard_password:
-                                                headers["Authorization"] = f"Bearer {dashboard_password}"
+                                            payload = {
+                                                "prompt": f"[SYSTEM RESUME] Step completed successfully. Output:\n{msg}",
+                                                "session_id": sess_id
+                                            }
+                                            headers = get_internal_api_headers("POST", "/api/chat", json_data=payload)
                                             async with httpx.AsyncClient() as client:
-                                                await client.post(f"http://localhost:{port}/api/chat", json={
-                                                    "prompt": f"[SYSTEM RESUME] Step completed successfully. Output:\n{msg}",
-                                                    "session_id": sess_id
-                                                }, headers=headers)
+                                                await client.post(f"http://localhost:{port}/api/chat", json=payload, headers=headers)
                                         else:
                                              # Mapped discord channel, trigger the bot API to resume the session through discord
                                              import httpx
@@ -518,16 +517,15 @@ async def run_scheduler():
                                                 
                                         if not channel_id:
                                             import httpx
+                                            from agent.core.internal_auth import get_internal_api_headers
                                             port = int(os.environ.get("PORT", "8000"))
-                                            headers = {}
-                                            dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
-                                            if dashboard_password:
-                                                headers["Authorization"] = f"Bearer {dashboard_password}"
+                                            payload = {
+                                                "prompt": f"[SYSTEM RESUME] Step failed. Output:\n{msg}",
+                                                "session_id": sess_id
+                                            }
+                                            headers = get_internal_api_headers("POST", "/api/chat", json_data=payload)
                                             async with httpx.AsyncClient() as client:
-                                                await client.post(f"http://localhost:{port}/api/chat", json={
-                                                    "prompt": f"[SYSTEM RESUME] Step failed. Output:\n{msg}",
-                                                    "session_id": sess_id
-                                                }, headers=headers)
+                                                await client.post(f"http://localhost:{port}/api/chat", json=payload, headers=headers)
                                         else:
                                              # Mapped discord channel, trigger the bot API to resume the session through discord
                                              import httpx
@@ -624,16 +622,15 @@ async def run_scheduler():
                                                 
                                         if not channel_id:
                                             import httpx
+                                            from agent.core.internal_auth import get_internal_api_headers
                                             port = int(os.environ.get("PORT", "8000"))
-                                            headers = {}
-                                            dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
-                                            if dashboard_password:
-                                                headers["Authorization"] = f"Bearer {dashboard_password}"
+                                            payload = {
+                                                "prompt": f"[SYSTEM RESUME] Subagent task finished. Output:\n{msg}",
+                                                "session_id": sess_id
+                                            }
+                                            headers = get_internal_api_headers("POST", "/api/chat", json_data=payload)
                                             async with httpx.AsyncClient() as client:
-                                                await client.post(f"http://localhost:{port}/api/chat", json={
-                                                    "prompt": f"[SYSTEM RESUME] Subagent task finished. Output:\n{msg}",
-                                                    "session_id": sess_id
-                                                }, headers=headers)
+                                                await client.post(f"http://localhost:{port}/api/chat", json=payload, headers=headers)
                                         else:
                                              # Mapped discord channel, trigger the bot API to resume the session through discord
                                              import httpx

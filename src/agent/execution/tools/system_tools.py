@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from agent.execution.tools.constants import yield_requested, logger
 from agent.execution.tools.security import _sandbox_command_if_possible
+from agent.core.internal_auth import get_internal_api_headers as _get_internal_api_headers
 
 # We import memory inside the file to avoid circular issues
 from agent import memory
@@ -270,10 +271,7 @@ async def spawn_subagent(
         "agent_profile": agent_profile
     }
     
-    headers = {}
-    dashboard_password = os.getenv("DASHBOARD_PASSWORD")
-    if dashboard_password:
-        headers["Authorization"] = f"Bearer {dashboard_password}"
+    headers = _get_internal_api_headers("POST", "/api/subagents/spawn", json_data=payload)
 
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30.0)) as session:
