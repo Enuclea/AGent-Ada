@@ -413,10 +413,24 @@ async def run_scheduler():
                                                     "session_id": sess_id
                                                 }, headers=headers)
                                         else:
-                                            # Mapped discord channel, send direct resume prompt to Discord bot gateway
-                                            from agent.observability.notifications import send_direct_discord_message
-                                            output_content = f"### [SYSTEM RESUME] Step completed successfully.\n**Subagent Output:**\n{msg}"
-                                            send_direct_discord_message(channel_id, output_content)
+                                             # Mapped discord channel, trigger the bot API to resume the session through discord
+                                             import httpx
+                                             from agent.execution.tools.discord_tools import get_bot_api_headers
+                                             bot_port = int(os.environ.get("DISCORD_BOT_PORT", "8090"))
+                                             path = "/api/discord/resume"
+                                             parts = sub_id.split("-")
+                                             profile = parts[1] if len(parts) >= 2 and parts[0] == "subagent" else None
+                                             payload = {
+                                                 "channel_id": str(channel_id),
+                                                 "session_id": sess_id,
+                                                 "prompt": f"[SYSTEM RESUME] Step completed successfully. Output:\n{msg}",
+                                                 "agent_profile": profile
+                                             }
+                                             headers = get_bot_api_headers("POST", path, json_data=payload)
+                                             async with httpx.AsyncClient() as client:
+                                                 resp = await client.post(f"http://127.0.0.1:{bot_port}{path}", json=payload, headers=headers)
+                                                 if resp.status_code != 200:
+                                                     print(f"[SCHEDULER] Failed to resume via Discord Bot API: HTTP {resp.status_code}: {resp.text}")
                                     except Exception as re_err:
                                         print(f"[SCHEDULER] Failed to resume parent session {sess_id}: {re_err}")
                                 asyncio.create_task(resume_parent(session_id, subagent_id, message))
@@ -452,9 +466,24 @@ async def run_scheduler():
                                                     "session_id": sess_id
                                                 }, headers=headers)
                                         else:
-                                            from agent.observability.notifications import send_direct_discord_message
-                                            output_content = f"### [SYSTEM RESUME] Step execution failed.\n**Subagent Output:**\n{msg}"
-                                            send_direct_discord_message(channel_id, output_content)
+                                             # Mapped discord channel, trigger the bot API to resume the session through discord
+                                             import httpx
+                                             from agent.execution.tools.discord_tools import get_bot_api_headers
+                                             bot_port = int(os.environ.get("DISCORD_BOT_PORT", "8090"))
+                                             path = "/api/discord/resume"
+                                             parts = sub_id.split("-")
+                                             profile = parts[1] if len(parts) >= 2 and parts[0] == "subagent" else None
+                                             payload = {
+                                                 "channel_id": str(channel_id),
+                                                 "session_id": sess_id,
+                                                 "prompt": f"[SYSTEM RESUME] Step failed. Output:\n{msg}",
+                                                 "agent_profile": profile
+                                             }
+                                             headers = get_bot_api_headers("POST", path, json_data=payload)
+                                             async with httpx.AsyncClient() as client:
+                                                 resp = await client.post(f"http://127.0.0.1:{bot_port}{path}", json=payload, headers=headers)
+                                                 if resp.status_code != 200:
+                                                     print(f"[SCHEDULER] Failed to resume via Discord Bot API: HTTP {resp.status_code}: {resp.text}")
                                     except Exception as re_err:
                                         print(f"[SCHEDULER] Failed to resume parent session {sess_id} on failure: {re_err}")
                                 asyncio.create_task(resume_parent_fail(session_id, subagent_id, message))
@@ -527,13 +556,24 @@ async def run_scheduler():
                                                     "session_id": sess_id
                                                 }, headers=headers)
                                         else:
-                                            from agent.observability.notifications import send_direct_discord_message
-                                            output_content = f"### [SYSTEM RESUME] Subagent task finished.\n**Subagent Output:**\n{msg}"
-                                            send_direct_discord_message(channel_id, output_content)
-                                            try:
-                                                memory.log_conversation_step(sess_id, "user", f"[SYSTEM RESUME] Subagent task finished. Output:\n{msg}")
-                                            except Exception as log_err:
-                                                print(f"[SCHEDULER] Failed to log resume step: {log_err}")
+                                             # Mapped discord channel, trigger the bot API to resume the session through discord
+                                             import httpx
+                                             from agent.execution.tools.discord_tools import get_bot_api_headers
+                                             bot_port = int(os.environ.get("DISCORD_BOT_PORT", "8090"))
+                                             path = "/api/discord/resume"
+                                             parts = sub_id.split("-")
+                                             profile = parts[1] if len(parts) >= 2 and parts[0] == "subagent" else None
+                                             payload = {
+                                                 "channel_id": str(channel_id),
+                                                 "session_id": sess_id,
+                                                 "prompt": f"[SYSTEM RESUME] Subagent task finished. Output:\n{msg}",
+                                                 "agent_profile": profile
+                                             }
+                                             headers = get_bot_api_headers("POST", path, json_data=payload)
+                                             async with httpx.AsyncClient() as client:
+                                                 resp = await client.post(f"http://127.0.0.1:{bot_port}{path}", json=payload, headers=headers)
+                                                 if resp.status_code != 200:
+                                                     print(f"[SCHEDULER] Failed to resume via Discord Bot API: HTTP {resp.status_code}: {resp.text}")
                                     except Exception as re_err:
                                         print(f"[SCHEDULER] Failed to resume non-plan parent session {sess_id}: {re_err}")
                                         
@@ -566,6 +606,17 @@ async def run_scheduler():
 def discover_language_server():
     import os
     import re
+
+    # Check environment variable first
+    ls_address = os.environ.get("ANTIGRAVITY_LS_ADDRESS")
+    if ls_address:
+        parts = ls_address.split(":")
+        if len(parts) == 2:
+            port_str = parts[1]
+            if port_str.isdigit():
+                csrf_token = os.environ.get("ANTIGRAVITY_CSRF_TOKEN", "")
+                return None, csrf_token, [int(port_str)]
+
     pid = None
     csrf_token = None
     for name in os.listdir("/proc"):
@@ -636,7 +687,7 @@ def discover_language_server():
 def fetch_real_quotas_sync():
     import requests
     pid, token, ports = discover_language_server()
-    if not token or not ports:
+    if token is None or not ports:
         return False
 
     for port in ports:

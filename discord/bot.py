@@ -172,6 +172,40 @@ active_session_workers = set()
 def get_channel_session_id(channel_id: int) -> str:
     return f"discord-session-{channel_id}"
 
+async def handle_grok_auth_alert(content: dict, trigger_message: discord.Message) -> None:
+    try:
+        auth_url = content.get("url")
+        auth_code = content.get("code")
+        alert_msg = (
+            f"⚠️ **xAI Grok OAuth Authentication Alert**\n"
+            f"Grok session has expired or is unauthorized. A new session has been initiated.\n"
+            f"Please visit: {auth_url}\n"
+            f"And enter the code: **{auth_code}**"
+        )
+        
+        # 1. Try to find the control room channel in the guild
+        sent_to_control = False
+        if trigger_message.guild:
+            control_room = discord.utils.get(trigger_message.guild.text_channels, name="control-room")
+            if control_room:
+                try:
+                    await control_room.send(alert_msg)
+                    sent_to_control = True
+                except Exception:
+                    pass
+        
+        # 2. If not sent to control room, send DMs to boss users
+        if not sent_to_control:
+            for boss_id in BOSS_USER_IDS:
+                try:
+                    boss_user = bot.get_user(int(boss_id)) or await bot.fetch_user(int(boss_id))
+                    if boss_user:
+                        await boss_user.send(alert_msg)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"Error in handle_grok_auth_alert: {e}")
+
 def is_user_admin(user_id: int) -> bool:
     if hasattr(bot, "owner_id") and user_id == bot.owner_id:
         return True
@@ -832,6 +866,67 @@ async def api_post_message(req: PostMessageRequest):
         return {"status": "success", "message_id": sent.id, "channel": channel.name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+class ResumeSessionRequest(BaseModel):
+    channel_id: str
+    session_id: str
+    prompt: str
+    agent_profile: Optional[str] = None
+
+class MockAuthor:
+    def __init__(self, author_id: int):
+        self.id = author_id
+        self.name = "System"
+
+class MockMessage:
+    def __init__(self, channel, author_id: int):
+        self.channel = channel
+        self.author = MockAuthor(author_id)
+        self.guild = channel.guild if hasattr(channel, "guild") else None
+        self.content = ""
+        self.mentions = []
+
+@bot_api_app.post("/api/discord/resume")
+async def api_resume_session(req: ResumeSessionRequest):
+    if not req.channel_id.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid channel_id (must be digits)")
+    channel = bot.get_channel(int(req.channel_id))
+    if not channel:
+        raise HTTPException(status_code=404, detail=f"Channel '{req.channel_id}' not found")
+        
+    async def run_resume_in_bg():
+        try:
+            author_id = bot.owner_id if hasattr(bot, "owner_id") else (BOSS_USER_IDS[0] if BOSS_USER_IDS else 0)
+            mock_msg = MockMessage(channel, author_id)
+            
+            # Start typing indicator
+            async def keep_typing():
+                try:
+                    while True:
+                        await channel.trigger_typing()
+                        await asyncio.sleep(5)
+                except asyncio.CancelledError:
+                    pass
+            typing_task = asyncio.create_task(keep_typing())
+            
+            # Send placeholder
+            placeholder_text = "*Ada is resuming parent session...*"
+            if req.agent_profile:
+                placeholder_text = f"*{req.agent_profile.capitalize()} is resuming parent session...*"
+            placeholder = await channel.send(placeholder_text)
+            
+            await handle_agent_hook_query(
+                mock_msg,
+                req.prompt,
+                placeholder=placeholder,
+                typing_task=typing_task,
+                session_id=req.session_id
+            )
+        except Exception as e:
+            print(f"[API RESUME ERROR] Failed to run agent query in background: {e}")
+            
+    asyncio.create_task(run_resume_in_bg())
+    return {"status": "success", "detail": "Resume task dispatched successfully in background"}
 
 @bot_api_app.get("/api/discord/channels")
 async def api_list_channels():
@@ -1722,7 +1817,7 @@ def get_specialist_profile_for_channel(channel_name: str) -> Optional[str]:
         return "ops_runner"
     return None
 
-async def handle_agent_hook_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None, general_chat=False):
+async def handle_agent_hook_query(message: discord.Message, prompt_text: str, placeholder=None, typing_task=None, general_chat=False, session_id=None):
     """Funnels user inputs directly to the local AGent FastAPI endpoint, streaming response."""
     channel = message.channel
     
@@ -1745,7 +1840,8 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
     is_control_room = (message.guild is None) or (channel_purpose == "developer-assistant") or (channel.name in ["control-room", "bot-admin", "🤖・bot-admin", "lacie", "val", "qa", "kira"])
     full_tooling_authorized = is_boss and is_control_room
 
-    session_id = get_channel_session_id(channel.id)
+    if not session_id:
+        session_id = get_channel_session_id(channel.id)
     payload = {
         "prompt": prompt_text,
         "session_id": session_id
@@ -1839,6 +1935,9 @@ async def handle_agent_hook_query(message: discord.Message, prompt_text: str, pl
                             thoughts.append(content)
                         elif ev_type == "chunk":
                             response_text += content
+                        elif ev_type == "grok_auth_alert":
+                            await handle_grok_auth_alert(content, message)
+                            continue
                         elif ev_type == "error":
                             response_text = f"❌ **Agent Backend Error**: {content}"
                             break
@@ -2514,6 +2613,9 @@ async def handle_roleplay_query(message: discord.Message, placeholder=None, typi
                         
                         if ev_type == "chunk":
                             response_text += content
+                        elif ev_type == "grok_auth_alert":
+                            await handle_grok_auth_alert(content, message)
+                            continue
                         elif ev_type == "error":
                             response_text = f"❌ *Ada seems distracted...* (Error: {content})"
                             break
