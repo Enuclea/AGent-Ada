@@ -308,6 +308,35 @@ async def run_scheduler():
         return
 
     await asyncio.sleep(2)
+
+    # Startup cleanup: mark stale tasks and pre-existing completions as processed
+    try:
+        conn = get_connection(memory.DB_FILE_PATH)
+        cursor = conn.cursor()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # Mark any tasks left in 'running' state (from prior crash/restart) as failed
+        cursor.execute("UPDATE active_tasks SET status = 'failed', completed_at = ? WHERE status = 'running'", (now_iso,))
+        stale_count = cursor.rowcount
+        if stale_count:
+            print(f"[SCHEDULER] Startup cleanup: marked {stale_count} stale running tasks as failed")
+        # Mark all existing subagent completion messages as processed to prevent re-firing
+        cursor.execute("""
+            SELECT DISTINCT subagent_id FROM subagent_messages
+            WHERE role = 'subagent' AND (
+                LOWER(message) LIKE '%subagent completed:%' OR LOWER(message) LIKE '%subagent failed:%'
+            )
+        """)
+        for row in cursor.fetchall():
+            cursor.execute(
+                "INSERT OR IGNORE INTO processed_subagents (subagent_id, processed_at) VALUES (?, ?)",
+                (row[0], now_iso)
+            )
+        conn.commit()
+        conn.close()
+        print("[SCHEDULER] Startup cleanup complete")
+    except Exception as cleanup_err:
+        print(f"[SCHEDULER] Startup cleanup error (non-fatal): {cleanup_err}")
+
     while True:
         try:
             ensure_default_scheduled_tasks()
