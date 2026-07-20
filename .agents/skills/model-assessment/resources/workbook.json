@@ -1,0 +1,26 @@
+[
+  {
+    "id": "perl_coding",
+    "category": "Coding Exemplar (Perl)",
+    "description": "Write a Perl script to parse an access log format, filtering unique IPs with 4xx/5xx status codes.",
+    "prompt": "Write a Perl script that reads from standard input (stdin). Each line of input is in Apache Common Log Format (e.g., '127.0.0.1 - - [10/Oct/2000:13:55:36 -0700] \"GET / HTTP/1.0\" 200 2326'). The script must extract unique IP addresses that returned a 4xx or 5xx status code. Print the unique IP addresses to stdout, one per line, sorted alphabetically. Return ONLY the Perl code. Do not include markdown code block formatting (like ```perl) or explanations. Output must be directly executable."
+  },
+  {
+    "id": "php_coding",
+    "category": "Coding Exemplar (PHP)",
+    "description": "Write a PHP script to read network packet logs in JSON format and aggregate bytes sent per port.",
+    "prompt": "Write a PHP script that reads a JSON array from stdin representing network packets. Each packet object has keys: 'port' (int) and 'bytes' (int). The script must aggregate the total bytes sent per port, and output the results to stdout in JSON format representing an object where keys are port numbers and values are total bytes (e.g. {'80': 2048, '443': 4096}). Sort the keys numerically. Return ONLY the PHP code. Do not include markdown formatting or explanations."
+  },
+  {
+    "id": "terminal_mastery",
+    "category": "Terminal Mastery",
+    "description": "Write a single Bash command/one-liner to extract unique error counts from log files.",
+    "prompt": "Provide a single Bash command (one-liner) that finds all files matching '*.log' under the directory './logs', extracts lines containing the word 'ERROR' (case-sensitive) but excluding the word 'debug' (case-insensitive), counts occurrences of each unique line, and prints the result to stdout sorted numerically descending in the format 'count line'. Return ONLY the single bash command line. Do not include markdown code blocks or explanations."
+  },
+  {
+    "id": "mikrotik_config",
+    "category": "MikroTik Router Configuration",
+    "description": "Write RouterOS commands to configure a VLAN interface and set up basic firewall filtering.",
+    "prompt": "Write a sequence of MikroTik RouterOS CLI commands to: 1. Create a VLAN interface named 'VLAN-10' with VLAN ID 10 on physical interface 'ether1'. 2. Assign the IP address '10.10.10.1/24' to interface 'VLAN-10'. 3. Add an IP firewall filter rule in the 'forward' chain to drop all traffic from in-interface 'VLAN-10' to out-interface 'ether1'. Return ONLY the CLI commands, one per line, starting with `/interface`, `/ip address`, `/ip firewall`. Do not include markdown formatting or explanations."
+  }
+]
