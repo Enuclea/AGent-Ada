@@ -482,13 +482,19 @@ async def run_scheduler():
                         if is_completed or is_failed:
                             # Verify if we already resumed (check system logs for a resume prompt)
                             cursor.execute("""
-                                SELECT count(*) FROM conversation_steps 
-                                WHERE session_id = ? AND role = 'user' AND content LIKE '[SYSTEM RESUME]%'
-                            """, (parent_session_id,))
+                                SELECT count(*) FROM processed_subagents 
+                                WHERE subagent_id = ?
+                            """, (subagent_id,))
                             already_resumed = cursor.fetchone()[0] > 0
                             
                             if not already_resumed:
                                 resumed_sessions.add(parent_session_id)
+                                cursor.execute(
+                                    "INSERT OR IGNORE INTO processed_subagents (subagent_id, processed_at) VALUES (?, ?)",
+                                    (subagent_id, datetime.now(timezone.utc).isoformat())
+                                )
+                                conn.commit()
+                                
                                 async def resume_parent_non_plan(sess_id, sub_id, msg):
                                     try:
                                         channel_id = None
@@ -512,6 +518,10 @@ async def run_scheduler():
                                             from agent.observability.notifications import send_direct_discord_message
                                             output_content = f"### [SYSTEM RESUME] Subagent task finished.\n**Subagent Output:**\n{msg}"
                                             send_direct_discord_message(channel_id, output_content)
+                                            try:
+                                                memory.log_conversation_step(sess_id, "user", f"[SYSTEM RESUME] Subagent task finished. Output:\n{msg}")
+                                            except Exception as log_err:
+                                                print(f"[SCHEDULER] Failed to log resume step: {log_err}")
                                     except Exception as re_err:
                                         print(f"[SCHEDULER] Failed to resume non-plan parent session {sess_id}: {re_err}")
                                         

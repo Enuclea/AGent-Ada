@@ -321,6 +321,13 @@ def init_db() -> None:
             cursor.execute("ALTER TABLE subagent_messages ADD COLUMN parent_session_id TEXT")
         except sqlite3.OperationalError:
             pass
+        # Track processed subagents to avoid duplicate resume processing
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS processed_subagents (
+            subagent_id TEXT PRIMARY KEY,
+            processed_at TEXT
+        )
+        """)
         # Model quotas
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS model_quotas (
