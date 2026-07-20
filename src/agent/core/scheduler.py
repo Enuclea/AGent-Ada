@@ -388,6 +388,9 @@ async def run_scheduler():
                             if session_id not in resumed_sessions:
                                 resumed_sessions.add(session_id)
                                 async def resume_parent(sess_id, sub_id, msg):
+                                    if str(sess_id).startswith("benchmark-"):
+                                        print(f"[SCHEDULER] Skipping resume for benchmark session {sess_id}")
+                                        return
                                     try:
                                         channel_id = None
                                         mem = memory.load_memory()
@@ -443,6 +446,9 @@ async def run_scheduler():
                             if session_id not in resumed_sessions:
                                 resumed_sessions.add(session_id)
                                 async def resume_parent_fail(sess_id, sub_id, msg):
+                                    if str(sess_id).startswith("benchmark-"):
+                                        print(f"[SCHEDULER] Skipping resume for benchmark session {sess_id}")
+                                        return
                                     try:
                                         channel_id = None
                                         mem = memory.load_memory()
@@ -533,6 +539,9 @@ async def run_scheduler():
                                 conn.commit()
                                 
                                 async def resume_parent_non_plan(sess_id, sub_id, msg):
+                                    if str(sess_id).startswith("benchmark-"):
+                                        print(f"[SCHEDULER] Skipping resume for benchmark session {sess_id}")
+                                        return
                                     try:
                                         channel_id = None
                                         mem = memory.load_memory()
