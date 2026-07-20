@@ -420,7 +420,7 @@ async def run_scheduler():
                                             # Not from Discord, trigger standard local HTTP dashboard client reload/resume
                                             import httpx
                                             # Get loopback port
-                                            port = int(os.environ.get("PORT", "8050"))
+                                            port = int(os.environ.get("PORT", "8000"))
                                             headers = {}
                                             dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
                                             if dashboard_password:
@@ -489,7 +489,7 @@ async def run_scheduler():
                                                 
                                         if not channel_id:
                                             import httpx
-                                            port = int(os.environ.get("PORT", "8050"))
+                                            port = int(os.environ.get("PORT", "8000"))
                                             headers = {}
                                             dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
                                             if dashboard_password:
@@ -595,7 +595,7 @@ async def run_scheduler():
                                                 
                                         if not channel_id:
                                             import httpx
-                                            port = int(os.environ.get("PORT", "8050"))
+                                            port = int(os.environ.get("PORT", "8000"))
                                             headers = {}
                                             dashboard_password = os.environ.get("DASHBOARD_PASSWORD")
                                             if dashboard_password:
@@ -691,7 +691,7 @@ async def run_scheduler():
                                                     channel_id = _did.replace("discord-session-", "").replace("discord-roleplay-", "")
                                             if not channel_id:
                                                 import httpx
-                                                port = int(os.environ.get("PORT", "8050"))
+                                                port = int(os.environ.get("PORT", "8000"))
                                                 headers = {}
                                                 dp = os.environ.get("DASHBOARD_PASSWORD")
                                                 if dp:
