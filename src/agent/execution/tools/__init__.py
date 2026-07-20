@@ -36,7 +36,8 @@ from agent.execution.tools.skills_tools import (
     list_repository_skills,
     view_repository_skill_code,
     get_relevant_skills,
-    install_repository_skill
+    install_repository_skill,
+    _parse_frontmatter
 )
 
 from agent.execution.tools.media_tools import (
