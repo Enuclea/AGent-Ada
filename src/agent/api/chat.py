@@ -280,6 +280,9 @@ async def chat_endpoint(request: Request):
                 yield_requested.set(False)
 
                 response = await active_agent.chat(prompt_to_send)
+                if hasattr(active_agent, "grok_auth_alert") and active_agent.grok_auth_alert:
+                    await queue.put({"type": "grok_auth_alert", "content": active_agent.grok_auth_alert})
+                    active_agent.grok_auth_alert = None
                 await queue.put({"type": "session_id", "content": active_agent.conversation_id})
                 
                 # Stream thoughts

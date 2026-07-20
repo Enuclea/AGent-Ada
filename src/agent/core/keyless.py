@@ -813,6 +813,15 @@ class KeylessAgyAgent:
                 if not failover_sequence:
                     failover_sequence = [primary_model]
 
+                # If Grok OAuth is available and it's not a roleplay task, make Grok the first failover
+                oauth_file = Path.home() / ".agent" / "xai_oauth.json"
+                if oauth_file.exists() and not self.roleplay:
+                    grok_model = "grok-build-0.1"
+                    if primary_model != grok_model:
+                        if grok_model in failover_sequence:
+                            failover_sequence.remove(grok_model)
+                        failover_sequence.insert(1, grok_model)
+
             timeout_val: float = self.timeout if self.timeout is not None else 120.0
             last_error: str = "All execution routes failed."
 
@@ -833,6 +842,48 @@ class KeylessAgyAgent:
                     _circuit_breaker.record_failure(current_model)
                     last_error = str(e)
                     print(f"[FAILOVER] Model {current_model} failed: {e}. Trying next model...")
+                    
+                    # If Grok OAuth failed due to an authorization/permission issue, trigger xai_auth
+                    if current_model == "grok-build-0.1":
+                        err_msg_lower = last_error.lower()
+                        if any(k in err_msg_lower for k in ("oauth", "403", "401", "permission-denied", "token")):
+                            print("[FAILOVER] Grok auth failure detected. Spawning non-blocking auth helper...")
+                            try:
+                                import sys
+                                project_root = Path(__file__).parent.parent.parent.parent
+                                script_path = project_root / "scratch" / "xai_auth.py"
+                                proc = await asyncio.create_subprocess_exec(
+                                    sys.executable, str(script_path), "--non-blocking",
+                                    stdout=asyncio.subprocess.PIPE,
+                                    stderr=asyncio.subprocess.PIPE,
+                                    cwd=str(project_root)
+                                )
+                                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+                                out_str = stdout.decode("utf-8", errors="replace")
+                                
+                                url = None
+                                code = None
+                                for line in out_str.splitlines():
+                                    if line.startswith("VERIFICATION_URL:"):
+                                        url = line.split("VERIFICATION_URL:", 1)[1].strip()
+                                    elif line.startswith("USER_CODE:"):
+                                        code = line.split("USER_CODE:", 1)[1].strip()
+                                        
+                                if url and code:
+                                    is_discord = self.conversation_id and self.conversation_id.startswith("discord-")
+                                    if is_discord:
+                                        self.grok_auth_alert = {"url": url, "code": code}
+                                    else:
+                                        notice = (
+                                            f"\n\n[SYSTEM NOTICE: xAI Grok OAuth authentication has failed. "
+                                            f"A new authorization request has been generated. "
+                                            f"You MUST print this link and code to the user in Discord so they can authorize Grok:\n"
+                                            f"Link: {url}\n"
+                                            f"Code: {code}]"
+                                        )
+                                        full_prompt += notice
+                            except Exception as auth_err:
+                                print(f"[FAILOVER] Failed to run xai_auth: {auth_err}")
 
             # --- Grok fallback (only for INTERACTIVE and SCHEDULED_CRITICAL priority) ---
             if not self.roleplay and self.task_priority <= TaskPriority.SCHEDULED_CRITICAL:
