@@ -91,7 +91,7 @@ class OrchestrationService:
 
         # 2. Base instructions
         specialist_roster = tool_registry.get_specialist_roster()
-        from agent.core.constants import COMMON_PROTOCOL
+        from agent.core.constants import COMMON_PROTOCOL, COORDINATOR_REPORTING
         common_protocol = COMMON_PROTOCOL
         base_instructions = (
             "You are Ada, the Project Coordinator of the Ada Task Engine, powered by AntiGravity.\n"
@@ -185,7 +185,7 @@ class OrchestrationService:
             skills_summary = "Loaded Custom Skills:\n" + "\n".join([f"- {s.name}: {s.description}" for s in skills]) if skills else "No custom skills installed."
             rag_context = await memory.get_auto_rag_context(prompt)
 
-            full_instructions = base_instructions if disable_tools else common_protocol + base_instructions
+            full_instructions = base_instructions if disable_tools else common_protocol + base_instructions + COORDINATOR_REPORTING
             if memory_summary:
                 full_instructions += f"\n\n{memory_summary}"
             if rag_context:

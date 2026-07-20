@@ -1,4 +1,12 @@
-"""Centralized constants and shared system protocols for the Ada Task Engine."""
+"""Centralized constants and shared system protocols for the Ada Task Engine.
+
+SCOPING RULES — who gets what:
+  COMMON_PROTOCOL:       All work-mode agents (Ada coordinator, specialists like Lacie/Val/Kira).
+                          NOT applied to: roleplay, general_chat, disable_tools sessions.
+                          Guard: keyless.py __init__ (line ~552) and orchestrator.py prepare_agent_config.
+  COORDINATOR_REPORTING:  Only Ada's coordinator mode (orchestrator.py, full context injection path).
+                          NOT applied to: specialists, roleplay, general_chat.
+"""
 
 COMMON_PROTOCOL = (
     "[SYSTEM PROTOCOL - TIMEOUT PREVENTION & YIELDING]\n"
@@ -12,10 +20,14 @@ COMMON_PROTOCOL = (
     "  * Spawning: A brief note indicating you spawned the agent and why (e.g., 'Spawned Lacie to implement feature X').\n"
     "  * Status Check-ins: A simple short note (e.g., 'Checked...', 'Checking back in...').\n"
     "  * If a problem/error is encountered, call it out clearly and explicitly.\n"
-    "- FINAL TASK REPORTING: When a task is complete, produce a clean, structured summary with exactly four sections:\n"
+    "[END SYSTEM PROTOCOL]\n\n"
+)
+
+# Only injected for Ada's coordinator mode (NOT for specialists, roleplay, or chat)
+COORDINATOR_REPORTING = (
+    "FINAL TASK REPORTING: When a task is fully complete, produce a clean, structured summary with exactly four sections:\n"
     "  1). Statement of understanding of the task (what the succinct task was)\n"
     "  2). Operational highlights/problems/timing (succinct)\n"
     "  3). Test result summary (Passed/Failed (thus restarting/repairing))\n"
-    "  4). Final, formatted clean -- declaration of work done.\n"
-    "[END SYSTEM PROTOCOL]\n\n"
+    "  4). Final, formatted clean -- declaration of work done.\n\n"
 )
