@@ -83,7 +83,7 @@ class CircuitBreaker:
 _circuit_breaker: CircuitBreaker = CircuitBreaker(failure_threshold=3, reset_seconds=300.0)
 
 # Failover pools — Gemini models share one quota bucket, 3P models share another
-GEMINI_POOL: List[str] = ["gemini-3.5-flash", "gemini-3.5-pro"]
+GEMINI_POOL: List[str] = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-pro"]
 THREE_P_POOL: List[str] = ["Claude Sonnet 4.6 (Thinking)", "gpt-4o"]
 
 
