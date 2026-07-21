@@ -115,7 +115,7 @@ async def run_quiet_observer(days: int = 1) -> None:
 
     print("[QUIET-OBSERVER] Sending conversation history to KeylessAgyAgent for analysis...")
     agent = KeylessAgyAgent(
-        model="gemini-3.5-flash",
+        model="gemini-3.6-flash",
         system_instructions="You are a passive, silent background observer agent dedicated to learning patterns and process optimization.",
         task_priority=TaskPriority.BACKGROUND
     )

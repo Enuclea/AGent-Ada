@@ -251,7 +251,7 @@ async def execute_scheduled_task(name: str, prompt: str):
             print(f"[CHECKPOINT] Error checking checkpoint for scheduled task: {cp_err}")
 
         agent = KeylessAgyAgent(
-            model="gemini-3.5-flash",
+            model="gemini-3.6-flash",
             system_instructions=system_instructions,
             conversation_id=conversation_id,
             timeout=120.0,

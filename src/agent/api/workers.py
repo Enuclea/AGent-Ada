@@ -276,7 +276,7 @@ async def get_discord_config():
         
         mem = memory.load_memory()
         return mem.get("key_value", {}).get("discord_config", {
-            "default_model": "gemini-3.5-flash",
+            "default_model": "gemini-3.6-flash",
             "channels": {}
         })
     except Exception as e:

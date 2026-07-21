@@ -366,7 +366,7 @@ async def chat_endpoint(request: Request):
                     output_content_len = len(output_content) if output_content else 100
                     output_tokens = output_content_len // 4
                 cost = (input_tokens * 0.075 + output_tokens * 0.30) / 1_000_000.0
-                memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.5-flash", input_tokens, output_tokens, cost)
+                memory.log_token_usage(active_agent.conversation_id, active_agent.model or "gemini-3.6-flash", input_tokens, output_tokens, cost)
 
             try:
                 await lock.acquire(priority)
@@ -443,7 +443,7 @@ async def chat_endpoint(request: Request):
                         try:
                             from agent.keyless import KeylessAgyAgent as PlanAgent, TaskPriority
                             plan_agent = PlanAgent(
-                                model="gemini-3.5-flash",
+                                model="gemini-3.6-flash",
                                 system_instructions="You are a plan decomposer. Output ONLY raw JSON.",
                                 task_priority=TaskPriority.BACKGROUND
                             )
@@ -477,7 +477,7 @@ async def chat_endpoint(request: Request):
                 memory.log_conversation_step(agent.conversation_id, "user", req.prompt)
                 
                 # 2. Run the agent execution with Fallback Routing & Stuck Prevention
-                primary_model = req.model or "gemini-3.5-flash"
+                primary_model = req.model or "gemini-3.6-flash"
                 
                 # Check Gemini quota
                 try:
@@ -690,7 +690,7 @@ async def chat_endpoint(request: Request):
                                 memory.update_plan_step_status(step_id, "failed", error_message=str(step_err))
                                 step_failed = True
                                 
-                                fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
+                                fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.6-flash"
                                 await queue.put({"type": "thought", "content": f"\n⚠️ [System: Step {step_order} failed. Retrying step with fallback model...]\n"})
                                 
                                 fallback_prompt = (
@@ -740,7 +740,7 @@ async def chat_endpoint(request: Request):
                         
                         await queue.put({"type": "thought", "content": "\n⚠️ [System: Model got stuck/errored. Retrying with fallback model...]\n"})
                         
-                        fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.5-flash"
+                        fallback_model = "Claude Sonnet 4.6 (Thinking)" if is_gemini else "gemini-3.6-flash"
                         fallback_prompt = f"The previous model run got stuck/encountered an error. Please analyze and solve it.\n\nOriginal prompt: {req.prompt}"
                         
                         try:
@@ -950,7 +950,7 @@ async def status_endpoint(session_id: Optional[str] = None):
     return {
         "status": "busy" if get_session_lock(lookup_id)._locked else "ready",
         "version": __version__,
-        "model": session_data.get("model", "gemini-3.5-flash"),
+        "model": session_data.get("model", "gemini-3.6-flash"),
         "workspace": os.getcwd(),
         "session_id": agent.conversation_id,
         "skills": skills_list,
@@ -1207,7 +1207,7 @@ async def tasks_endpoint():
         
     return {"tasks": tasks}
 
-async def check_and_compact_session_history(session_id: str, model_name: str = "gemini-3.5-flash", api_key: Optional[str] = None) -> None:
+async def check_and_compact_session_history(session_id: str, model_name: str = "gemini-3.6-flash", api_key: Optional[str] = None) -> None:
     """Checks conversation history size and compacts oldest 40 rows into a summary if row count exceeds 60."""
     from agent.web import KeylessAgyAgent
     conn = get_connection(memory.DB_FILE_PATH)

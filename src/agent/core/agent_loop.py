@@ -63,7 +63,7 @@ async def run_agent(
     import uuid
     from agent.core.orchestrator import orchestration_service
     
-    model = model or "gemini-3.5-flash"
+    model = model or "gemini-3.6-flash"
     if not workspaces:
         workspaces = [os.getcwd()]
     resolved_workspaces: List[str] = [str(Path(w).resolve()) for w in workspaces]
@@ -222,7 +222,7 @@ async def run_agent(
             print_startup_banner(
                 session_id=current_session_id,
                 workspace_path=resolved_workspaces[0],
-                model_name=model or "gemini-3.5-flash",
+                model_name=model or "gemini-3.6-flash",
                 interactive=not initial_prompt and interactive
             )
 

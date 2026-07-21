@@ -786,7 +786,7 @@ class KeylessAgyAgent:
                 full_prompt += schema_instructions
 
             # --- Pre-flight quota-aware model routing ---
-            primary_model: str = self.model or "gemini-3.5-flash"
+            primary_model: str = self.model or "gemini-3.6-flash"
             try:
                 from agent import memory
                 quotas: List[Dict[str, Any]] = memory.get_model_quotas()

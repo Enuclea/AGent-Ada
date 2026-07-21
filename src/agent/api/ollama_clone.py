@@ -362,7 +362,7 @@ async def execute_keyless_gemini(prompt: str, model_name: Optional[str] = None, 
     from agent.execution.tools.security import _sandbox_command_if_possible
     import shlex
 
-    target_model = model_name or "gemini-3.5-flash"
+    target_model = model_name or "gemini-3.6-flash"
     harness_path = get_harness_path() or "agy"
 
     # Always prepend the OLLAMA_SYSTEM_PROMPT to enforce honeypot constraints
@@ -556,7 +556,7 @@ async def ollama_chat_endpoint(
     prompt = "\n".join(prompt_parts)
     
     # Model validation / allowlist enforcement
-    allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini", "llama3"}
+    allowed_models = {"gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini", "llama3"}
     model_name = req.model
     if model_name.startswith("ollama/"):
         model_name = model_name[7:]
@@ -564,7 +564,7 @@ async def ollama_chat_endpoint(
         model_name = model_name.split(":")[0]
     # Normalize common aliases
     if model_name in ("gemini", "gemini-2.5-flash", "llama3"):
-        model_name = "gemini-3.5-flash"
+        model_name = "gemini-3.6-flash"
     elif model_name in ("claude",):
         model_name = "claude-sonnet-4.6"
     if model_name not in allowed_models:
@@ -640,7 +640,7 @@ async def ollama_generate_endpoint(
         }
 
     # Model validation / allowlist enforcement
-    allowed_models = {"gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini", "llama3"}
+    allowed_models = {"gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash", "claude-sonnet-4.6", "claude", "gemini", "llama3"}
     model_name = req.model
     if model_name.startswith("ollama/"):
         model_name = model_name[7:]
@@ -648,7 +648,7 @@ async def ollama_generate_endpoint(
         model_name = model_name.split(":")[0]
     # Normalize common aliases
     if model_name in ("gemini", "gemini-2.5-flash", "llama3"):
-        model_name = "gemini-3.5-flash"
+        model_name = "gemini-3.6-flash"
     elif model_name in ("claude",):
         model_name = "claude-sonnet-4.6"
     if model_name not in allowed_models:
@@ -694,8 +694,8 @@ async def ollama_tags_endpoint():
     return {
         "models": [
             {
-                "name": "gemini-3.5-flash:latest",
-                "model": "gemini-3.5-flash:latest",
+                "name": "gemini-3.6-flash:latest",
+                "model": "gemini-3.6-flash:latest",
                 "modified_at": "2026-07-09T00:00:00Z",
                 "size": 0,
                 "digest": "sha256:8a156e54e4f2b3e8e19c00bcf9e6e12e022f46e65b75b63bc58d4a990a07156",

@@ -67,7 +67,7 @@ async def spawn_subagent_endpoint(req: SpawnSubagentRequest):
             
             # Subagent KeylessAgyAgent instantiation
             agent = KeylessAgyAgent(
-                model="gemini-3.5-flash",
+                model="gemini-3.6-flash",
                 system_instructions=system_instructions,
                 conversation_id=req.subagent_id,
                 cwd=str(sandbox_dir),

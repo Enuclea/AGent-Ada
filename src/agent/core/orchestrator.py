@@ -470,7 +470,7 @@ class OrchestrationService:
         Returns:
             The configured KeylessAgyAgent instance.
         """
-        model_name = model or "gemini-3.5-flash"
+        model_name = model or "gemini-3.6-flash"
         lookup_id = session_id or "default"
 
         # Check if we can reuse the active agent instance
