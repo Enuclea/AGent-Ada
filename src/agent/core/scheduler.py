@@ -765,6 +765,21 @@ async def run_scheduler():
             
             for row in rows:
                 task_id, name, prompt, cron_expr = row
+                
+                # Check if this task is a custom task but has no registered handler
+                from agent.core.plugins import _custom_scheduled_task_handlers
+                default_task_names = {"Grace Timekeeper", "Meta-Evaluation", "Quiet Observer"}
+                if name not in default_task_names and name not in _custom_scheduled_task_handlers:
+                    print(f"[SCHEDULER] Task '{name}' has no active plugin handler. Disabling in database.")
+                    conn = get_connection(memory.DB_FILE_PATH)
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE scheduled_tasks SET status = 'disabled' WHERE id = ?", (task_id,))
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    continue
+
                 last_run_dt = datetime.now(timezone.utc)
                 next_run_dt = get_next_cron_run(cron_expr, last_run_dt)
                 memory.update_scheduled_task_run(task_id, last_run_dt.isoformat(), next_run_dt.isoformat())

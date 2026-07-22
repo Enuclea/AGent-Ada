@@ -78,7 +78,17 @@ class Settings(BaseSettings):
                 # It is controlled exclusively via ADA_ENABLE_PLUGINS env var
                 # in the host .env file, which is read-only to containers.
                 self.disabled_plugins = config_data.get("disabled_plugins", [])
+                plugins_dict = config_data.get("plugins", {})
+                for name, enabled in plugins_dict.items():
+                    if not enabled and name not in self.disabled_plugins:
+                        self.disabled_plugins.append(name)
+
                 self.disabled_skills = config_data.get("disabled_skills", [])
+                skills_dict = config_data.get("skills", {})
+                for name, enabled in skills_dict.items():
+                    if not enabled and name not in self.disabled_skills:
+                        self.disabled_skills.append(name)
+
                 self.lazy_plugins = config_data.get("lazy_plugins", ["playwright"])
             except Exception as e:
                 print(f"[CONFIG] Failed to parse platform_config.json: {e}")
